@@ -1,0 +1,434 @@
+/* ============================================================
+   ECHOES OF BAPHOMET — MILITARY NOIR THEME
+   Victorian Industrial Grime | Slate & Muted Gold
+   For Foundry VTT v13 + Pathfinder 1e
+   ============================================================ */
+
+/* --- FONT IMPORTS --- */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Bitter:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Oswald:wght@400;500;600;700&display=swap');
+
+/* --- CSS VARIABLES (Central Control) --- */
+:root {
+  /* Core Palette — Slate & Grime */
+  --baph-bg-darkest:     #0f1114;
+  --baph-bg-dark:        #181b20;
+  --baph-bg-mid:         #1e2228;
+  --baph-bg-light:       #262b33;
+  --baph-bg-lighter:     #2e343d;
+  --baph-bg-surface:     #353c47;
+
+  /* Text */
+  --baph-text-primary:   #c8ccd4;
+  --baph-text-secondary: #8a919d;
+  --baph-text-muted:     #5c6370;
+  --baph-text-bright:    #e2e6ec;
+
+  /* Accent — Tarnished Gold */
+  --baph-gold:           #b8943e;
+  --baph-gold-bright:    #d4aa4f;
+  --baph-gold-dim:       #8a6f2e;
+  --baph-gold-glow:      rgba(184, 148, 62, 0.15);
+
+  /* Functional */
+  --baph-danger:         #8b3a3a;
+  --baph-danger-bright:  #c45050;
+  --baph-success:        #3a6b3a;
+  --baph-success-bright: #5a9a5a;
+  --baph-info:           #3a5a8b;
+  --baph-warning:        #8b6a2a;
+
+  /* Borders & Lines */
+  --baph-border:         #2a2f38;
+  --baph-border-light:   #3a4150;
+  --baph-border-gold:    rgba(184, 148, 62, 0.3);
+
+  /* Fonts */
+  --baph-font-body:      'Bitter', Georgia, 'Times New Roman', serif;
+  --baph-font-mono:      'IBM Plex Mono', 'Courier New', monospace;
+  --baph-font-heading:   'Oswald', 'Impact', 'Arial Narrow', sans-serif;
+}
+
+/* ============================================================
+   GLOBAL OVERRIDES
+   ============================================================ */
+
+/* --- Sidebar (Chat, Combat, Scenes, etc.) --- */
+#sidebar {
+  background: var(--baph-bg-dark) !important;
+  border-left: 1px solid var(--baph-border) !important;
+}
+
+#sidebar-tabs > .item {
+  color: var(--baph-text-secondary) !important;
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  font-size: 11px !important;
+}
+
+#sidebar-tabs > .item.active {
+  color: var(--baph-gold) !important;
+  border-bottom: 2px solid var(--baph-gold) !important;
+}
+
+/* --- Chat Log --- */
+#chat-log {
+  background: var(--baph-bg-darkest) !important;
+  font-family: var(--baph-font-body) !important;
+  color: var(--baph-text-primary) !important;
+}
+
+#chat-log .message {
+  background: var(--baph-bg-mid) !important;
+  border: 1px solid var(--baph-border) !important;
+  border-radius: 2px !important;
+  margin-bottom: 4px !important;
+  color: var(--baph-text-primary) !important;
+  font-family: var(--baph-font-body) !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+#chat-log .message .message-sender {
+  color: var(--baph-gold) !important;
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  font-size: 12px !important;
+}
+
+#chat-log .message .message-header .message-timestamp {
+  color: var(--baph-text-muted) !important;
+  font-family: var(--baph-font-mono) !important;
+  font-size: 10px !important;
+}
+
+/* Chat input */
+#chat-message {
+  background: var(--baph-bg-light) !important;
+  border: 1px solid var(--baph-border-light) !important;
+  color: var(--baph-text-primary) !important;
+  font-family: var(--baph-font-body) !important;
+}
+
+#chat-message:focus {
+  border-color: var(--baph-gold-dim) !important;
+  box-shadow: 0 0 4px var(--baph-gold-glow) !important;
+}
+
+/* --- Roll Cards --- */
+.dice-roll {
+  background: var(--baph-bg-light) !important;
+  border: 1px solid var(--baph-border-light) !important;
+}
+
+.dice-total {
+  font-family: var(--baph-font-mono) !important;
+  color: var(--baph-gold-bright) !important;
+  font-weight: 700 !important;
+}
+
+.dice-formula {
+  font-family: var(--baph-font-mono) !important;
+  color: var(--baph-text-secondary) !important;
+  font-size: 12px !important;
+}
+
+/* Critical hits get gold glow */
+.dice-total.critical {
+  color: var(--baph-gold-bright) !important;
+  text-shadow: 0 0 8px var(--baph-gold) !important;
+}
+
+/* Fumbles get danger red */
+.dice-total.fumble {
+  color: var(--baph-danger-bright) !important;
+}
+
+/* --- Combat Tracker --- */
+#combat-tracker {
+  background: var(--baph-bg-dark) !important;
+}
+
+#combat-tracker .combatant {
+  border-bottom: 1px solid var(--baph-border) !important;
+  font-family: var(--baph-font-body) !important;
+}
+
+#combat-tracker .combatant.active {
+  background: var(--baph-bg-light) !important;
+  border-left: 3px solid var(--baph-gold) !important;
+}
+
+#combat-tracker .combatant .token-name {
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.03em !important;
+  color: var(--baph-text-bright) !important;
+}
+
+#combat-tracker .combatant .token-initiative {
+  font-family: var(--baph-font-mono) !important;
+  color: var(--baph-gold) !important;
+  font-weight: 600 !important;
+}
+
+/* --- Windows & Dialogs (Character Sheets, Item Sheets, etc.) --- */
+.app .window-content {
+  background: var(--baph-bg-mid) !important;
+  color: var(--baph-text-primary) !important;
+  font-family: var(--baph-font-body) !important;
+}
+
+.app .window-header {
+  background: var(--baph-bg-darkest) !important;
+  border-bottom: 1px solid var(--baph-gold-dim) !important;
+}
+
+.app .window-header .window-title {
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+  color: var(--baph-gold) !important;
+  font-size: 14px !important;
+}
+
+/* --- Tabs inside windows --- */
+.app .tabs .item {
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  font-size: 11px !important;
+  letter-spacing: 0.05em !important;
+  color: var(--baph-text-secondary) !important;
+}
+
+.app .tabs .item.active {
+  color: var(--baph-gold) !important;
+  border-bottom-color: var(--baph-gold) !important;
+}
+
+/* --- Input Fields --- */
+.app input[type="text"],
+.app input[type="number"],
+.app select,
+.app textarea {
+  background: var(--baph-bg-light) !important;
+  border: 1px solid var(--baph-border) !important;
+  color: var(--baph-text-primary) !important;
+  font-family: var(--baph-font-body) !important;
+  border-radius: 1px !important;
+}
+
+.app input:focus,
+.app select:focus,
+.app textarea:focus {
+  border-color: var(--baph-gold-dim) !important;
+  box-shadow: 0 0 3px var(--baph-gold-glow) !important;
+  outline: none !important;
+}
+
+/* --- Buttons --- */
+.app button,
+.dialog button {
+  background: var(--baph-bg-surface) !important;
+  border: 1px solid var(--baph-border-light) !important;
+  color: var(--baph-text-primary) !important;
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  font-size: 12px !important;
+  border-radius: 1px !important;
+  transition: all 0.15s ease !important;
+}
+
+.app button:hover,
+.dialog button:hover {
+  background: var(--baph-gold-dim) !important;
+  color: var(--baph-text-bright) !important;
+  border-color: var(--baph-gold) !important;
+}
+
+/* Primary/default action buttons */
+button[data-button="ok"],
+button[data-button="yes"],
+.dialog .dialog-button.ok,
+.dialog .dialog-button.yes {
+  border-color: var(--baph-gold-dim) !important;
+  color: var(--baph-gold-bright) !important;
+}
+
+/* --- Journal Entries --- */
+.journal-entry-content,
+.journal-sheet .journal-entry-content {
+  background: var(--baph-bg-mid) !important;
+  color: var(--baph-text-primary) !important;
+  font-family: var(--baph-font-body) !important;
+  font-size: 14px !important;
+  line-height: 1.65 !important;
+}
+
+.journal-entry-content h1,
+.journal-entry-content h2,
+.journal-entry-content h3,
+.journal-entry-content h4 {
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+  color: var(--baph-gold) !important;
+  border-bottom: 1px solid var(--baph-border-gold) !important;
+  padding-bottom: 4px !important;
+  margin-top: 1.2em !important;
+}
+
+.journal-entry-content h1 { font-size: 22px !important; }
+.journal-entry-content h2 { font-size: 18px !important; }
+.journal-entry-content h3 { font-size: 15px !important; color: var(--baph-gold-dim) !important; }
+
+.journal-entry-content table {
+  border-collapse: collapse !important;
+  width: 100% !important;
+  font-family: var(--baph-font-mono) !important;
+  font-size: 12px !important;
+}
+
+.journal-entry-content table th {
+  background: var(--baph-bg-darkest) !important;
+  color: var(--baph-gold) !important;
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  padding: 6px 10px !important;
+  border: 1px solid var(--baph-border) !important;
+  text-align: left !important;
+}
+
+.journal-entry-content table td {
+  background: var(--baph-bg-light) !important;
+  padding: 5px 10px !important;
+  border: 1px solid var(--baph-border) !important;
+  color: var(--baph-text-primary) !important;
+}
+
+.journal-entry-content table tr:nth-child(even) td {
+  background: var(--baph-bg-mid) !important;
+}
+
+.journal-entry-content code {
+  font-family: var(--baph-font-mono) !important;
+  background: var(--baph-bg-darkest) !important;
+  color: var(--baph-gold-bright) !important;
+  padding: 1px 5px !important;
+  border-radius: 1px !important;
+  font-size: 12px !important;
+}
+
+.journal-entry-content blockquote {
+  border-left: 3px solid var(--baph-gold-dim) !important;
+  background: var(--baph-bg-light) !important;
+  padding: 8px 14px !important;
+  margin: 10px 0 !important;
+  color: var(--baph-text-secondary) !important;
+  font-style: italic !important;
+}
+
+.journal-entry-content strong {
+  color: var(--baph-text-bright) !important;
+}
+
+.journal-entry-content a {
+  color: var(--baph-gold) !important;
+  text-decoration: none !important;
+  border-bottom: 1px dotted var(--baph-gold-dim) !important;
+}
+
+.journal-entry-content a:hover {
+  color: var(--baph-gold-bright) !important;
+}
+
+/* --- Scene Navigation Bar --- */
+#navigation #scene-list .scene.nav-item {
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  font-size: 12px !important;
+}
+
+/* --- Hotbar (Macro Bar) --- */
+#hotbar .macro-list {
+  background: var(--baph-bg-darkest) !important;
+  border: 1px solid var(--baph-border) !important;
+}
+
+#hotbar .macro .macro-key {
+  font-family: var(--baph-font-mono) !important;
+  color: var(--baph-gold-dim) !important;
+}
+
+/* --- Notifications --- */
+#notifications .notification {
+  font-family: var(--baph-font-body) !important;
+  background: var(--baph-bg-dark) !important;
+  border: 1px solid var(--baph-border) !important;
+  color: var(--baph-text-primary) !important;
+}
+
+#notifications .notification.error {
+  border-color: var(--baph-danger) !important;
+}
+
+#notifications .notification.warning {
+  border-color: var(--baph-warning) !important;
+}
+
+/* --- Scrollbar Styling --- */
+::-webkit-scrollbar {
+  width: 6px !important;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--baph-bg-darkest) !important;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--baph-bg-surface) !important;
+  border-radius: 0 !important;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--baph-gold-dim) !important;
+}
+
+/* --- PF1e Specific: Character Sheet Overrides --- */
+
+/* Buff items - make active buffs visually distinct */
+.pf1 .item-list .item .item-name {
+  font-family: var(--baph-font-body) !important;
+}
+
+/* Attack entries */
+.pf1 .attacks-list .attack .attack-name {
+  font-family: var(--baph-font-heading) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.03em !important;
+}
+
+/* Spell entries */
+.pf1 .spellbook .spell .spell-name {
+  font-family: var(--baph-font-body) !important;
+}
+
+/* --- Subtle Texture Overlay ---
+   Adds a faint noise/grain to the main canvas UI area
+   for that "worn document" feel without affecting maps. */
+#ui-top::after {
+  content: '' !important;
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  pointer-events: none !important;
+  opacity: 0.015 !important;
+  z-index: -1 !important;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E") !important;
+}
