@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.1
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.1.1
    Applies PF2e-style conditions as PF1e system Buffs.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
@@ -484,7 +484,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.1`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.1.1`);
 });
 
 Hooks.once('ready', () => {
@@ -512,7 +512,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.1 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.1.1 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
