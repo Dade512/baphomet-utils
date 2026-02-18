@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.1.1
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.2
    Applies PF2e-style conditions as PF1e system Buffs.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
@@ -484,7 +484,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.1.1`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.2`);
 });
 
 Hooks.once('ready', () => {
@@ -512,7 +512,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.1.1 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.2 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
@@ -556,8 +556,34 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
     panelContainer.dataset.actorId = actor.id;
     panelContainer.appendChild(_buildConditionPanel(actor));
 
-    hudElement.appendChild(panelContainer);
+    // v13 fix: Append to document.body instead of hudElement.
+    // The Token HUD intercepts mouse events on child elements,
+    // preventing clicks from reaching our buttons.
+    // Position the panel relative to the HUD button instead.
+    const btnRect = btn.getBoundingClientRect();
+    panelContainer.style.position = 'fixed';
+    panelContainer.style.top = `${btnRect.top}px`;
+    panelContainer.style.left = `${btnRect.left - 286}px`;
+    panelContainer.style.zIndex = '1000';
+    document.body.appendChild(panelContainer);
+
+    // Block all mouse events from propagating to Foundry canvas/HUD
+    for (const evt of ['mousedown', 'mouseup', 'click', 'pointerdown', 'pointerup']) {
+      panelContainer.addEventListener(evt, (ev) => ev.stopPropagation());
+    }
+
     panelOpen = true;
+
+    // Clean up when HUD closes
+    const hudCloseObserver = new MutationObserver(() => {
+      if (!document.contains(hudElement) || !hudElement.querySelector('.baph-condition-hud-btn')) {
+        panelContainer?.remove();
+        panelContainer = null;
+        panelOpen = false;
+        hudCloseObserver.disconnect();
+      }
+    });
+    hudCloseObserver.observe(hudElement.parentElement ?? document.body, { childList: true, subtree: true });
   });
 
   // Insert into Token HUD right column — v13 uses querySelector
