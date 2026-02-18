@@ -2,6 +2,10 @@
    ECHOES OF BAPHOMET — MILITARY NOIR THEME
    Victorian Industrial Grime | Slate & Muted Gold
    For Foundry VTT v13 + Pathfinder 1e
+
+   v13 CSS Layers: This stylesheet is auto-imported into the
+   "modules" layer via module.json, giving it priority over
+   all core and system styles without needing !important.
    ============================================================ */
 
 /* --- FONT IMPORTS --- */
@@ -54,157 +58,180 @@
 
 /* --- Sidebar (Chat, Combat, Scenes, etc.) --- */
 #sidebar {
-  background: var(--baph-bg-dark) !important;
-  border-left: 1px solid var(--baph-border) !important;
+  background: var(--baph-bg-dark);
+  border-left: 1px solid var(--baph-border);
 }
 
 #sidebar-tabs > .item {
-  color: var(--baph-text-secondary) !important;
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.08em !important;
-  font-size: 11px !important;
+  color: var(--baph-text-secondary);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
 }
 
 #sidebar-tabs > .item.active {
-  color: var(--baph-gold) !important;
-  border-bottom: 2px solid var(--baph-gold) !important;
+  color: var(--baph-gold);
+  border-bottom: 2px solid var(--baph-gold);
 }
 
 /* --- Chat Log --- */
 #chat-log {
-  background: var(--baph-bg-darkest) !important;
-  font-family: var(--baph-font-body) !important;
-  color: var(--baph-text-primary) !important;
+  background: var(--baph-bg-darkest);
+  font-family: var(--baph-font-body);
+  color: var(--baph-text-primary);
 }
 
 #chat-log .message {
-  background: var(--baph-bg-mid) !important;
-  border: 1px solid var(--baph-border) !important;
-  border-radius: 2px !important;
-  margin-bottom: 4px !important;
-  color: var(--baph-text-primary) !important;
-  font-family: var(--baph-font-body) !important;
-  font-size: 13px !important;
-  line-height: 1.5 !important;
+  background: var(--baph-bg-mid);
+  border: 1px solid var(--baph-border);
+  border-radius: 2px;
+  margin-bottom: 4px;
+  color: var(--baph-text-primary);
+  font-family: var(--baph-font-body);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 #chat-log .message .message-sender {
-  color: var(--baph-gold) !important;
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.05em !important;
-  font-size: 12px !important;
+  color: var(--baph-gold);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 12px;
 }
 
 #chat-log .message .message-header .message-timestamp {
-  color: var(--baph-text-muted) !important;
-  font-family: var(--baph-font-mono) !important;
-  font-size: 10px !important;
+  color: var(--baph-text-muted);
+  font-family: var(--baph-font-mono);
+  font-size: 10px;
 }
 
-/* Chat input */
+/* Chat input — main sidebar */
 #chat-message {
-  background: var(--baph-bg-light) !important;
-  border: 1px solid var(--baph-border-light) !important;
-  color: var(--baph-text-primary) !important;
-  font-family: var(--baph-font-body) !important;
+  background: var(--baph-bg-light);
+  border: 1px solid var(--baph-border-light);
+  color: var(--baph-text-primary);
+  font-family: var(--baph-font-body);
 }
 
 #chat-message:focus {
-  border-color: var(--baph-gold-dim) !important;
-  box-shadow: 0 0 4px var(--baph-gold-glow) !important;
+  border-color: var(--baph-gold-dim);
+  box-shadow: 0 0 4px var(--baph-gold-glow);
+}
+
+/* v13: Persistent mini-chat notification tray
+   (visible when browsing non-Chat sidebar tabs) */
+.chat-notifications {
+  background: var(--baph-bg-darkest);
+  border-top: 1px solid var(--baph-border);
+}
+
+.chat-notifications .message {
+  background: var(--baph-bg-mid);
+  border: 1px solid var(--baph-border);
+  color: var(--baph-text-primary);
+  font-family: var(--baph-font-body);
+  font-size: 12px;
+}
+
+.chat-notifications .message .message-sender {
+  color: var(--baph-gold);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 11px;
 }
 
 /* --- Roll Cards --- */
 .dice-roll {
-  background: var(--baph-bg-light) !important;
-  border: 1px solid var(--baph-border-light) !important;
+  background: var(--baph-bg-light);
+  border: 1px solid var(--baph-border-light);
 }
 
 .dice-total {
-  font-family: var(--baph-font-mono) !important;
-  color: var(--baph-gold-bright) !important;
-  font-weight: 700 !important;
+  font-family: var(--baph-font-mono);
+  color: var(--baph-gold-bright);
+  font-weight: 700;
 }
 
 .dice-formula {
-  font-family: var(--baph-font-mono) !important;
-  color: var(--baph-text-secondary) !important;
-  font-size: 12px !important;
+  font-family: var(--baph-font-mono);
+  color: var(--baph-text-secondary);
+  font-size: 12px;
 }
 
 /* Critical hits get gold glow */
 .dice-total.critical {
-  color: var(--baph-gold-bright) !important;
-  text-shadow: 0 0 8px var(--baph-gold) !important;
+  color: var(--baph-gold-bright);
+  text-shadow: 0 0 8px var(--baph-gold);
 }
 
 /* Fumbles get danger red */
 .dice-total.fumble {
-  color: var(--baph-danger-bright) !important;
+  color: var(--baph-danger-bright);
 }
 
 /* --- Combat Tracker --- */
 #combat-tracker {
-  background: var(--baph-bg-dark) !important;
+  background: var(--baph-bg-dark);
 }
 
 #combat-tracker .combatant {
-  border-bottom: 1px solid var(--baph-border) !important;
-  font-family: var(--baph-font-body) !important;
+  border-bottom: 1px solid var(--baph-border);
+  font-family: var(--baph-font-body);
 }
 
 #combat-tracker .combatant.active {
-  background: var(--baph-bg-light) !important;
-  border-left: 3px solid var(--baph-gold) !important;
+  background: var(--baph-bg-light);
+  border-left: 3px solid var(--baph-gold);
 }
 
 #combat-tracker .combatant .token-name {
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.03em !important;
-  color: var(--baph-text-bright) !important;
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--baph-text-bright);
 }
 
 #combat-tracker .combatant .token-initiative {
-  font-family: var(--baph-font-mono) !important;
-  color: var(--baph-gold) !important;
-  font-weight: 600 !important;
+  font-family: var(--baph-font-mono);
+  color: var(--baph-gold);
+  font-weight: 600;
 }
 
 /* --- Windows & Dialogs (Character Sheets, Item Sheets, etc.) --- */
 .app .window-content {
-  background: var(--baph-bg-mid) !important;
-  color: var(--baph-text-primary) !important;
-  font-family: var(--baph-font-body) !important;
+  background: var(--baph-bg-mid);
+  color: var(--baph-text-primary);
+  font-family: var(--baph-font-body);
 }
 
 .app .window-header {
-  background: var(--baph-bg-darkest) !important;
-  border-bottom: 1px solid var(--baph-gold-dim) !important;
+  background: var(--baph-bg-darkest);
+  border-bottom: 1px solid var(--baph-gold-dim);
 }
 
 .app .window-header .window-title {
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.06em !important;
-  color: var(--baph-gold) !important;
-  font-size: 14px !important;
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--baph-gold);
+  font-size: 14px;
 }
 
 /* --- Tabs inside windows --- */
 .app .tabs .item {
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  font-size: 11px !important;
-  letter-spacing: 0.05em !important;
-  color: var(--baph-text-secondary) !important;
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--baph-text-secondary);
 }
 
 .app .tabs .item.active {
-  color: var(--baph-gold) !important;
-  border-bottom-color: var(--baph-gold) !important;
+  color: var(--baph-gold);
+  border-bottom-color: var(--baph-gold);
 }
 
 /* --- Input Fields --- */
@@ -212,40 +239,40 @@
 .app input[type="number"],
 .app select,
 .app textarea {
-  background: var(--baph-bg-light) !important;
-  border: 1px solid var(--baph-border) !important;
-  color: var(--baph-text-primary) !important;
-  font-family: var(--baph-font-body) !important;
-  border-radius: 1px !important;
+  background: var(--baph-bg-light);
+  border: 1px solid var(--baph-border);
+  color: var(--baph-text-primary);
+  font-family: var(--baph-font-body);
+  border-radius: 1px;
 }
 
 .app input:focus,
 .app select:focus,
 .app textarea:focus {
-  border-color: var(--baph-gold-dim) !important;
-  box-shadow: 0 0 3px var(--baph-gold-glow) !important;
-  outline: none !important;
+  border-color: var(--baph-gold-dim);
+  box-shadow: 0 0 3px var(--baph-gold-glow);
+  outline: none;
 }
 
 /* --- Buttons --- */
 .app button,
 .dialog button {
-  background: var(--baph-bg-surface) !important;
-  border: 1px solid var(--baph-border-light) !important;
-  color: var(--baph-text-primary) !important;
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.04em !important;
-  font-size: 12px !important;
-  border-radius: 1px !important;
-  transition: all 0.15s ease !important;
+  background: var(--baph-bg-surface);
+  border: 1px solid var(--baph-border-light);
+  color: var(--baph-text-primary);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 12px;
+  border-radius: 1px;
+  transition: all 0.15s ease;
 }
 
 .app button:hover,
 .dialog button:hover {
-  background: var(--baph-gold-dim) !important;
-  color: var(--baph-text-bright) !important;
-  border-color: var(--baph-gold) !important;
+  background: var(--baph-gold-dim);
+  color: var(--baph-text-bright);
+  border-color: var(--baph-gold);
 }
 
 /* Primary/default action buttons */
@@ -253,182 +280,182 @@ button[data-button="ok"],
 button[data-button="yes"],
 .dialog .dialog-button.ok,
 .dialog .dialog-button.yes {
-  border-color: var(--baph-gold-dim) !important;
-  color: var(--baph-gold-bright) !important;
+  border-color: var(--baph-gold-dim);
+  color: var(--baph-gold-bright);
 }
 
 /* --- Journal Entries --- */
 .journal-entry-content,
 .journal-sheet .journal-entry-content {
-  background: var(--baph-bg-mid) !important;
-  color: var(--baph-text-primary) !important;
-  font-family: var(--baph-font-body) !important;
-  font-size: 14px !important;
-  line-height: 1.65 !important;
+  background: var(--baph-bg-mid);
+  color: var(--baph-text-primary);
+  font-family: var(--baph-font-body);
+  font-size: 14px;
+  line-height: 1.65;
 }
 
 .journal-entry-content h1,
 .journal-entry-content h2,
 .journal-entry-content h3,
 .journal-entry-content h4 {
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.06em !important;
-  color: var(--baph-gold) !important;
-  border-bottom: 1px solid var(--baph-border-gold) !important;
-  padding-bottom: 4px !important;
-  margin-top: 1.2em !important;
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--baph-gold);
+  border-bottom: 1px solid var(--baph-border-gold);
+  padding-bottom: 4px;
+  margin-top: 1.2em;
 }
 
-.journal-entry-content h1 { font-size: 22px !important; }
-.journal-entry-content h2 { font-size: 18px !important; }
-.journal-entry-content h3 { font-size: 15px !important; color: var(--baph-gold-dim) !important; }
+.journal-entry-content h1 { font-size: 22px; }
+.journal-entry-content h2 { font-size: 18px; }
+.journal-entry-content h3 { font-size: 15px; color: var(--baph-gold-dim); }
 
 .journal-entry-content table {
-  border-collapse: collapse !important;
-  width: 100% !important;
-  font-family: var(--baph-font-mono) !important;
-  font-size: 12px !important;
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--baph-font-mono);
+  font-size: 12px;
 }
 
 .journal-entry-content table th {
-  background: var(--baph-bg-darkest) !important;
-  color: var(--baph-gold) !important;
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.05em !important;
-  padding: 6px 10px !important;
-  border: 1px solid var(--baph-border) !important;
-  text-align: left !important;
+  background: var(--baph-bg-darkest);
+  color: var(--baph-gold);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 10px;
+  border: 1px solid var(--baph-border);
+  text-align: left;
 }
 
 .journal-entry-content table td {
-  background: var(--baph-bg-light) !important;
-  padding: 5px 10px !important;
-  border: 1px solid var(--baph-border) !important;
-  color: var(--baph-text-primary) !important;
+  background: var(--baph-bg-light);
+  padding: 5px 10px;
+  border: 1px solid var(--baph-border);
+  color: var(--baph-text-primary);
 }
 
 .journal-entry-content table tr:nth-child(even) td {
-  background: var(--baph-bg-mid) !important;
+  background: var(--baph-bg-mid);
 }
 
 .journal-entry-content code {
-  font-family: var(--baph-font-mono) !important;
-  background: var(--baph-bg-darkest) !important;
-  color: var(--baph-gold-bright) !important;
-  padding: 1px 5px !important;
-  border-radius: 1px !important;
-  font-size: 12px !important;
+  font-family: var(--baph-font-mono);
+  background: var(--baph-bg-darkest);
+  color: var(--baph-gold-bright);
+  padding: 1px 5px;
+  border-radius: 1px;
+  font-size: 12px;
 }
 
 .journal-entry-content blockquote {
-  border-left: 3px solid var(--baph-gold-dim) !important;
-  background: var(--baph-bg-light) !important;
-  padding: 8px 14px !important;
-  margin: 10px 0 !important;
-  color: var(--baph-text-secondary) !important;
-  font-style: italic !important;
+  border-left: 3px solid var(--baph-gold-dim);
+  background: var(--baph-bg-light);
+  padding: 8px 14px;
+  margin: 10px 0;
+  color: var(--baph-text-secondary);
+  font-style: italic;
 }
 
 .journal-entry-content strong {
-  color: var(--baph-text-bright) !important;
+  color: var(--baph-text-bright);
 }
 
 .journal-entry-content a {
-  color: var(--baph-gold) !important;
-  text-decoration: none !important;
-  border-bottom: 1px dotted var(--baph-gold-dim) !important;
+  color: var(--baph-gold);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--baph-gold-dim);
 }
 
 .journal-entry-content a:hover {
-  color: var(--baph-gold-bright) !important;
+  color: var(--baph-gold-bright);
 }
 
 /* --- Scene Navigation Bar --- */
 #navigation #scene-list .scene.nav-item {
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.04em !important;
-  font-size: 12px !important;
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 12px;
 }
 
 /* --- Hotbar (Macro Bar) --- */
 #hotbar .macro-list {
-  background: var(--baph-bg-darkest) !important;
-  border: 1px solid var(--baph-border) !important;
+  background: var(--baph-bg-darkest);
+  border: 1px solid var(--baph-border);
 }
 
 #hotbar .macro .macro-key {
-  font-family: var(--baph-font-mono) !important;
-  color: var(--baph-gold-dim) !important;
+  font-family: var(--baph-font-mono);
+  color: var(--baph-gold-dim);
 }
 
 /* --- Notifications --- */
 #notifications .notification {
-  font-family: var(--baph-font-body) !important;
-  background: var(--baph-bg-dark) !important;
-  border: 1px solid var(--baph-border) !important;
-  color: var(--baph-text-primary) !important;
+  font-family: var(--baph-font-body);
+  background: var(--baph-bg-dark);
+  border: 1px solid var(--baph-border);
+  color: var(--baph-text-primary);
 }
 
 #notifications .notification.error {
-  border-color: var(--baph-danger) !important;
+  border-color: var(--baph-danger);
 }
 
 #notifications .notification.warning {
-  border-color: var(--baph-warning) !important;
+  border-color: var(--baph-warning);
 }
 
 /* --- Scrollbar Styling --- */
 ::-webkit-scrollbar {
-  width: 6px !important;
+  width: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--baph-bg-darkest) !important;
+  background: var(--baph-bg-darkest);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--baph-bg-surface) !important;
-  border-radius: 0 !important;
+  background: var(--baph-bg-surface);
+  border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--baph-gold-dim) !important;
+  background: var(--baph-gold-dim);
 }
 
 /* --- PF1e Specific: Character Sheet Overrides --- */
 
 /* Buff items - make active buffs visually distinct */
 .pf1 .item-list .item .item-name {
-  font-family: var(--baph-font-body) !important;
+  font-family: var(--baph-font-body);
 }
 
 /* Attack entries */
 .pf1 .attacks-list .attack .attack-name {
-  font-family: var(--baph-font-heading) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.03em !important;
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 /* Spell entries */
 .pf1 .spellbook .spell .spell-name {
-  font-family: var(--baph-font-body) !important;
+  font-family: var(--baph-font-body);
 }
 
 /* --- Subtle Texture Overlay ---
    Adds a faint noise/grain to the main canvas UI area
    for that "worn document" feel without affecting maps. */
 #ui-top::after {
-  content: '' !important;
-  position: fixed !important;
-  top: 0 !important;
-  left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  pointer-events: none !important;
-  opacity: 0.015 !important;
-  z-index: -1 !important;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E") !important;
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.015;
+  z-index: -1;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
 }

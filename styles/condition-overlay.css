@@ -1,0 +1,216 @@
+/* ============================================================
+   CONDITION OVERLAY v2 — UI Styles
+   Military Noir palette | 12 conditions
+   ============================================================ */
+
+/* --- HUD Button --- */
+.baph-condition-hud-btn {
+  cursor: pointer;
+}
+
+.baph-condition-hud-btn:hover {
+  color: var(--baph-gold, #b8943e);
+}
+
+/* --- Panel Container (anchored to Token HUD) --- */
+.baph-condition-container {
+  position: absolute;
+  right: 52px;
+  top: 0;
+  z-index: 100;
+  width: 280px;
+}
+
+/* --- Condition Panel --- */
+.baph-condition-panel {
+  background: var(--baph-bg-dark, #181b20);
+  border: 1px solid var(--baph-border-light, #3a4150);
+  border-radius: 2px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.7);
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+/* --- Section Headers --- */
+.baph-section-header {
+  font-family: var(--baph-font-mono, 'IBM Plex Mono', monospace);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--baph-text-muted, #5c6370);
+  padding: 5px 6px 2px;
+  border-bottom: 1px solid var(--baph-border, #2a2f38);
+  margin-top: 2px;
+  user-select: none;
+}
+
+/* --- Condition Row (shared) --- */
+.baph-condition-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 6px;
+  border-radius: 1px;
+  background: var(--baph-bg-mid, #1e2228);
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease;
+  min-height: 28px;
+}
+
+.baph-condition-row.active {
+  border-color: var(--baph-gold-dim, #8a6f2e);
+  background: var(--baph-bg-light, #262b33);
+}
+
+/* --- Condition Label --- */
+.baph-condition-label {
+  font-family: var(--baph-font-heading, 'Oswald', sans-serif);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  color: var(--baph-text-secondary, #8a919d);
+  flex-shrink: 0;
+  width: 90px;
+  cursor: help;
+}
+
+.baph-condition-row.active .baph-condition-label {
+  color: var(--baph-gold, #b8943e);
+}
+
+/* --- Auto-Decrement Indicator --- */
+.baph-auto-indicator {
+  font-size: 10px;
+  color: var(--baph-gold-dim, #8a6f2e);
+  margin-right: 4px;
+  flex-shrink: 0;
+  cursor: help;
+  opacity: 0.6;
+}
+
+.baph-condition-row.active .baph-auto-indicator {
+  opacity: 1;
+  color: var(--baph-gold-bright, #d4aa4f);
+}
+
+/* --- Tier Button Group --- */
+.baph-tier-group {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* --- Tier Buttons --- */
+.baph-tier-btn {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--baph-border, #2a2f38);
+  border-radius: 1px;
+  background: var(--baph-bg-surface, #353c47);
+  color: var(--baph-text-muted, #5c6370);
+  font-family: var(--baph-font-mono, 'IBM Plex Mono', monospace);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.baph-tier-btn:hover {
+  background: var(--baph-gold-dim, #8a6f2e);
+  color: var(--baph-text-bright, #e2e6ec);
+  border-color: var(--baph-gold, #b8943e);
+}
+
+.baph-tier-btn.selected {
+  background: var(--baph-gold, #b8943e);
+  color: var(--baph-bg-darkest, #0f1114);
+  border-color: var(--baph-gold-bright, #d4aa4f);
+  font-weight: 700;
+}
+
+/* Remove button */
+.baph-btn-remove {
+  color: var(--baph-danger, #8b3a3a);
+  font-size: 10px;
+}
+
+.baph-btn-remove:hover {
+  background: var(--baph-danger, #8b3a3a);
+  color: var(--baph-text-bright, #e2e6ec);
+  border-color: var(--baph-danger-bright, #c45050);
+}
+
+.baph-tier-btn.disabled {
+  opacity: 0.25;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* --- Toggle Rows --- */
+.baph-toggle-row {
+  gap: 8px;
+}
+
+.baph-toggle-label {
+  flex: 1;
+  width: auto;
+}
+
+/* --- Toggle Button --- */
+.baph-toggle-btn {
+  width: 44px;
+  height: 22px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--baph-border, #2a2f38);
+  border-radius: 1px;
+  background: var(--baph-bg-surface, #353c47);
+  color: var(--baph-text-muted, #5c6370);
+  font-family: var(--baph-font-mono, 'IBM Plex Mono', monospace);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+}
+
+.baph-toggle-btn:hover {
+  background: var(--baph-gold-dim, #8a6f2e);
+  color: var(--baph-text-bright, #e2e6ec);
+  border-color: var(--baph-gold, #b8943e);
+}
+
+.baph-toggle-btn.active {
+  background: var(--baph-gold, #b8943e);
+  color: var(--baph-bg-darkest, #0f1114);
+  border-color: var(--baph-gold-bright, #d4aa4f);
+}
+
+/* --- Panel Scrollbar --- */
+.baph-condition-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.baph-condition-panel::-webkit-scrollbar-track {
+  background: var(--baph-bg-darkest, #0f1114);
+}
+
+.baph-condition-panel::-webkit-scrollbar-thumb {
+  background: var(--baph-bg-surface, #353c47);
+}
+
+.baph-condition-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--baph-gold-dim, #8a6f2e);
+}
