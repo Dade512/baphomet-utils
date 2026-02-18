@@ -2,7 +2,7 @@
   "id": "baphomet-utils",
   "title": "Echoes of Baphomet — PF1.5 House Rules",
   "description": "Custom theme, conditions, and reference materials for the Echoes of Baphomet's Fall campaign. Military noir aesthetic with PF1.5 hybrid action economy support.",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "compatibility": {
     "minimum": "13",
     "verified": "13.350"
