@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.2
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.2.1
    Applies PF2e-style conditions as PF1e system Buffs.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
@@ -265,7 +265,7 @@ async function applyCondition(actor, condKey, tier) {
     const changes = cond.buildChanges(tier);
 
     const descHtml = cond.type === 'tiered'
-      ? `<p><strong>${cond.name} ${tier}:</strong> ${cond.description}</p>`
+      ? `<p><strong>${cond.name} ${tier}:</strong> ${cond.description.replace(/–X/g, `–${tier}`)}</p>`
       : `<p><strong>${cond.name}:</strong> ${cond.description}</p>`;
 
     const [created] = await actor.createEmbeddedDocuments('Item', [{
@@ -326,7 +326,7 @@ function _postConditionChat(actor, cond, tier, action) {
       ${actor.name} — ${label}
     </div>
     ${!isRemove ? `<div style="font-family: var(--baph-font-body, 'Bitter', serif); color: var(--baph-text-secondary, #8a919d); font-size: 12px; margin-top: 2px;">
-      ${cond.description}
+      ${cond.description.replace(/–X/g, `–${tier}`)}
     </div>` : ''}`,
     speaker: ChatMessage.getSpeaker({ actor })
   });
@@ -484,7 +484,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.2`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.2.1`);
 });
 
 Hooks.once('ready', () => {
@@ -512,7 +512,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.2 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.2.1 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
