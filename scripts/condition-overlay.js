@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.1
    Applies PF2e-style conditions as PF1e system Buffs.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
@@ -261,20 +261,18 @@ async function applyCondition(actor, condKey, tier) {
       await existing.setActive(true);
     }
   } else {
-    // Create new buff from system template
-    const buffData = foundry.utils.duplicate(game.system.template.Item.buff);
+    // Create new buff directly on the actor (v13 compatible)
     const changes = cond.buildChanges(tier);
 
     const descHtml = cond.type === 'tiered'
       ? `<p><strong>${cond.name} ${tier}:</strong> ${cond.description}</p>`
       : `<p><strong>${cond.name}:</strong> ${cond.description}</p>`;
 
-    const newBuff = await Item.create({
+    const [created] = await actor.createEmbeddedDocuments('Item', [{
       img: cond.icon,
       name: _buffName(condKey, tier),
       type: 'buff',
       system: {
-        ...buffData,
         subType: 'temp',
         description: { value: descHtml },
       },
@@ -286,9 +284,8 @@ async function applyCondition(actor, condKey, tier) {
           conditionType: cond.type,
         }
       }
-    }, { temporary: true });
+    }]);
 
-    const [created] = await actor.createEmbeddedDocuments('Item', [newBuff]);
     if (changes.length > 0) {
       await pf1.components.ItemChange.create(changes, { parent: created });
     }
@@ -487,7 +484,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.1`);
 });
 
 Hooks.once('ready', () => {
@@ -515,7 +512,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.1 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
@@ -523,13 +520,16 @@ Hooks.once('ready', () => {
   console.log(`${MODULE_ID} | API: game.baphometConditions.listActive(actor)`);
 });
 
-// Token HUD button
+// Token HUD button — v13 compatible (html is HTMLElement, not jQuery)
 Hooks.on('renderTokenHUD', (hud, html, data) => {
   if (!game.user.isGM) return;
 
   const token = hud.object;
   const actor = token.actor;
   if (!actor) return;
+
+  // v13: html may be HTMLElement or jQuery — normalize to HTMLElement
+  const hudElement = html instanceof HTMLElement ? html : (html[0] ?? html);
 
   // Create the HUD button
   const btn = document.createElement('div');
@@ -556,15 +556,16 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
     panelContainer.dataset.actorId = actor.id;
     panelContainer.appendChild(_buildConditionPanel(actor));
 
-    const hudElement = html[0] ?? html;
     hudElement.appendChild(panelContainer);
     panelOpen = true;
   });
 
-  // Insert into Token HUD right column
-  const rightCol = html[0]?.querySelector('.col.right') ?? html.find('.col.right')[0];
+  // Insert into Token HUD right column — v13 uses querySelector
+  const rightCol = hudElement.querySelector('.col.right');
   if (rightCol) {
     rightCol.appendChild(btn);
+  } else {
+    console.warn(`${MODULE_ID} | Could not find .col.right in Token HUD`);
   }
 });
 
