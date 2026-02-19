@@ -1,10 +1,12 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.2.1
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.3
    Applies PF2e-style conditions as PF1e system Buffs.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
                   Enfeebled, Drained, Stunned, Slowed, Fascinated
-   TOGGLE (on/off): Fatigued, Off-Guard, Persistent Damage
+   TOGGLE (on/off): Fatigued, Off-Guard, Persistent Damage,
+                    Blinded, Deafened, Nauseated, Confused,
+                    Paralyzed, Staggered
 
    For Foundry VTT v13 + PF1e System
    Source: Homebrew_Master_File.md § Simplified Conditions
@@ -216,6 +218,104 @@ const CONDITIONS = {
       return [];
     }
   },
+
+  blinded: {
+    name: 'Blinded',
+    icon: 'icons/svg/blind.svg',
+    maxTier: 1,
+    type: 'toggle',
+    description: 'Cannot see. Loses DEX bonus to AC. All opponents have total concealment (50% miss chance). –4 penalty to STR/DEX-based skill checks. Automatically fails sight-based Perception checks.',
+    autoDecrement: false,
+    buildChanges() {
+      return [
+        // In PF1e, blinded creatures lose DEX bonus to AC (handled by GM setting flat-footed),
+        // but we apply a penalty to attack and Perception as mechanical reminders.
+        { formula: '-2', operator: 'add', target: 'allAttack',   modifier: 'penalty', priority: 0 },
+        { formula: '-4', operator: 'add', target: 'skills.per',  modifier: 'penalty', priority: 0 },
+        // NOTE: 50% miss chance and loss of DEX to AC require GM adjudication.
+        // The miss chance is not automatable via buff changes.
+      ];
+    }
+  },
+
+  deafened: {
+    name: 'Deafened',
+    icon: 'icons/svg/deaf.svg',
+    maxTier: 1,
+    type: 'toggle',
+    description: 'Cannot hear. –4 penalty to initiative and Perception. 20% arcane spell failure on spells with verbal components. Automatically fails hearing-based Perception checks.',
+    autoDecrement: false,
+    buildChanges() {
+      return [
+        { formula: '-4', operator: 'add', target: 'skills.per',  modifier: 'penalty', priority: 0 },
+        { formula: '-4', operator: 'add', target: 'init',        modifier: 'penalty', priority: 0 },
+        // NOTE: 20% spell failure on verbal components requires GM adjudication.
+      ];
+    }
+  },
+
+  nauseated: {
+    name: 'Nauseated',
+    icon: 'icons/svg/acid.svg',
+    maxTier: 1,
+    type: 'toggle',
+    description: 'Can only take a single move action each turn. Cannot attack, cast spells, or concentrate. Cannot eat or drink (including potions).',
+    autoDecrement: false,
+    buildChanges() {
+      // Nauseated is primarily a restriction, not a numeric penalty.
+      // We apply a visible attack penalty as a mechanical reminder that attacks are blocked.
+      return [
+        { formula: '-20', operator: 'add', target: 'allAttack', modifier: 'penalty', priority: 0 },
+        // NOTE: The -20 is a "soft block" — serves as a visible reminder.
+        // Actual enforcement (move action only, no casting) requires GM adjudication.
+      ];
+    }
+  },
+
+  confused: {
+    name: 'Confused',
+    icon: 'icons/svg/daze.svg',
+    maxTier: 1,
+    type: 'toggle',
+    description: 'Acts randomly each round: 01–25 act normally, 26–50 babble incoherently, 51–75 deal 1d8+STR to self, 76–100 attack nearest creature. Cannot make attacks of opportunity.',
+    autoDecrement: false,
+    buildChanges() {
+      // Confused is entirely behavioral — GM rolls d100 each round.
+      // No numeric penalties to apply, but the buff serves as a visible tracker.
+      return [];
+    }
+  },
+
+  paralyzed: {
+    name: 'Paralyzed',
+    icon: 'icons/svg/paralysis.svg',
+    maxTier: 1,
+    type: 'toggle',
+    description: 'Cannot move, speak, or take any physical action. Helpless (effective DEX 0, –5 modifier). Melee attackers get +4 to hit. Vulnerable to coup de grace.',
+    autoDecrement: false,
+    buildChanges() {
+      return [
+        // Effective DEX of 0 = –5 modifier. We set DEX penalty to approximate.
+        // In PF1e, "helpless" is its own state, but the DEX penalty captures most of it.
+        { formula: '-20', operator: 'add', target: 'dex', modifier: 'penalty', priority: 0 },
+        // NOTE: Helpless state (auto-hit by melee, coup de grace) requires GM adjudication.
+      ];
+    }
+  },
+
+  staggered: {
+    name: 'Staggered',
+    icon: 'icons/svg/stoned.svg',
+    maxTier: 1,
+    type: 'toggle',
+    description: 'Can only take a single move action or standard action each turn (not both). Cannot take full-round actions. Cannot run or charge.',
+    autoDecrement: false,
+    buildChanges() {
+      // Staggered is an action restriction, not a numeric penalty.
+      // The buff serves as a visible tracker and reminder.
+      return [];
+    }
+  },
 };
 
 /* ----------------------------------------------------------
@@ -265,7 +365,7 @@ async function applyCondition(actor, condKey, tier) {
     const changes = cond.buildChanges(tier);
 
     const descHtml = cond.type === 'tiered'
-      ? `<p><strong>${cond.name} ${tier}:</strong> ${cond.description.replace(/–X/g, `–${tier}`)}</p>`
+      ? `<p><strong>${cond.name} ${tier}:</strong> ${cond.description.replace(/–X/g, `–${tier}`).replace(/\bX\b/g, String(tier))}</p>`
       : `<p><strong>${cond.name}:</strong> ${cond.description}</p>`;
 
     const [created] = await actor.createEmbeddedDocuments('Item', [{
@@ -326,7 +426,7 @@ function _postConditionChat(actor, cond, tier, action) {
       ${actor.name} — ${label}
     </div>
     ${!isRemove ? `<div style="font-family: var(--baph-font-body, 'Bitter', serif); color: var(--baph-text-secondary, #8a919d); font-size: 12px; margin-top: 2px;">
-      ${cond.description.replace(/–X/g, `–${tier}`)}
+      ${cond.description.replace(/–X/g, `–${tier}`).replace(/\bX\b/g, String(tier))}
     </div>` : ''}`,
     speaker: ChatMessage.getSpeaker({ actor })
   });
@@ -484,7 +584,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.2.1`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.3`);
 });
 
 Hooks.once('ready', () => {
@@ -512,7 +612,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.2.1 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.3 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
