@@ -2,14 +2,15 @@
 
 **For Foundry VTT v13.350 + Pathfinder 1e System**
 
-Version 1.3.5 | [GitHub](https://github.com/Dade512/baphomet-utils)
+Version 2.0.0 | [GitHub](https://github.com/Dade512/baphomet-utils)
 
 ---
 
 ## What This Module Does
 
 - **Military Noir Theme** — Replaces Foundry's default parchment look with a slate/dark steel aesthetic, brutalist typography (Oswald headings, Bitter body, IBM Plex Mono for numbers/rolls), and tarnished gold accents. Subtle grain texture overlay for that worn-document feel.
-- **Automated PF1.5 Condition Overlay** — 12 PF2e-style conditions implemented as native PF1e Buff items with full Token HUD integration. Tiered conditions (1–4) with automatic mechanical penalties, auto-decrement support, and a macro API.
+- **Automated PF1.5 Condition Overlay** — 18 PF2e-style conditions implemented as native PF1e Buff items with full Token HUD integration. Tiered conditions (1–4) with automatic mechanical penalties, auto-decrement support, and a macro API.
+- **Action Economy Tracker** — Visual 3-action + reaction pip display in the Combat Tracker sidebar. Click to spend, auto-resets on turn advance, reads conditions to auto-lock lost actions. Supports Combat Reflexes feat detection.
 
 ---
 
@@ -30,10 +31,12 @@ Version 1.3.5 | [GitHub](https://github.com/Dade512/baphomet-utils)
    ├── module.json
    ├── README.md
    ├── scripts/
-   │   └── condition-overlay.js
+   │   ├── condition-overlay.js
+   │   └── action-tracker.js
    └── styles/
        ├── noir-theme.css
-       └── condition-overlay.css
+       ├── condition-overlay.css
+       └── action-tracker.css
    ```
 
 3. Launch Foundry → **Settings → Manage Modules** → Enable **"Echoes of Baphomet — PF1.5 House Rules"**.
@@ -48,13 +51,106 @@ https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 
 ---
 
+## Action Economy Tracker
+
+### Overview
+
+During active combat, every combatant in the Combat Tracker sidebar displays action pips:
+
+```
+◆ ◆ ◆ | ◇        ← 3 gold actions + 1 teal reaction
+```
+
+Click a pip to mark it as spent (dims instantly). Click again to restore it. Pips auto-reset when initiative advances to that combatant's turn.
+
+All players and the GM can see all pips. GM can click any combatant's pips; players can click their own.
+
+### Pip Colors
+
+| Pip | Color | Meaning |
+|-----|-------|---------|
+| **Gold diamond** | `#b8943e` | Action (available) |
+| **Teal diamond** | `#5a9a9a` | Reaction (available) |
+| **Steel blue diamond** | `#4a7ab5` | Combat Reflexes bonus reaction (AoO only) |
+| **Dark grey** | dim | Spent (voluntarily used) |
+| **Crimson** | `#5c1a1a` | Condition-locked (lost to Stunned/Slowed/etc.) |
+
+### Condition Integration
+
+The action tracker reads conditions applied through the Condition Overlay system. At the start of a combatant's turn:
+
+| Condition | Effect on Pips |
+|-----------|---------------|
+| **Stunned X** | X action pips auto-locked (crimson) |
+| **Slowed X** | X action pips auto-locked (crimson) |
+| **Staggered** | 2 action pips auto-locked (1 remains) |
+| **Nauseated** | 2 action pips auto-locked (1 remains) |
+| **Paralyzed** | All action + reaction pips locked |
+
+Condition-locked pips cannot be toggled back by clicking. They display with a crimson tint and a "not-allowed" cursor.
+
+### Combat Reflexes
+
+If an actor has a feat named "Combat Reflexes" in their item list, they automatically receive a bonus steel-blue reaction pip with the tooltip "AoO Only." This extra reaction can only be used for Attacks of Opportunity — not Legacy abilities, class features, or Readied Actions.
+
+### PF1.5 Action Cost Reference
+
+| Activity | Cost | Notes |
+|----------|------|-------|
+| Move (up to speed) | 1 | Cannot split between other actions |
+| 5-Foot Step | 1 | Does not provoke AoO |
+| Assault (all BAB attacks) | 1 | Once per turn. Full BAB, no iterative penalties. |
+| Vital Strike | 1 | Single focused strike alternative to Assault |
+| Cleave / Great Cleave | 1 | Initiates the chain |
+| Skill (Demoralize, Feint, etc.) | 1 | |
+| Aid Another | 1 | |
+| Combat Maneuver (standalone) | 1 | Can also replace an attack within Assault |
+| Stand from Prone | 1 | |
+| Bardic Performance (start) | 1 | Free to maintain on subsequent turns |
+| Lay on Hands (self) | 1 | |
+| Cast (standard action spell) | 2 | fireball, cure wounds, etc. |
+| Channel Energy | 2 | |
+| Lay on Hands (other) | 2 | |
+| Rapid Shot | 2 | 2 attacks at full BAB |
+| Magus Spellstrike | 2 | Also consumes Reaction |
+| Lancer Jump | 2 | Reduces to 1 action at level 13 |
+| Spring Attack | 2 | Move + Strike, no AoO |
+| Withdraw | 2 | Double speed, no provoke from start |
+| Total Defense | 2 | +4 AC until start of next turn |
+| Ready an Action | 2 | Triggers via Reaction pip |
+| Draw Potion + Drink | 2 | Draw (1) + Drink (1) |
+| Cast (full-round spell) | 3 | Summon Monster IV+, Gate, etc. |
+| Coup de Grace | 3 | Full turn to execute helpless target |
+| Draw Scroll + Cast | 3 | Draw (1) + Cast (2) |
+| Lancer Dragoon Dive | 3 | AoE capstone (level 20) |
+| Delay | Free | Changes initiative order |
+
+### Action Tracker Macro API
+
+```javascript
+// Get a combatant's current pip state
+game.baphometActions.getState(combatantId)
+// Returns: { actionsRemaining, actionsTotal, reactionAvailable, combatReflexAvailable, conditionLocked }
+
+// Reset all pips to full
+game.baphometActions.reset(combatantId)
+
+// Spend N action pips
+game.baphometActions.spendAction(combatantId, 2)
+
+// Spend the reaction pip
+game.baphometActions.spendReaction(combatantId)
+```
+
+---
+
 ## Condition Overlay System
 
 ### Overview
 
-Right-click any token (GM only) → click the **virus head icon** (🧠) in the Token HUD right column → opens a condition panel. Conditions are applied as PF1e system Buffs with mechanical penalties calculated automatically.
+Right-click any token (GM only) → click the **virus head icon** in the Token HUD right column → opens a condition panel. Conditions are applied as PF1e system Buffs with mechanical penalties calculated automatically.
 
-### 12 Conditions
+### 18 Conditions
 
 #### Tiered Conditions (value 1–4)
 
@@ -66,8 +162,8 @@ Right-click any token (GM only) → click the **virus head icon** (🧠) in the 
 | **Clumsy** | falling | ❌ | –X to DEX (cascades to Reflex, AC, ranged) |
 | **Enfeebled** | downgrade | ❌ | –X to STR (cascades to Fort, melee, carry) |
 | **Drained** | blood | ❌ (long rest) | –X to CON (cascades to Fort, HP) + Max HP reduction |
-| **Stunned** | stoned | ✅ as actions lost | Lose X actions (tracker, GM enforced) |
-| **Slowed** | clockwork | ❌ | Lose X actions per turn (tracker, max 3) |
+| **Stunned** | stoned | ✅ as actions lost | Lose X actions (auto-locks action tracker pips) |
+| **Slowed** | clockwork | ❌ | Lose X actions per turn (auto-locks action tracker pips) |
 | **Fascinated** | eye | ❌ | –X to Perception and skills; Concentrate restriction |
 
 #### Toggle Conditions (on/off)
@@ -77,15 +173,12 @@ Right-click any token (GM only) → click the **virus head icon** (🧠) in the 
 | **Fatigued** | unconscious | –1 AC, –1 saves; no run/charge |
 | **Off-Guard** | target | –2 untyped AC (stacks with other penalties) |
 | **Persistent Damage** | fire | Reminder/tracker; DC 15 flat check to end |
-
-### How It Works
-
-- Conditions create **PF1e Buff items** (`type: buff`, `subType: temp`) on the actor
-- Mechanical penalties use `pf1.components.ItemChange` for system-native change tracking
-- Buffs are flagged with `baphomet-utils.conditionKey` and `baphomet-utils.tier` for identification
-- Auto-decrement hooks into `pf1PostTurnChange` (with `combatTurn` fallback)
-- Chat messages announce condition changes with themed styling
-- Panel auto-refreshes after each action (100ms delay for document processing)
+| **Blinded** | blind | –2 attack, –4 Perception; GM: 50% miss chance, lose DEX to AC |
+| **Deafened** | deaf | –4 initiative, –4 Perception; GM: 20% verbal spell failure |
+| **Nauseated** | acid | –20 attack (soft block); GM: move action only |
+| **Confused** | daze | Behavioral tracker; GM rolls d100 per confusion table |
+| **Paralyzed** | paralysis | –20 DEX (effective DEX 0); helpless, coup de grace vulnerable |
+| **Staggered** | stoned | Action restriction tracker; GM: move OR standard, not both |
 
 ### Token HUD Panel
 
@@ -94,11 +187,7 @@ Right-click any token (GM only) → click the **virus head icon** (🧠) in the 
 - Active conditions highlighted with gold border and text
 - Hover over condition names for tooltip descriptions
 
----
-
-## Macro API
-
-The module exposes `game.baphometConditions` for macro and script access:
+### Condition Macro API
 
 ```javascript
 // Apply a condition at a specific tier
@@ -119,9 +208,9 @@ game.baphometConditions.listActive(actor)
 
 ### Condition Keys
 
-Use these exact strings with the API:
+**Tiered:** `frightened` · `sickened` · `stupefied` · `clumsy` · `enfeebled` · `drained` · `stunned` · `slowed` · `fascinated`
 
-`frightened` · `sickened` · `stupefied` · `clumsy` · `enfeebled` · `drained` · `stunned` · `slowed` · `fascinated` · `fatigued` · `offGuard` · `persistentDamage`
+**Toggle:** `fatigued` · `offGuard` · `persistentDamage` · `blinded` · `deafened` · `nauseated` · `confused` · `paralyzed` · `staggered`
 
 ---
 
@@ -151,46 +240,43 @@ All colors and fonts are CSS variables in the `:root` block of `noir-theme.css`.
 
 ---
 
-## PF1.5 Action Economy Quick Reference
-
-This module supports the **PF1.5 hybrid action economy** used in the Echoes of Baphomet campaign:
-
-- **3 actions per turn** (replaces standard/move/swift)
-- **Assault** (1 action): Full attack sequence — 1st and 2nd attacks at full BAB, 3rd+ at –5 cumulative
-- **Spellcasting:** Standard action spells = 2 actions, full-round = 3 actions
-- **1 Reaction per round:** AoO, counterspells, readied actions, Legacy Item abilities
-- **Half-level damage bonus:** All PCs add floor(Level ÷ 2) to damage rolls
-- **Inherent DR:** DR 1/– at level 5, +1 per odd level thereafter
-
-See `Homebrew_Master_File.md` for complete rules.
-
----
-
 ## Troubleshooting
+
+### Console verification
+
+Open browser console (F12). On a healthy load you should see both:
+```
+baphomet-utils | Condition Overlay v2.3 ready
+baphomet-utils | Action Tracker v1.0 ready
+```
+
+### Action pips don't appear
+
+1. Verify the module is enabled in **Settings → Manage Modules**
+2. Start a combat encounter — pips only render during active combat
+3. Check console for the `Action Tracker v1.0 ready` message
+4. If missing, verify `action-tracker.js` exists in `modules/baphomet-utils/scripts/` and that `module.json` lists it in `esmodules`
 
 ### Condition panel doesn't appear
 
-1. Verify the module is enabled in **Settings → Manage Modules**
-2. Check that you're logged in as GM (panel is GM-only)
-3. Open browser console (F12) and look for:
-   ```
-   baphomet-utils | PF1.5 Condition Overlay v2.1.1 ready.
-   ```
-4. If you see `v2` instead of `v2.1.1`, the old file is cached — replace `condition-overlay.js` in your module folder
+1. Verify you're logged in as GM (panel is GM-only)
+2. Right-click a token and look for the virus head icon in the right column
+3. Check console for `Condition Overlay v2.3 ready`
 
-### Verify file version
+### Verify file versions
 
-Run in browser console (F12):
 ```javascript
+// Run in browser console (F12)
 fetch('modules/baphomet-utils/scripts/condition-overlay.js')
-  .then(r => r.text())
-  .then(t => console.log(t.substring(0, 200)))
+  .then(r => r.text()).then(t => console.log(t.substring(0, 200)))
+
+fetch('modules/baphomet-utils/scripts/action-tracker.js')
+  .then(r => r.text()).then(t => console.log(t.substring(0, 200)))
 ```
-Should show `v2.1.1` in the header.
 
 ### Known unrelated errors
 
-The following console errors are from **other modules or the PF1e system**, not baphomet-utils:
+These console errors are from **other modules or the PF1e system**, not baphomet-utils:
 
 - `e.find is not a function` at `index.js` — Another module using jQuery `.find()` on v13 hooks
 - v13 deprecation warnings from `pf1.mjs` — PF1e system catching up to v13 API changes
@@ -199,6 +285,18 @@ The following console errors are from **other modules or the PF1e system**, not 
 ---
 
 ## Changelog
+
+### v2.0.0 (2026-02-21)
+- **NEW: Action Economy Tracker** — Visual 3-action + 1-reaction pip display in Combat Tracker sidebar
+- Click-to-spend/unspend with sharp military noir transitions
+- Auto-reset on turn advance
+- Condition integration: Stunned/Slowed/Staggered/Nauseated/Paralyzed auto-lock pips
+- Combat Reflexes feat detection adds bonus AoO-only reaction pip
+- Active combatant subtle glow effect
+- Macro API: `game.baphometActions.getState()`, `.spendAction()`, `.spendReaction()`, `.reset()`
+- Condition overlay expanded to 18 conditions (added Blinded, Deafened, Nauseated, Confused, Paralyzed, Staggered)
+- Fixed tier interpolation for standalone X values (Drained, Stunned, Slowed descriptions)
+- Fixed click handler event propagation on condition panel
 
 ### v1.3.5 (2026-02-18)
 - Condition overlay script v2.1.1: v13-compatible Token HUD integration
