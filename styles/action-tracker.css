@@ -1,24 +1,42 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.0
-   Military Noir aesthetic. Sharp transitions, not soft fades.
+   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.1
+   Black Company Grimoire aesthetic. Burnt brass, cold iron.
 
    Visual Language:
-   ◆ Gold    = Action (available)
-   ◆ Teal    = Reaction (available)
-   ◆ Steel   = Combat Reflexes AoO-only (available)
-   ◆ Ash     = Spent (dark, cold, mechanical)
-   ◆ Crimson = Condition-locked (lost, non-recoverable this turn)
+   ◆ Tarnished Gold  = Action (available)
+   ◆ Verdigris       = Reaction (available)         #4b7a7a
+   ◆ Cold Iron       = Combat Reflexes AoO-only     #3a5a78
+   ◆ Ash             = Spent (shard-burnt, gone)
+   ◆ Dried Blood     = Condition-locked (lost)
    ============================================================ */
 
-/* --- Pip Row Container --- */
+/* --- shardBurn keyframes ---
+   Pip briefly flares dull red then settles into ash.
+   Like a tallow candle snuffed with a finger — not elegant. */
+@keyframes shardBurn {
+  0%   { transform: scale(1);    background-color: inherit; }
+  15%  { transform: scale(0.75); background-color: var(--baph-red, #8b2020); opacity: 0.9; }
+  35%  { transform: scale(0.85); background-color: #5a2020; }
+  60%  { transform: scale(0.92); background-color: #2a1a1a; }
+  100% { transform: scale(1);
+         background: radial-gradient(circle at 40% 35%, #2a2424, #111418);
+         opacity: 0.30; }
+}
+
+/* --- Pip Row Container ---
+   inline-flex: rigid bar, never wraps under long names. */
 .baph-action-tracker {
-  display: flex;
+  display: inline-flex;
+  flex-wrap: nowrap;
   gap: 4px;
   align-items: center;
   padding: 2px 6px;
   margin: 1px 0;
   min-height: 18px;
   user-select: none;
+  border: 1px solid rgba(184, 148, 62, 0.2);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.55);
+  background: rgba(15, 17, 20, 0.4);
 }
 
 /* --- Base Pip --- */
@@ -29,8 +47,9 @@
   cursor: pointer;
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
 
-  /* SHARP transition — cold mechanical snap, not a gentle fade */
+  /* SHARP snap for normal state transitions */
   transition: background-color 0.05s step-end,
               opacity 0.05s step-end,
               border-color 0.05s step-end,
@@ -42,53 +61,56 @@
   filter: brightness(1.15);
 }
 
-/* --- Action Pips (Gold) --- */
+/* --- Action Pips (Tarnished Gold) --- */
 .baph-pip.action {
   background-color: var(--baph-gold, #b8943e);
   border-color: rgba(184, 148, 62, 0.4);
 }
 
-/* --- Reaction Pip (Teal) --- */
+/* --- Reaction Pip (Verdigris / Oxidised Copper) --- */
 .baph-pip.reaction {
-  background-color: #5a9a9a;
-  border-color: rgba(90, 154, 154, 0.4);
+  background-color: #4b7a7a;
+  border-color: rgba(75, 122, 122, 0.4);
 }
 
-/* --- Combat Reflexes Pip (Steel Blue) --- */
+/* --- Combat Reflexes Pip (Dull Cold Iron) --- */
 .baph-pip.combat-reflex {
-  background-color: #4a7ab5;
-  border-color: rgba(74, 122, 181, 0.4);
+  background-color: #3a5a78;
+  border-color: rgba(58, 90, 120, 0.4);
 }
 
 /* --- SPENT STATE ---
-   Cold. Mechanical. The action is gone. */
+   Triggers shardBurn, then holds at ash-gray. */
 .baph-pip.spent {
-  background-color: #1a1c20;
-  opacity: 0.28;
+  animation: shardBurn 0.35s ease-out forwards;
+  background: radial-gradient(circle at 40% 35%, #2a2424, #111418);
+  opacity: 0.30;
   border-color: rgba(255, 255, 255, 0.03);
   box-shadow: none;
+  cursor: default;
 }
 
 .baph-pip.spent:hover {
   opacity: 0.45;
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.08);
   filter: none;
 }
 
 /* --- CONDITION-LOCKED STATE ---
-   Crimson tint. You didn't choose to lose this.
-   Cannot be toggled back. Cursor reflects that. */
+   Dried blood. Not spent — taken. No animation, no recovery. */
 .baph-pip.condition-locked {
-  background-color: #5c1a1a;
-  opacity: 0.50;
-  border-color: rgba(140, 32, 32, 0.3);
-  box-shadow: inset 0 0 3px rgba(140, 32, 32, 0.5);
+  background-color: #8b2020;
+  opacity: 0.55;
+  border-color: rgba(139, 32, 32, 0.4);
+  box-shadow: inset 0 0 3px rgba(139, 32, 32, 0.6);
   cursor: not-allowed;
+  /* No shardBurn — it wasn't used, it was lost */
+  transition: none;
 }
 
 .baph-pip.condition-locked:hover {
   filter: none;
-  border-color: rgba(140, 32, 32, 0.5);
+  border-color: rgba(139, 32, 32, 0.6);
 }
 
 /* --- Separator between Actions and Reactions --- */
@@ -101,18 +123,18 @@
 }
 
 /* --- Active Combatant Highlight ---
-   Subtle glow on pips for whoever's turn it is. */
+   Embers of the active turn — subtle, not heroic. */
 .combatant.active .baph-action-tracker .baph-pip.action:not(.spent):not(.condition-locked) {
   box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.3),
-              0 0 4px rgba(184, 148, 62, 0.35);
+              0 0 4px rgba(184, 148, 62, 0.30);
 }
 
 .combatant.active .baph-action-tracker .baph-pip.reaction:not(.spent) {
   box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.3),
-              0 0 4px rgba(90, 154, 154, 0.35);
+              0 0 4px rgba(75, 122, 122, 0.30);
 }
 
 .combatant.active .baph-action-tracker .baph-pip.combat-reflex:not(.spent) {
   box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.3),
-              0 0 4px rgba(74, 122, 181, 0.35);
+              0 0 4px rgba(58, 90, 120, 0.30);
 }

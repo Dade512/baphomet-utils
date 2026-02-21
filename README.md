@@ -2,15 +2,15 @@
 
 **For Foundry VTT v13.350 + Pathfinder 1e System**
 
-Version 2.0.0 | [GitHub](https://github.com/Dade512/baphomet-utils)
+Version 2.1.0 | [GitHub](https://github.com/Dade512/baphomet-utils)
 
 ---
 
 ## What This Module Does
 
-- **Military Noir Theme** — Replaces Foundry's default parchment look with a slate/dark steel aesthetic, brutalist typography (Oswald headings, Bitter body, IBM Plex Mono for numbers/rolls), and tarnished gold accents. Subtle grain texture overlay for that worn-document feel.
-- **Automated PF1.5 Condition Overlay** — 18 PF2e-style conditions implemented as native PF1e Buff items with full Token HUD integration. Tiered conditions (1–4) with automatic mechanical penalties, auto-decrement support, and a macro API.
-- **Action Economy Tracker** — Visual 3-action + reaction pip display in the Combat Tracker sidebar. Click to spend, auto-resets on turn advance, reads conditions to auto-lock lost actions. Supports Combat Reflexes feat detection.
+- **Black Company Grimoire Theme** — Replaces Foundry's default parchment look with a slate/dark steel aesthetic. Typography uses Courier Prime (headings, labels) and Alegreya (body text) for a worn mercenary-ledger feel, with IBM Plex Mono for mechanical values. Tarnished gold accents, dried-blood red, and a subtle grain texture overlay.
+- **Automated PF1.5 Condition Overlay** — 18 PF2e-style conditions implemented as native PF1e Buff items with full Token HUD integration. Tiered conditions (1–4) with automatic mechanical penalties, auto-decrement support, and a macro API. Panel uses CSS Grid layout with a corrupted-ink-bleed hover effect.
+- **Action Economy Tracker** — Visual 3-action + reaction pip display in the Combat Tracker sidebar. Click to spend (triggers a shard-burn animation), auto-resets on turn advance, reads conditions to auto-lock lost actions. Supports Combat Reflexes feat detection.
 
 ---
 
@@ -58,10 +58,10 @@ https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 During active combat, every combatant in the Combat Tracker sidebar displays action pips:
 
 ```
-◆ ◆ ◆ | ◇        ← 3 gold actions + 1 teal reaction
+◆ ◆ ◆ | ◇ [◇]        ← 3 gold actions + 1 verdigris reaction [+ cold iron AoO]
 ```
 
-Click a pip to mark it as spent (dims instantly). Click again to restore it. Pips auto-reset when initiative advances to that combatant's turn.
+Click a pip to mark it as spent — triggers a brief shard-burn flare before settling into ash. Click again to restore it. Pips auto-reset when initiative advances to that combatant's turn.
 
 All players and the GM can see all pips. GM can click any combatant's pips; players can click their own.
 
@@ -69,11 +69,11 @@ All players and the GM can see all pips. GM can click any combatant's pips; play
 
 | Pip | Color | Meaning |
 |-----|-------|---------|
-| **Gold diamond** | `#b8943e` | Action (available) |
-| **Teal diamond** | `#5a9a9a` | Reaction (available) |
-| **Steel blue diamond** | `#4a7ab5` | Combat Reflexes bonus reaction (AoO only) |
-| **Dark grey** | dim | Spent (voluntarily used) |
-| **Crimson** | `#5c1a1a` | Condition-locked (lost to Stunned/Slowed/etc.) |
+| **Tarnished gold** | `#b8943e` | Action (available) |
+| **Verdigris** | `#4b7a7a` | Reaction (available) |
+| **Cold iron** | `#3a5a78` | Combat Reflexes bonus reaction (AoO only) |
+| **Ash radial gradient** | dim | Spent (shard-burnt, gone) |
+| **Dried blood** | `#8b2020` | Condition-locked (lost to Stunned/Slowed/etc.) |
 
 ### Condition Integration
 
@@ -81,17 +81,17 @@ The action tracker reads conditions applied through the Condition Overlay system
 
 | Condition | Effect on Pips |
 |-----------|---------------|
-| **Stunned X** | X action pips auto-locked (crimson) |
-| **Slowed X** | X action pips auto-locked (crimson) |
+| **Stunned X** | X action pips auto-locked (dried blood) |
+| **Slowed X** | X action pips auto-locked (dried blood) |
 | **Staggered** | 2 action pips auto-locked (1 remains) |
 | **Nauseated** | 2 action pips auto-locked (1 remains) |
 | **Paralyzed** | All action + reaction pips locked |
 
-Condition-locked pips cannot be toggled back by clicking. They display with a crimson tint and a "not-allowed" cursor.
+Condition-locked pips cannot be toggled back by clicking. They display in dried-blood red with a "not-allowed" cursor. No shard-burn animation — they weren't spent, they were taken.
 
 ### Combat Reflexes
 
-If an actor has a feat named "Combat Reflexes" in their item list, they automatically receive a bonus steel-blue reaction pip with the tooltip "AoO Only." This extra reaction can only be used for Attacks of Opportunity — not Legacy abilities, class features, or Readied Actions.
+If an actor has a feat named "Combat Reflexes" in their item list, they automatically receive a bonus cold-iron reaction pip with the tooltip "AoO Only." This extra reaction can only be used for Attacks of Opportunity — not Legacy abilities, class features, or Readied Actions.
 
 ### PF1.5 Action Cost Reference
 
@@ -150,6 +150,8 @@ game.baphometActions.spendReaction(combatantId)
 
 Right-click any token (GM only) → click the **virus head icon** in the Token HUD right column → opens a condition panel. Conditions are applied as PF1e system Buffs with mechanical penalties calculated automatically.
 
+The panel uses a CSS Grid layout. At 290px wide it renders two columns by default. Hovering a condition row triggers a subtle corrupted-ink-bleed effect (SVG turbulence filter) with a faint red wash — torn parchment, not a glitch.
+
 ### 18 Conditions
 
 #### Tiered Conditions (value 1–4)
@@ -182,10 +184,12 @@ Right-click any token (GM only) → click the **virus head icon** in the Token H
 
 ### Token HUD Panel
 
-- **Tiered section:** Each row shows condition name, auto-decrement indicator (↓), remove button (✕), and tier buttons (1–4)
-- **Toggle section:** Each row shows condition name and ON/OFF toggle
+- **Grid layout:** Conditions display in two columns (auto-fill at 110px min-width). Change `minmax(110px, 1fr)` to `minspace(260px, 1fr)` in `condition-overlay.css` for a single-column list.
+- **Tiered section:** Each cell shows condition name, auto-decrement indicator (↓), remove button (✕), and tier buttons (1–4)
+- **Toggle section:** Each cell shows condition name and ON/OFF toggle
 - Active conditions highlighted with gold border and text
 - Hover over condition names for tooltip descriptions
+- Hovering any row triggers a subtle ink-bleed distortion (SVG filter, injected at module load)
 
 ### Condition Macro API
 
@@ -220,8 +224,8 @@ game.baphometConditions.listActive(actor)
 
 | Font | Usage |
 |------|-------|
-| **Oswald** | Headings, tabs, window titles — condensed, industrial, commanding |
-| **Bitter** | Body text, descriptions, journal content — readable slab-serif |
+| **Courier Prime** | Headings, tabs, window titles, condition labels — typewriter weight, archaic authority |
+| **Alegreya** | Body text, descriptions, journal content — readable old-style serif |
 | **IBM Plex Mono** | Dice rolls, timestamps, mechanical values — clean monospace |
 
 ### Color Palette
@@ -232,7 +236,9 @@ game.baphometConditions.listActive(actor)
 | Text (primary) | Cool grey | `#c8ccd4` |
 | Text (secondary) | Muted grey | `#8a919d` |
 | Accent | Tarnished gold | `#b8943e` (bright: `#d4aa4f`) |
-| Danger | Muted crimson | `#8b3a3a` |
+| Reaction pip | Verdigris / oxidised copper | `#4b7a7a` |
+| AoO pip | Cold iron | `#3a5a78` |
+| Danger / condition-locked | Dried blood | `#8b2020` |
 
 ### Customization
 
@@ -246,7 +252,7 @@ All colors and fonts are CSS variables in the `:root` block of `noir-theme.css`.
 
 Open browser console (F12). On a healthy load you should see both:
 ```
-baphomet-utils | Condition Overlay v2.3 ready
+baphomet-utils | Condition Overlay v2.4 ready
 baphomet-utils | Action Tracker v1.0 ready
 ```
 
@@ -261,7 +267,11 @@ baphomet-utils | Action Tracker v1.0 ready
 
 1. Verify you're logged in as GM (panel is GM-only)
 2. Right-click a token and look for the virus head icon in the right column
-3. Check console for `Condition Overlay v2.3 ready`
+3. Check console for `Condition Overlay v2.4 ready`
+
+### Ink-bleed filter not appearing on hover
+
+The SVG filter is injected at module load via JS. If hovering conditions shows no distortion, check the console for errors at startup. The filter requires a modern Chromium-based browser (Foundry's Electron shell qualifies).
 
 ### Verify file versions
 
@@ -285,6 +295,17 @@ These console errors are from **other modules or the PF1e system**, not baphomet
 ---
 
 ## Changelog
+
+### v2.1.0 (2026-02-21)
+- **AESTHETIC OVERHAUL:** Fonts changed from Oswald to Courier Prime (headings) + Alegreya (body) for a Black Company grimoire feel
+- **Action pip colors desaturated:** Reaction → verdigris `#4b7a7a`, Combat Reflexes → cold iron `#3a5a78`
+- **Danger/red unified** to dried blood `#8b2020` across conditions and theme
+- **`@keyframes shardBurn`:** Spent pips now briefly flare dull red before settling into ash radial-gradient
+- **Action tracker bar** refactored to `inline-flex; flex-wrap: nowrap` — rigid bar with faded brass border and inset shadow
+- **Condition panel** refactored to CSS Grid (`auto-fill, minmax(110px, 1fr)`) with inset-tray shadow
+- **`#baph-overlay-panel`** uses `grid-template-rows: auto 1fr` — header pinned, only grid scrolls
+- **Corrupted-ink-bleed hover effect:** SVG `feTurbulence` + `feDisplacementMap` filter injected at module load; applied on `.baph-condition-row:hover`
+- Condition overlay bumped to v2.4
 
 ### v2.0.0 (2026-02-21)
 - **NEW: Action Economy Tracker** — Visual 3-action + 1-reaction pip display in Combat Tracker sidebar

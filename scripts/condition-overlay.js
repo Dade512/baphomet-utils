@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.3
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.4
    Applies PF2e-style conditions as PF1e system Buffs.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
@@ -13,6 +13,47 @@
    ============================================================ */
 
 const MODULE_ID = 'baphomet-utils';
+
+/* ----------------------------------------------------------
+   CORRUPTED EDGE SVG FILTER INJECTION
+   Injected once at ready. Referenced in CSS as url(#baph-corrupted-edge).
+   feTurbulence creates fractal noise; feDisplacementMap warps edges.
+   Low scale keeps it subtle — torn parchment, not a glitch effect.
+   ---------------------------------------------------------- */
+
+function _injectCorruptedEdgeFilter() {
+  if (document.getElementById('baph-corrupted-edge')) return; // idempotent
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('id', 'baph-svg-filters');
+  svg.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;';
+  svg.setAttribute('aria-hidden', 'true');
+
+  svg.innerHTML = `
+    <defs>
+      <filter id="baph-corrupted-edge" x="-5%" y="-5%" width="110%" height="110%" color-interpolation-filters="linearRGB">
+        <feTurbulence
+          type="fractalNoise"
+          baseFrequency="0.065 0.12"
+          numOctaves="3"
+          seed="7"
+          stitchTiles="stitch"
+          result="noise"
+        />
+        <feDisplacementMap
+          in="SourceGraphic"
+          in2="noise"
+          scale="3.5"
+          xChannelSelector="R"
+          yChannelSelector="G"
+          result="displaced"
+        />
+      </filter>
+    </defs>
+  `;
+
+  document.body.appendChild(svg);
+}
 
 /* ----------------------------------------------------------
    CONDITION DEFINITIONS
@@ -70,7 +111,6 @@ const CONDITIONS = {
         { formula: v, operator: 'add', target: 'int', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'wis', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'cha', modifier: 'penalty', priority: 0 },
-        // Cascades to: Will save, spell DCs, mental skill checks
       ];
     }
   },
@@ -86,7 +126,6 @@ const CONDITIONS = {
       const v = String(-tier);
       return [
         { formula: v, operator: 'add', target: 'dex', modifier: 'penalty', priority: 0 },
-        // DEX penalty cascades to: Reflex, ranged/finesse attacks, DEX skills, AC
       ];
     }
   },
@@ -102,7 +141,6 @@ const CONDITIONS = {
       const v = String(-tier);
       return [
         { formula: v, operator: 'add', target: 'str', modifier: 'penalty', priority: 0 },
-        // STR penalty cascades to: melee attack, STR damage, Fort, carry capacity
       ];
     }
   },
@@ -113,17 +151,11 @@ const CONDITIONS = {
     maxTier: 4,
     type: 'tiered',
     description: '–X penalty to CON-based checks, Fortitude saves, and Max HP reduced by X × character level. Decreases by 1 after a full night\'s rest.',
-    autoDecrement: false, // Decrements on long rest, not per-turn — GM manages
+    autoDecrement: false,
     buildChanges(tier) {
       const v = String(-tier);
       return [
         { formula: v, operator: 'add', target: 'con', modifier: 'penalty', priority: 0 },
-        // CON penalty cascades to: Fortitude, HP per level
-        // NOTE: Max HP reduction (X × level) is a secondary effect.
-        // The CON penalty handles most of it automatically since PF1e
-        // recalculates HP from CON mod. For precise tracking, GM can
-        // manually adjust HP on the token. The buff description reminds
-        // the GM of the additional Max HP reduction.
       ];
     }
   },
@@ -134,10 +166,8 @@ const CONDITIONS = {
     maxTier: 4,
     type: 'tiered',
     description: 'You lose X actions on your next turn. If Stunned exceeds 3, excess carries over to subsequent turns.',
-    autoDecrement: true, // Value reduces as actions are lost
+    autoDecrement: true,
     buildChanges(_tier) {
-      // Stunned removes actions — no numeric penalties to apply.
-      // Buff serves as visible tracker. GM enforces action loss.
       return [];
     }
   },
@@ -150,8 +180,6 @@ const CONDITIONS = {
     description: 'You lose X actions at the start of each turn (persistent while condition lasts). Does not decrease automatically.',
     autoDecrement: false,
     buildChanges(_tier) {
-      // Slowed removes actions — no numeric penalties to apply.
-      // Buff serves as visible tracker. GM enforces action loss.
       return [];
     }
   },
@@ -168,7 +196,6 @@ const CONDITIONS = {
       return [
         { formula: v, operator: 'add', target: 'skill.per', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'skills',    modifier: 'penalty', priority: 0 },
-        // Concentrate action restriction is GM-enforced
       ];
     }
   },
@@ -200,7 +227,6 @@ const CONDITIONS = {
     buildChanges() {
       return [
         { formula: '-2', operator: 'add', target: 'ac', modifier: 'untyped', priority: 0 },
-        // Using 'untyped' so it stacks with other AC penalties
       ];
     }
   },
@@ -213,8 +239,6 @@ const CONDITIONS = {
     description: 'Take damage at end of every turn. DC 15 flat check to end it. Receiving healing grants an immediate extra flat check.',
     autoDecrement: false,
     buildChanges() {
-      // No mechanical penalties — this is a reminder/tracker.
-      // GM rolls DC 15 flat check at end of affected creature's turn.
       return [];
     }
   },
@@ -228,12 +252,8 @@ const CONDITIONS = {
     autoDecrement: false,
     buildChanges() {
       return [
-        // In PF1e, blinded creatures lose DEX bonus to AC (handled by GM setting flat-footed),
-        // but we apply a penalty to attack and Perception as mechanical reminders.
         { formula: '-2', operator: 'add', target: 'allAttack',   modifier: 'penalty', priority: 0 },
         { formula: '-4', operator: 'add', target: 'skills.per',  modifier: 'penalty', priority: 0 },
-        // NOTE: 50% miss chance and loss of DEX to AC require GM adjudication.
-        // The miss chance is not automatable via buff changes.
       ];
     }
   },
@@ -249,7 +269,6 @@ const CONDITIONS = {
       return [
         { formula: '-4', operator: 'add', target: 'skills.per',  modifier: 'penalty', priority: 0 },
         { formula: '-4', operator: 'add', target: 'init',        modifier: 'penalty', priority: 0 },
-        // NOTE: 20% spell failure on verbal components requires GM adjudication.
       ];
     }
   },
@@ -262,12 +281,8 @@ const CONDITIONS = {
     description: 'Can only take a single move action each turn. Cannot attack, cast spells, or concentrate. Cannot eat or drink (including potions).',
     autoDecrement: false,
     buildChanges() {
-      // Nauseated is primarily a restriction, not a numeric penalty.
-      // We apply a visible attack penalty as a mechanical reminder that attacks are blocked.
       return [
         { formula: '-20', operator: 'add', target: 'allAttack', modifier: 'penalty', priority: 0 },
-        // NOTE: The -20 is a "soft block" — serves as a visible reminder.
-        // Actual enforcement (move action only, no casting) requires GM adjudication.
       ];
     }
   },
@@ -280,8 +295,6 @@ const CONDITIONS = {
     description: 'Acts randomly each round: 01–25 act normally, 26–50 babble incoherently, 51–75 deal 1d8+STR to self, 76–100 attack nearest creature. Cannot make attacks of opportunity.',
     autoDecrement: false,
     buildChanges() {
-      // Confused is entirely behavioral — GM rolls d100 each round.
-      // No numeric penalties to apply, but the buff serves as a visible tracker.
       return [];
     }
   },
@@ -295,10 +308,7 @@ const CONDITIONS = {
     autoDecrement: false,
     buildChanges() {
       return [
-        // Effective DEX of 0 = –5 modifier. We set DEX penalty to approximate.
-        // In PF1e, "helpless" is its own state, but the DEX penalty captures most of it.
         { formula: '-20', operator: 'add', target: 'dex', modifier: 'penalty', priority: 0 },
-        // NOTE: Helpless state (auto-hit by melee, coup de grace) requires GM adjudication.
       ];
     }
   },
@@ -311,8 +321,6 @@ const CONDITIONS = {
     description: 'Can only take a single move action or standard action each turn (not both). Cannot take full-round actions. Cannot run or charge.',
     autoDecrement: false,
     buildChanges() {
-      // Staggered is an action restriction, not a numeric penalty.
-      // The buff serves as a visible tracker and reminder.
       return [];
     }
   },
@@ -341,13 +349,11 @@ async function applyCondition(actor, condKey, tier) {
   const cond = CONDITIONS[condKey];
   tier = Math.clamp(tier, 0, cond.maxTier);
 
-  // Tier 0 = remove
   if (tier === 0) return removeCondition(actor, condKey);
 
   const existing = _findExistingBuff(actor, condKey);
 
   if (existing) {
-    // Update existing buff to new tier
     const changes = cond.buildChanges(tier);
     await existing.update({
       name: _buffName(condKey, tier),
@@ -361,7 +367,6 @@ async function applyCondition(actor, condKey, tier) {
       await existing.setActive(true);
     }
   } else {
-    // Create new buff directly on the actor (v13 compatible)
     const changes = cond.buildChanges(tier);
 
     const descHtml = cond.type === 'tiered'
@@ -392,7 +397,6 @@ async function applyCondition(actor, condKey, tier) {
     await created.setActive(true);
   }
 
-  // Chat notification
   _postConditionChat(actor, cond, tier, 'apply');
 }
 
@@ -422,10 +426,10 @@ function _postConditionChat(actor, cond, tier, action) {
       : `${cond.name} ${tier}`;
 
   ChatMessage.create({
-    content: `<div style="font-family: var(--baph-font-heading, 'Oswald', sans-serif); text-transform: uppercase; letter-spacing: 0.05em; color: ${color}; font-size: 13px;">
+    content: `<div style="font-family: var(--baph-font-heading, 'Courier Prime', monospace); text-transform: uppercase; letter-spacing: 0.05em; color: ${color}; font-size: 13px;">
       ${actor.name} — ${label}
     </div>
-    ${!isRemove ? `<div style="font-family: var(--baph-font-body, 'Bitter', serif); color: var(--baph-text-secondary, #8a919d); font-size: 12px; margin-top: 2px;">
+    ${!isRemove ? `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); color: var(--baph-text-secondary, #8a919d); font-size: 12px; margin-top: 2px;">
       ${cond.description.replace(/–X/g, `–${tier}`).replace(/\bX\b/g, String(tier))}
     </div>` : ''}`,
     speaker: ChatMessage.getSpeaker({ actor })
@@ -434,34 +438,47 @@ function _postConditionChat(actor, cond, tier, action) {
 
 /* ----------------------------------------------------------
    UI: Token HUD Condition Panel
+   Updated: wraps all conditions in .baph-conditions-grid
+   for CSS Grid layout (auto-fill columns, inset shadow).
    ---------------------------------------------------------- */
 
 function _buildConditionPanel(actor) {
   const panel = document.createElement('div');
   panel.classList.add('baph-condition-panel');
 
-  // Section: Tiered Conditions
+  // Pinned header
   const tieredHeader = document.createElement('div');
   tieredHeader.classList.add('baph-section-header');
-  tieredHeader.textContent = 'Tiered Conditions';
+  tieredHeader.textContent = 'Conditions';
   panel.appendChild(tieredHeader);
+
+  // Scrollable grid — all conditions live here
+  const grid = document.createElement('div');
+  grid.classList.add('baph-conditions-grid');
+
+  // Tiered conditions sub-label
+  const tieredLabel = document.createElement('div');
+  tieredLabel.style.cssText = 'grid-column: 1 / -1; font-family: var(--baph-font-heading, monospace); font-size: 8px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--baph-text-muted, #5c6370); padding: 2px 0 1px; border-bottom: 1px solid var(--baph-border, #2a2f38);';
+  tieredLabel.textContent = '— Tiered —';
+  grid.appendChild(tieredLabel);
 
   for (const [key, cond] of Object.entries(CONDITIONS)) {
     if (cond.type !== 'tiered') continue;
-    panel.appendChild(_buildTieredRow(actor, key, cond));
+    grid.appendChild(_buildTieredRow(actor, key, cond));
   }
 
-  // Section: Toggle Conditions
-  const toggleHeader = document.createElement('div');
-  toggleHeader.classList.add('baph-section-header');
-  toggleHeader.textContent = 'Status Conditions';
-  panel.appendChild(toggleHeader);
+  // Toggle conditions sub-label
+  const toggleLabel = document.createElement('div');
+  toggleLabel.style.cssText = tieredLabel.style.cssText;
+  toggleLabel.textContent = '— Status —';
+  grid.appendChild(toggleLabel);
 
   for (const [key, cond] of Object.entries(CONDITIONS)) {
     if (cond.type !== 'toggle') continue;
-    panel.appendChild(_buildToggleRow(actor, key, cond));
+    grid.appendChild(_buildToggleRow(actor, key, cond));
   }
 
+  panel.appendChild(grid);
   return panel;
 }
 
@@ -473,27 +490,31 @@ function _buildTieredRow(actor, key, cond) {
   row.classList.add('baph-condition-row');
   if (currentTier > 0) row.classList.add('active');
 
-  // Label
+  // Label row
+  const labelRow = document.createElement('div');
+  labelRow.style.display = 'flex';
+  labelRow.style.alignItems = 'center';
+
   const label = document.createElement('span');
   label.classList.add('baph-condition-label');
   label.textContent = cond.name;
   label.title = cond.description;
-  row.appendChild(label);
+  labelRow.appendChild(label);
 
-  // Auto-decrement indicator
   if (cond.autoDecrement) {
     const indicator = document.createElement('span');
     indicator.classList.add('baph-auto-indicator');
     indicator.textContent = '↓';
     indicator.title = 'Auto-decrements at end of turn';
-    row.appendChild(indicator);
+    labelRow.appendChild(indicator);
   }
+
+  row.appendChild(labelRow);
 
   // Tier buttons
   const tierGroup = document.createElement('div');
   tierGroup.classList.add('baph-tier-group');
 
-  // Remove button
   const btnRemove = document.createElement('button');
   btnRemove.classList.add('baph-tier-btn', 'baph-btn-remove');
   btnRemove.textContent = '✕';
@@ -506,7 +527,6 @@ function _buildTieredRow(actor, key, cond) {
   });
   tierGroup.appendChild(btnRemove);
 
-  // Tier 1-max buttons
   for (let t = 1; t <= cond.maxTier; t++) {
     const btn = document.createElement('button');
     btn.classList.add('baph-tier-btn');
@@ -533,14 +553,12 @@ function _buildToggleRow(actor, key, cond) {
   row.classList.add('baph-condition-row', 'baph-toggle-row');
   if (isActive) row.classList.add('active');
 
-  // Label
   const label = document.createElement('span');
   label.classList.add('baph-condition-label', 'baph-toggle-label');
   label.textContent = cond.name;
   label.title = cond.description;
   row.appendChild(label);
 
-  // Toggle button
   const btn = document.createElement('button');
   btn.classList.add('baph-toggle-btn');
   if (isActive) btn.classList.add('active');
@@ -561,18 +579,15 @@ function _buildToggleRow(actor, key, cond) {
 }
 
 function _refreshPanel(element) {
-  // Walk up to find the panel container, rebuild it
   const container = element.closest('.baph-condition-container');
   if (!container) return;
   const panel = container.querySelector('.baph-condition-panel');
   if (!panel) return;
 
-  // Get the actor from the stored reference
   const actorId = container.dataset.actorId;
   const actor = game.actors.get(actorId);
   if (!actor) return;
 
-  // Small delay to let Foundry process the document update
   setTimeout(() => {
     const newPanel = _buildConditionPanel(actor);
     panel.replaceWith(newPanel);
@@ -584,22 +599,23 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.3`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.4`);
 });
 
 Hooks.once('ready', () => {
+  // Inject the corrupted-edge SVG filter into the DOM
+  _injectCorruptedEdgeFilter();
+
   // Expose API for macros
   game.baphometConditions = {
     apply: applyCondition,
     remove: removeCondition,
     adjust: adjustCondition,
     CONDITIONS,
-    // Convenience: get current tier of a condition on an actor
     getTier(actor, condKey) {
       const buff = _findExistingBuff(actor, condKey);
       return buff?.getFlag(MODULE_ID, 'tier') ?? 0;
     },
-    // Convenience: list all active conditions on an actor
     listActive(actor) {
       return actor.items
         .filter(i => i.type === 'buff' && i.getFlag(MODULE_ID, 'conditionKey'))
@@ -612,7 +628,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.3 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.4 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
@@ -620,7 +636,7 @@ Hooks.once('ready', () => {
   console.log(`${MODULE_ID} | API: game.baphometConditions.listActive(actor)`);
 });
 
-// Token HUD button — v13 compatible (html is HTMLElement, not jQuery)
+// Token HUD button — v13 compatible
 Hooks.on('renderTokenHUD', (hud, html, data) => {
   if (!game.user.isGM) return;
 
@@ -628,10 +644,8 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
   const actor = token.actor;
   if (!actor) return;
 
-  // v13: html may be HTMLElement or jQuery — normalize to HTMLElement
   const hudElement = html instanceof HTMLElement ? html : (html[0] ?? html);
 
-  // Create the HUD button
   const btn = document.createElement('div');
   btn.classList.add('control-icon', 'baph-condition-hud-btn');
   btn.title = 'PF1.5 Conditions';
@@ -656,25 +670,19 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
     panelContainer.dataset.actorId = actor.id;
     panelContainer.appendChild(_buildConditionPanel(actor));
 
-    // v13 fix: Append to document.body instead of hudElement.
-    // The Token HUD intercepts mouse events on child elements,
-    // preventing clicks from reaching our buttons.
-    // Position the panel relative to the HUD button instead.
     const btnRect = btn.getBoundingClientRect();
     panelContainer.style.position = 'fixed';
     panelContainer.style.top = `${btnRect.top}px`;
-    panelContainer.style.left = `${btnRect.left - 286}px`;
+    panelContainer.style.left = `${btnRect.left - 300}px`;
     panelContainer.style.zIndex = '1000';
     document.body.appendChild(panelContainer);
 
-    // Block all mouse events from propagating to Foundry canvas/HUD
     for (const evt of ['mousedown', 'mouseup', 'click', 'pointerdown', 'pointerup']) {
       panelContainer.addEventListener(evt, (ev) => ev.stopPropagation());
     }
 
     panelOpen = true;
 
-    // Clean up when HUD closes
     const hudCloseObserver = new MutationObserver(() => {
       if (!document.contains(hudElement) || !hudElement.querySelector('.baph-condition-hud-btn')) {
         panelContainer?.remove();
@@ -686,7 +694,6 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
     hudCloseObserver.observe(hudElement.parentElement ?? document.body, { childList: true, subtree: true });
   });
 
-  // Insert into Token HUD right column — v13 uses querySelector
   const rightCol = hudElement.querySelector('.col.right');
   if (rightCol) {
     rightCol.appendChild(btn);
@@ -706,21 +713,14 @@ Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
 
   for (const [key, cond] of Object.entries(CONDITIONS)) {
     if (!cond.autoDecrement) continue;
-
     const buff = _findExistingBuff(actor, key);
     if (!buff) continue;
-
     const currentTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
-    if (currentTier > 0) {
-      adjustCondition(actor, key, -1);
-    }
+    if (currentTier > 0) adjustCondition(actor, key, -1);
   }
 });
 
-// Fallback: if pf1PostTurnChange doesn't exist, try the generic Foundry hook
 Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
-  // Only fire if pf1PostTurnChange didn't handle it
-  // We check by seeing if the PF1e hook exists
   if (Hooks.events['pf1PostTurnChange']?.length > 0) return;
   if (!game.user.isGM) return;
 
@@ -736,13 +736,9 @@ Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
 
   for (const [key, cond] of Object.entries(CONDITIONS)) {
     if (!cond.autoDecrement) continue;
-
     const buff = _findExistingBuff(actor, key);
     if (!buff) continue;
-
     const currentTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
-    if (currentTier > 0) {
-      adjustCondition(actor, key, -1);
-    }
+    if (currentTier > 0) adjustCondition(actor, key, -1);
   }
 });
