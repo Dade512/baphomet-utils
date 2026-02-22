@@ -1,20 +1,25 @@
 /* ============================================================
-   CONDITION OVERLAY v2.2 — UI Styles
-   Gaslamp Gothic | Candlewax, Grime, Dried Blood
-   No neon. No cyan. No digital glow.
+   CONDITION OVERLAY v2.3 — UI Styles
+   Gaslamp Gothic | Croaker's Ledger edition
+   A brass-and-leather bookmark clipped to the open page.
+   No neon. No dark void backgrounds.
    ============================================================ */
 
 /* --- HUD Button --- */
 .baph-condition-hud-btn {
   cursor: pointer;
+  /* Make the icon readable against whatever the HUD background is */
+  color: var(--baph-parchment-bright, #e8dfd0);
+  transition: color 0.15s;
 }
 
 .baph-condition-hud-btn:hover {
-  color: var(--baph-gold, #b8943e);
+  color: var(--baph-brass-bright, #b8943e);
 }
 
 /* --- Panel Container (anchored to Token HUD) ---
-   Grid layout: pins header, lets grid scroll only. */
+   Fixed position — attached to the HUD button rect by JS.
+   Acts as a physical clip, not a floating UI pane. */
 #baph-overlay-panel,
 .baph-condition-container {
   position: absolute;
@@ -27,106 +32,119 @@
 }
 
 /* --- Condition Panel Wrapper ---
-   The ledger cover. Dark leather over stamped iron spine. */
+   An index card made of aged parchment,
+   bound with a brass spine on top.
+   Physical depth through shadow only — no glow. */
 .baph-condition-panel {
-  background: var(--baph-bg-dark, #161210);
-  border: 1px solid var(--baph-border-light, #3e3830);
-  border-top: 2px solid var(--baph-gold-dim, #8a6f2e); /* stamped brass header */
+  background: var(--baph-parchment-mid, #d1c6b4);
+  border: 1px solid var(--baph-leather-mid, #8a7b66);
+  border-top: 3px solid var(--baph-brass, #9e7d43);  /* brass header band */
   border-radius: 0;
   padding: 6px;
   display: grid;
   grid-template-rows: auto 1fr;
-  /* Hard inset shadow — physical depth, not a glow */
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.8),
-              inset 0 1px 0 rgba(184, 148, 62, 0.06);
+  /* Card lifted slightly from the page */
+  box-shadow: 2px 4px 12px rgba(42, 35, 29, 0.4),
+              inset 0 1px 0 rgba(232, 223, 208, 0.5);
   max-height: 480px;
 }
 
-/* --- Section Headers (pinned, don't scroll) --- */
+/* --- Section Headers (pinned, don't scroll) ---
+   Stamped heading text — like a rubric marker in an old manuscript. */
 .baph-section-header {
-  font-family: var(--baph-font-heading, 'Courier Prime', 'Courier New', monospace);
+  font-family: var(--baph-font-heading, 'Courier Prime', monospace);
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  color: var(--baph-text-muted, #6b5f52);
+  color: var(--baph-ink-secondary, #5e5246);
   padding: 5px 6px 2px;
-  border-bottom: 1px solid var(--baph-border, #2e2824);
+  border-bottom: 1px solid var(--baph-leather-mid, #8a7b66);
   margin-top: 2px;
   user-select: none;
 }
 
 /* --- Scrollable Conditions Grid ---
-   Sunken tray — physical indentation, not a glow effect. */
+   Slightly recessed ruled area — like the lined interior
+   of the index card, pressed in. */
 .baph-conditions-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
   gap: 6px;
   padding: 6px 4px;
   overflow-y: auto;
-  /* Inset = tray pressed into the page. Hard edges. */
-  box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.6),
-              inset 0 -2px 6px rgba(0, 0, 0, 0.4);
-  background: var(--baph-bg-darkest, #0e0c0b);
+  /* Sunken ruled section */
+  background: var(--baph-parchment-dark, #beb09b);
+  box-shadow: inset 0 2px 6px rgba(42, 35, 29, 0.15),
+              inset 0 -1px 4px rgba(42, 35, 29, 0.08);
 }
 
-/* --- Condition Row (grid cells) --- */
+/* Sub-section labels within the grid */
+.baph-conditions-grid > div[style*="grid-column"] {
+  font-family: var(--baph-font-heading, monospace) !important;
+  color: var(--baph-ink-faint, #8a7b6e) !important;
+  border-bottom-color: var(--baph-leather-mid, #8a7b66) !important;
+}
+
+/* --- Condition Row (grid cells) ---
+   Each row is a line in the index card's field notes. */
 .baph-condition-row {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   padding: 4px 6px;
   border-radius: 0;
-  background: var(--baph-bg-mid, #1e1917);
+  background: var(--baph-parchment-light, #ddd3c0);
   border: 1px solid transparent;
-  border-left: 2px solid transparent; /* left-rail for active state */
+  border-left: 2px solid transparent;
   transition: border-color 0.15s ease, background 0.15s ease;
   min-height: 28px;
   position: relative;
 }
 
-/* Active state — gold rail like a marked ledger entry */
+/* Active state — brass left-rail, like a bookmarked entry */
 .baph-condition-row.active {
-  border-left-color: var(--baph-gold-dim, #8a6f2e);
-  border-color: var(--baph-border-light, #3e3830);
-  background: var(--baph-bg-light, #2a2421);
+  border-left-color: var(--baph-brass, #9e7d43);
+  border-color: var(--baph-leather-mid, #8a7b66);
+  background: var(--baph-parchment-bright, #e8dfd0);
 }
 
-/* Corrupted Ink Bleed on Hover ---
-   SVG turbulence injected by condition-overlay.js.
-   Red wash + torn parchment edges. */
+/* Ink Bleed on Hover — corrupted edge SVG filter from JS.
+   Blood red edge + torn parchment fringe. */
 .baph-condition-row:hover {
-  border-color: rgba(94, 27, 20, 0.45);   /* dried blood edge */
-  background: rgba(30, 18, 16, 0.90);
+  border-color: rgba(110, 42, 34, 0.4);
+  background: rgba(190, 176, 155, 0.85);
   filter: url(#baph-corrupted-edge);
 }
 
 .baph-condition-row.active:hover {
-  border-left-color: var(--baph-gold-dim, #8a6f2e);
-  border-color: rgba(94, 27, 20, 0.35);
-  background: var(--baph-bg-light, #2a2421);
+  border-left-color: var(--baph-brass, #9e7d43);
+  border-color: rgba(110, 42, 34, 0.35);
+  background: var(--baph-parchment-bright, #e8dfd0);
   filter: url(#baph-corrupted-edge);
 }
 
-/* --- Condition Label --- */
+/* --- Condition Label ---
+   Faded iron gall ink. Uppercase small caps feel. */
 .baph-condition-label {
-  font-family: var(--baph-font-heading, 'Courier Prime', 'Courier New', monospace);
+  font-family: var(--baph-font-heading, 'Courier Prime', monospace);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 10px;
-  /* Aged parchment off-white — readable against dark background */
-  color: var(--baph-text-label, #c2b49a);
+  color: var(--baph-ink-secondary, #5e5246);
   cursor: help;
   margin-bottom: 3px;
 }
 
+/* Active condition label — full strength ink */
 .baph-condition-row.active .baph-condition-label {
-  color: var(--baph-gold, #b8943e);
+  color: var(--baph-ink-primary, #2a231d);
+  font-weight: 600;
 }
 
 /* --- Auto-Decrement Indicator --- */
 .baph-auto-indicator {
   font-size: 10px;
-  color: var(--baph-gold-dim, #8a6f2e);
+  color: var(--baph-brass, #9e7d43);
   margin-left: 3px;
   cursor: help;
   opacity: 0.7;
@@ -134,7 +152,7 @@
 
 .baph-condition-row.active .baph-auto-indicator {
   opacity: 1;
-  color: var(--baph-gold-bright, #d4aa4f);
+  color: var(--baph-blood, #6e2a22);
 }
 
 /* --- Tier Button Group --- */
@@ -146,18 +164,19 @@
 }
 
 /* --- Tier Buttons ---
-   Stamped iron keys — inset shadow, no outer glow. */
+   Brass rivets pressed into the card.
+   Physical: inset shadow gives depth. No glow. */
 .baph-tier-btn {
   flex: 1;
   min-width: 0;
   height: 20px;
   padding: 0;
   margin: 0;
-  border: 1px solid var(--baph-border, #2e2824);
+  border: 1px solid var(--baph-leather-mid, #8a7b66);
   border-radius: 0;
-  background: var(--baph-bg-surface, #3d3732);
-  color: var(--baph-text-label, #c2b49a);  /* readable off-white */
-  font-family: var(--baph-font-mono, 'IBM Plex Mono', monospace); /* numbers */
+  background: var(--baph-parchment-mid, #d1c6b4);
+  color: var(--baph-ink-secondary, #5e5246);
+  font-family: var(--baph-font-mono, 'IBM Plex Mono', monospace);
   font-size: 10px;
   font-weight: 600;
   cursor: pointer;
@@ -166,43 +185,46 @@
   align-items: center;
   justify-content: center;
   line-height: 1;
-  /* Physical key — sunken center */
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04),
-              inset 0 -1px 0 rgba(0,0,0,0.4);
+  /* Physical surface — raised from card */
+  box-shadow: inset 0 1px 0 rgba(232, 223, 208, 0.6),
+              inset 0 -1px 0 rgba(42, 35, 29, 0.15),
+              0 1px 2px rgba(42, 35, 29, 0.15);
 }
 
 .baph-tier-btn:hover {
-  background: var(--baph-bg-lighter, #332e2a);
-  color: var(--baph-gold, #b8943e);
-  border-color: var(--baph-gold-dim, #8a6f2e);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+  background: var(--baph-parchment-light, #ddd3c0);
+  color: var(--baph-brass, #9e7d43);
+  border-color: var(--baph-brass, #9e7d43);
+  box-shadow: inset 0 2px 4px rgba(42, 35, 29, 0.12);
 }
 
+/* Selected tier — pressed brass rivet, full gold */
 .baph-tier-btn.selected {
-  background: var(--baph-gold-dim, #8a6f2e);
-  color: var(--baph-bg-darkest, #0e0c0b);
-  border-color: var(--baph-gold, #b8943e);
+  background: var(--baph-brass, #9e7d43);
+  color: var(--baph-parchment-bright, #e8dfd0);
+  border-color: var(--baph-leather-dark, #6b5c4a);
   font-weight: 700;
-  /* Pressed key — deeper inset */
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.55);
+  /* Pressed in — deeper inset */
+  box-shadow: inset 0 2px 5px rgba(42, 35, 29, 0.4),
+              0 0 0 1px rgba(107, 92, 74, 0.3);
 }
 
-/* Remove button */
+/* Remove button — dried blood tone */
 .baph-btn-remove {
-  color: var(--baph-danger-bright, #8b3028);
+  color: var(--baph-blood, #6e2a22);
   font-size: 9px;
   flex: 0 0 20px;
 }
 
 .baph-btn-remove:hover {
-  background: var(--baph-danger, #5e1b14);
-  color: var(--baph-text-bright, #e8ddd0);
-  border-color: var(--baph-danger-bright, #8b3028);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+  background: var(--baph-blood, #6e2a22);
+  color: var(--baph-parchment-bright, #e8dfd0);
+  border-color: var(--baph-blood-bright, #8b3028);
+  box-shadow: inset 0 2px 4px rgba(42, 35, 29, 0.4);
 }
 
 .baph-tier-btn.disabled {
-  opacity: 0.20;
+  opacity: 0.30;
   cursor: default;
   pointer-events: none;
 }
@@ -220,54 +242,62 @@
 }
 
 /* --- Toggle Button ---
-   [DIRECTIVE: READABILITY]
-   - Minimum font-size 11px (up from 8px)
-   - Color: aged parchment off-white (#c2b49a) not muted gray (#5c6370)
-   - Stamped iron — no neon outer glow */
+   Leather tag on the card — a physical ON/OFF latch.
+   No neon. No rounded pill. Hard stamped square. */
 .baph-toggle-btn {
   width: 38px;
   height: 20px;
   padding: 0;
   margin: 0;
-  border: 1px solid var(--baph-border, #2e2824);
+  border: 1px solid var(--baph-leather-mid, #8a7b66);
   border-radius: 0;
-  background: var(--baph-bg-surface, #3d3732);
-  color: var(--baph-text-label, #c2b49a);   /* aged parchment — HIGH CONTRAST */
-  font-family: var(--baph-font-heading, 'Courier Prime', monospace); /* Courier Prime for labels */
-  font-size: 11px;                            /* MINIMUM 11px per directive */
+  background: var(--baph-parchment-mid, #d1c6b4);
+  color: var(--baph-ink-secondary, #5e5246);
+  font-family: var(--baph-font-heading, 'Courier Prime', monospace);
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   cursor: pointer;
   transition: all 0.10s ease;
   flex-shrink: 0;
-  /* Physical button surface */
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04),
-              inset 0 -1px 0 rgba(0,0,0,0.4);
+  box-shadow: inset 0 1px 0 rgba(232, 223, 208, 0.6),
+              inset 0 -1px 0 rgba(42, 35, 29, 0.15),
+              0 1px 2px rgba(42, 35, 29, 0.15);
 }
 
 .baph-toggle-btn:hover {
-  background: var(--baph-bg-lighter, #332e2a);
-  color: var(--baph-gold, #b8943e);
-  border-color: var(--baph-gold-dim, #8a6f2e);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+  background: var(--baph-parchment-light, #ddd3c0);
+  color: var(--baph-brass, #9e7d43);
+  border-color: var(--baph-brass, #9e7d43);
+  box-shadow: inset 0 2px 4px rgba(42, 35, 29, 0.12);
 }
 
+/* Active/latched — brass tag, text reads against gold */
 .baph-toggle-btn.active {
-  background: var(--baph-gold-dim, #8a6f2e);
-  color: var(--baph-bg-darkest, #0e0c0b);
-  border-color: var(--baph-gold, #b8943e);
-  /* Pressed/latched state */
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.55);
+  background: var(--baph-brass, #9e7d43);
+  color: var(--baph-parchment-bright, #e8dfd0);
+  border-color: var(--baph-leather-dark, #6b5c4a);
+  box-shadow: inset 0 2px 5px rgba(42, 35, 29, 0.4);
 }
 
 /* --- Panel Scrollbar --- */
 .baph-conditions-grid::-webkit-scrollbar { width: 4px; }
-.baph-conditions-grid::-webkit-scrollbar-track { background: var(--baph-bg-darkest, #0e0c0b); }
-.baph-conditions-grid::-webkit-scrollbar-thumb { background: var(--baph-bg-surface, #3d3732); }
-.baph-conditions-grid::-webkit-scrollbar-thumb:hover { background: var(--baph-gold-dim, #8a6f2e); }
+.baph-conditions-grid::-webkit-scrollbar-track {
+  background: var(--baph-parchment-dark, #beb09b);
+}
+.baph-conditions-grid::-webkit-scrollbar-thumb {
+  background: var(--baph-leather-mid, #8a7b66);
+}
+.baph-conditions-grid::-webkit-scrollbar-thumb:hover {
+  background: var(--baph-brass, #9e7d43);
+}
 
 /* Legacy scrollbar fallback */
 .baph-condition-panel::-webkit-scrollbar { width: 4px; }
-.baph-condition-panel::-webkit-scrollbar-track { background: var(--baph-bg-darkest, #0e0c0b); }
-.baph-condition-panel::-webkit-scrollbar-thumb { background: var(--baph-bg-surface, #3d3732); }
+.baph-condition-panel::-webkit-scrollbar-track {
+  background: var(--baph-parchment-dark, #beb09b);
+}
+.baph-condition-panel::-webkit-scrollbar-thumb {
+  background: var(--baph-leather-mid, #8a7b66);
+}
