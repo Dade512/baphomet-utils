@@ -3,7 +3,92 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.4.0
+**Current Version:** 2.5.0
+
+---
+
+## Installation
+
+Manifest URL:
+```
+https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
+```
+
+---
+
+## Features
+
+- **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
+- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
+- **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic
+- **Roll Card Styler** — Dark leather result bar on all roll cards; nat 20 gold bar and nat 1 blood bar with flavor labels
+
+---
+
+## Changelog
+
+### v2.5.0 — "The Ledger Notes the Result"
+- **New:** `scripts/roll-cards.js` — Roll Card Styler. Dark leather result bar injected on all dice roll messages. Nat 20 detected via d20 die face reading; result bar turns burnished gold, left-rail goes brass, flavor label reads "⚔ Critical Success". Nat 1 result bar goes dried blood, parchment text, label reads "✖ Critical Failure". No glow on either — physical materials only.
+- **Fix:** Brass roll links (BAB, Fortitude, Reflex, Will, CMB, Initiative, skill links) — added `font-weight: 700` and `‑webkit‑text‑stroke: 0.4px` dark iron edge. Text reads as stamped brass on parchment rather than painted-on thin lettering.
+- **Fix:** Category headers (WEAPONS, CONSUMABLES, EQUIPMENT, etc.) — bumped to `font-weight: 700`, `font-size: 0.82em`, `letter-spacing: 0.08em`. Courier Prime bold uppercase now has real weight at small sizes.
+
+### v2.4.0 — "Croaker's Ledger"
+- Full theme pivot to battered mercenary ledger aesthetic
+- Parchment backgrounds, dark ink text, brass/blood accents
+- action-tracker.css and condition-overlay.css updated to match
+
+### v2.3.2 — "The Names Were Always There"
+- Item name contrast pass across all item lists
+
+### v2.3.1 — "The Candle Wasn't Enough"
+- Hotfix: Buffs tab item names invisible
+
+### v2.3.0 — "The Lamp is Lit"
+- Accessibility pass: sidebar, compendium, PF1e sheet
+
+### v2.2.0 — "The Ledger Rebound"
+- Gaslamp Gothic palette overhaul, layout/logic bug fixes
+
+---
+
+## Aesthetic Rules — Croaker's Ledger
+
+| Rule | Value |
+|------|-------|
+| Brightest value | `#e8dfd0` (fresh vellum) — no pure white |
+| Background (main) | `#d1c6b4` (field parchment) |
+| Background (worn) | `#beb09b` (mud-stained parchment) |
+| Sidebar / chrome | `#8a7b66` (scuffed leather) |
+| Primary text | `#2a231d` (oxidized iron gall ink) |
+| Secondary text | `#5e5246` (watered-down faded ink) |
+| Accent hover | `#9e7d43` (tarnished brass) |
+| Danger / active tab | `#6e2a22` (dried blood) |
+| No neon/cyan/digital glow | Everything reads as physical materials |
+| Font: Labels/Headings | Courier Prime |
+| Font: Body/Descriptions | Alegreya |
+| Font: Numbers only | IBM Plex Mono |
+
+---
+
+## Server Deployment
+
+```
+/opt/foundrydata/Data/modules/baphomet-utils/
+```
+
+Replace: `styles/noir-theme.css`, `module.json`, `README.md`  
+Add new: `scripts/roll-cards.js`
+
+---
+
+## Git Workflow
+
+```bash
+git add styles/noir-theme.css scripts/roll-cards.js module.json README.md
+git commit -m "v2.5.0 — Roll card styler, brass link weight, header boldness"
+git tag v2.5.0
+git push && git push --tags
+```
 
 ---
 
