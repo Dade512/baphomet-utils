@@ -2,7 +2,7 @@
   "id": "baphomet-utils",
   "title": "Echoes of Baphomet — PF1.5 House Rules",
   "description": "Custom theme, automated condition overlay, action economy tracker, and reference materials for the Echoes of Baphomet's Fall campaign. Gaslamp Gothic aesthetic with PF1.5 hybrid 3-action economy support.",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "compatibility": {
     "minimum": "13",
     "verified": "13.350"

@@ -2,7 +2,7 @@
 
 **For Foundry VTT v13.350 + Pathfinder 1e System**
 
-Version 2.2.0 | [GitHub](https://github.com/Dade512/baphomet-utils)
+Version 2.3.0 | [GitHub](https://github.com/Dade512/baphomet-utils)
 
 ---
 
@@ -73,7 +73,7 @@ All players and the GM can see all pips. GM can click any combatant's pips; play
 | **Verdigris** | `#4b7a7a` | Reaction (available) |
 | **Cold iron** | `#3a5a78` | Combat Reflexes bonus reaction (AoO only) |
 | **Ash radial gradient** | dim | Spent (shard-burnt, gone) |
-| **Dried blood** | `#8b2020` | Condition-locked (lost to Stunned/Slowed/etc.) |
+| **Dried blood** | `#5e1b14` | Condition-locked (lost to Stunned/Slowed/etc.) |
 
 ### Condition Integration
 
@@ -254,14 +254,14 @@ All colors and fonts are CSS variables in the `:root` block of `noir-theme.css`.
 Open browser console (F12). On a healthy load you should see both:
 ```
 baphomet-utils | Condition Overlay v2.4 ready
-baphomet-utils | Action Tracker v1.0 ready
+baphomet-utils | Action Tracker v1.2 ready
 ```
 
 ### Action pips don't appear
 
 1. Verify the module is enabled in **Settings → Manage Modules**
 2. Start a combat encounter — pips only render during active combat
-3. Check console for the `Action Tracker v1.0 ready` message
+3. Check console for the `Action Tracker v1.2 ready` message
 4. If missing, verify `action-tracker.js` exists in `modules/baphomet-utils/scripts/` and that `module.json` lists it in `esmodules`
 
 ### Condition panel doesn't appear
@@ -296,6 +296,16 @@ These console errors are from **other modules or the PF1e system**, not baphomet
 ---
 
 ## Changelog
+
+### v2.3.0 (2026-02-22)
+- **[ACCESSIBILITY] Sidebar & Compendium contrast** — Directory lists, compendium pack entries, folder headers, and sidebar buttons now render in warm lamplight off-whites (`--baph-text-bright`, `--baph-text-label`). Previously invisible against dark backgrounds
+- **[SYSTEM UI] PF1e sheet global base** — `.pf1.sheet.actor` now forces warm parchment base text (`#d4c9b8`) throughout the sheet. PF1e's default dark-on-light assumptions no longer leak through
+- **[SYSTEM UI] PF1e conditions list** — `.condition-name`, condition toggle labels, and active condition states styled with `--baph-text-bright` / `--baph-gold` for immediate readability
+- **[SYSTEM UI] PF1e attributes section** — Attribute abbreviations use `--baph-text-label` (aged off-white), score values use `--baph-text-bright` (fresh vellum), modifiers and mechanical numbers use `--baph-gold` (lamplight). No muted greys on mechanical values
+- **[SYSTEM UI] Saving throws, skills, AC, initiative** — All mechanical values styled in `--baph-gold` mono; all labels in `--baph-text-label` Courier Prime
+- **[SYSTEM UI] Item rows, tab backgrounds, section headers** — Tab content areas, item list rows, and section dividers explicitly themed to dark leather tones
+- **Tone compliance** — No pure whites anywhere. Brightest value is `#e8ddd0` (fresh vellum). All high-contrast text uses warm off-whites or pale lamplight brass
+- `noir-theme.css` bumped to v2.3
 
 ### v2.2.0 (2026-02-22)
 - **THEME: Gaslamp Gothic** — `noir-theme.css` palette overhauled from digital slate/cyan to warm weathered tones (`#0e0c0b`, `#1e1917`, `#2a2421`). Tarnished leather replaces cold industrial grey throughout

@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — GASLAMP GOTHIC THEME v2.2
+   ECHOES OF BAPHOMET — GASLAMP GOTHIC THEME v2.3
    Pathfinder Setting | Canorate's Gas-lit Underbelly
    For Foundry VTT v13 + Pathfinder 1e
 
@@ -446,33 +446,387 @@ button[data-button="yes"],
 ::-webkit-scrollbar-thumb { background: var(--baph-bg-surface); border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--baph-gold-dim); }
 
-/* --- PF1e Character Sheet Overrides --- */
-.pf1 .item-list .item .item-name {
+/* ============================================================
+   SIDEBAR & COMPENDIUM ACCESSIBILITY
+   [DIRECTIVE: ACCESSIBILITY]
+   Foundry's sidebar directory lists, compendium pack entries,
+   and sidebar buttons inherit dark text from core/system styles
+   that disappear against our dark backgrounds.
+   Override to warm lamplight off-whites — legible but not stark.
+   ============================================================ */
+
+/* --- Sidebar directory lists (Actors, Items, Journals, etc.) --- */
+.directory-list .directory-item,
+.directory-list .entry-name,
+.directory-list .document-name,
+.directory-list .folder-header .folder-name,
+.directory-list .folder > .directory-item,
+#sidebar .directory .directory-item,
+#sidebar .directory .entry-name {
+  color: var(--baph-text-bright, #e8ddd0);
+}
+
+.directory-list .directory-item:hover,
+.directory-list .entry-name:hover {
+  color: var(--baph-gold-bright, #d4aa4f);
+}
+
+/* Folder headers — slightly dimmer than entries, still visible */
+.directory-list .folder > .directory-item,
+.directory-list .folder-header {
+  color: var(--baph-text-label, #c2b49a);
+}
+
+.directory-list .folder > .directory-item:hover {
+  color: var(--baph-gold, #b8943e);
+}
+
+/* --- Compendium packs --- */
+.compendium-list .compendium,
+.compendium-list .compendium .compendium-name,
+.compendium-list .entry-name,
+#compendium .compendium-pack h4,
+#compendium .compendium-pack .document-name {
+  color: var(--baph-text-bright, #e8ddd0);
+}
+
+/* Compendium pack metadata (type tag, count) */
+.compendium-pack .pack-info,
+.compendium-pack .system-tag {
+  color: var(--baph-text-secondary, #9a8e7e);
+}
+
+/* --- Sidebar section headers / search bars --- */
+#sidebar .directory-header h3,
+#sidebar .directory-header .header-search input,
+.directory-header .header-search input {
+  color: var(--baph-text-bright, #e8ddd0);
+  background: var(--baph-bg-light, #2a2421);
+  border-color: var(--baph-border-light, #3e3830);
+}
+
+/* --- Sidebar action buttons (Create, Import, etc.) --- */
+#sidebar .header-actions .action-buttons a,
+#sidebar .directory-header .create-document,
+.directory-header .action-buttons a,
+.directory-header button {
+  color: var(--baph-text-label, #c2b49a);
+}
+
+#sidebar .header-actions .action-buttons a:hover,
+.directory-header button:hover {
+  color: var(--baph-gold-bright, #d4aa4f);
+}
+
+/* ============================================================
+   PF1e CHARACTER SHEET — GLOBAL BASE
+   [DIRECTIVE: SYSTEM UI]
+   Force all text inside actor sheets to warm lamplight tones.
+   PF1e's default stylesheet assumes a light parchment background;
+   our dark theme makes its grey/black text effectively invisible.
+   ============================================================ */
+
+/* --- Global sheet text override ---
+   Sets a warm base for everything inside the actor sheet.
+   Individual elements below can refine this further. */
+.pf1.sheet.actor,
+.pf1.sheet.actor .window-content,
+.pf1.sheet.actor .tab,
+.pf1.sheet.actor .sheet-body {
+  color: var(--baph-text-primary, #d4c9b8);
+  background: var(--baph-bg-mid, #1e1917);
+}
+
+/* Labels, section names, field names — slightly brighter than body text */
+.pf1.sheet.actor label,
+.pf1.sheet.actor .label,
+.pf1.sheet.actor .field-label,
+.pf1.sheet.actor h1,
+.pf1.sheet.actor h2,
+.pf1.sheet.actor h3,
+.pf1.sheet.actor h4 {
+  color: var(--baph-text-label, #c2b49a);
+  font-family: var(--baph-font-heading);
+}
+
+/* Item names, spell names, feat names */
+.pf1.sheet.actor .item-name,
+.pf1.sheet.actor .item .name,
+.pf1.sheet.actor .spell-name,
+.pf1.sheet.actor .feat-name,
+.pf1.sheet.actor .item-list .item .item-name {
+  color: var(--baph-text-bright, #e8ddd0);
   font-family: var(--baph-font-body);
 }
 
+/* Input fields on the sheet */
+.pf1.sheet.actor input[type="text"],
+.pf1.sheet.actor input[type="number"],
+.pf1.sheet.actor select,
+.pf1.sheet.actor textarea {
+  color: var(--baph-text-bright, #e8ddd0);
+  background: var(--baph-bg-light, #2a2421);
+  border-color: var(--baph-border, #2e2824);
+}
+
+/* Disabled/read-only fields — still readable, just dimmer */
+.pf1.sheet.actor input:disabled,
+.pf1.sheet.actor input[readonly] {
+  color: var(--baph-text-label, #c2b49a);
+  background: var(--baph-bg-mid, #1e1917);
+  opacity: 0.85;
+}
+
+/* Mechanical numbers in inputs — mono font */
+.pf1.sheet.actor input[type="number"] {
+  font-family: var(--baph-font-mono);
+  color: var(--baph-gold, #b8943e);
+}
+
+/* HP and other mechanical values */
+.pf1 .resource-value,
+.pf1 .hp-value,
+.pf1 .attribute-value,
+.pf1 .roll-value,
+.pf1.sheet.actor .resource .value,
+.pf1.sheet.actor .resource .max {
+  font-family: var(--baph-font-mono);
+  color: var(--baph-gold, #b8943e);
+}
+
+/* Attack names */
 .pf1 .attacks-list .attack .attack-name {
   font-family: var(--baph-font-heading);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  color: var(--baph-text-bright, #e8ddd0);
 }
 
+/* Spell names */
 .pf1 .spellbook .spell .spell-name {
+  font-family: var(--baph-font-body);
+  color: var(--baph-text-bright, #e8ddd0);
+}
+
+/* ============================================================
+   PF1e CHARACTER SHEET — CONDITIONS LIST
+   [DIRECTIVE: SYSTEM UI — CONDITIONS]
+   The PF1e conditions list on the character sheet uses small
+   toggles and labels that vanish on dark backgrounds.
+   ============================================================ */
+
+/* Conditions section wrapper */
+.pf1.sheet.actor .conditions,
+.pf1.sheet.actor .conditions-list,
+.pf1.sheet.actor [data-tab="conditions"] {
+  background: var(--baph-bg-mid, #1e1917);
+  color: var(--baph-text-primary, #d4c9b8);
+}
+
+/* Individual condition entries */
+.pf1.sheet.actor .conditions-list .condition,
+.pf1.sheet.actor .conditions-list li {
+  color: var(--baph-text-label, #c2b49a);
+  border-bottom: 1px solid var(--baph-border, #2e2824);
+}
+
+/* Condition name text — must be clearly legible */
+.pf1.sheet.actor .condition-name,
+.pf1.sheet.actor .conditions-list .condition label,
+.pf1.sheet.actor .conditions-list .condition .name {
+  color: var(--baph-text-bright, #e8ddd0);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 11px;
+}
+
+/* Active/checked condition — gold highlight */
+.pf1.sheet.actor .conditions-list .condition.active .condition-name,
+.pf1.sheet.actor .conditions-list input[type="checkbox"]:checked + label,
+.pf1.sheet.actor .conditions-list input[type="checkbox"]:checked ~ .condition-name {
+  color: var(--baph-gold, #b8943e);
+}
+
+/* Condition toggle checkboxes — style the label buttons */
+.pf1.sheet.actor .conditions-list input[type="checkbox"] + label,
+.pf1.sheet.actor .condition-toggle {
+  color: var(--baph-text-label, #c2b49a);
+  background: var(--baph-bg-surface, #3d3732);
+  border: 1px solid var(--baph-border-light, #3e3830);
+}
+
+.pf1.sheet.actor .conditions-list input[type="checkbox"] + label:hover,
+.pf1.sheet.actor .condition-toggle:hover {
+  color: var(--baph-gold, #b8943e);
+  border-color: var(--baph-gold-dim, #8a6f2e);
+}
+
+/* ============================================================
+   PF1e CHARACTER SHEET — ATTRIBUTES SECTION
+   [DIRECTIVE: SYSTEM UI — ATTRIBUTES]
+   The attributes block at the bottom of the sheet (STR/DEX/
+   CON/INT/WIS/CHA) needs stark contrast. Score values and
+   modifier numbers especially must be immediately readable.
+   No muted grey for mechanical values.
+   ============================================================ */
+
+/* Attribute block containers */
+.pf1.sheet.actor .attributes,
+.pf1.sheet.actor .ability-scores,
+.pf1.sheet.actor [data-tab="attributes"],
+.pf1.sheet.actor .attribute-block,
+.pf1.sheet.actor .attribute {
+  background: var(--baph-bg-dark, #161210);
+  color: var(--baph-text-primary, #d4c9b8);
+}
+
+/* Attribute abbreviation labels (STR, DEX, etc.) */
+.pf1.sheet.actor .ability-scores .ability .ability-abbr,
+.pf1.sheet.actor .attribute .attribute-name,
+.pf1.sheet.actor .ability-name,
+.pf1.sheet.actor .attribute-block .label {
+  color: var(--baph-text-label, #c2b49a);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+/* Attribute score values — primary mechanical number */
+.pf1.sheet.actor .ability-scores .ability .ability-score,
+.pf1.sheet.actor .ability-scores .ability input[type="number"],
+.pf1.sheet.actor .attribute-block .attribute-value,
+.pf1.sheet.actor .attribute .value {
+  color: var(--baph-text-bright, #e8ddd0);
+  font-family: var(--baph-font-mono);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* Attribute modifiers (the +2 / -1 numbers) — lamplight gold */
+.pf1.sheet.actor .ability-scores .ability .ability-mod,
+.pf1.sheet.actor .ability-scores .ability .mod,
+.pf1.sheet.actor .attribute-block .attribute-mod,
+.pf1.sheet.actor .attribute .modifier {
+  color: var(--baph-gold, #b8943e);
+  font-family: var(--baph-font-mono);
+  font-weight: 700;
+}
+
+/* Saving throws, BAB, CMD, CMB values */
+.pf1.sheet.actor .saving-throws .saving-throw .value,
+.pf1.sheet.actor .saving-throw-value,
+.pf1.sheet.actor .bab .value,
+.pf1.sheet.actor .combat-value,
+.pf1.sheet.actor .cmb .value,
+.pf1.sheet.actor .cmd .value {
+  color: var(--baph-gold, #b8943e);
+  font-family: var(--baph-font-mono);
+  font-weight: 600;
+}
+
+/* Saving throw labels */
+.pf1.sheet.actor .saving-throws .saving-throw .label,
+.pf1.sheet.actor .saving-throw-name {
+  color: var(--baph-text-label, #c2b49a);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+/* Skills list */
+.pf1.sheet.actor .skills-list .skill .skill-name,
+.pf1.sheet.actor .skill-name {
+  color: var(--baph-text-primary, #d4c9b8);
   font-family: var(--baph-font-body);
 }
 
-/* HP and other mechanical numbers → mono */
-.pf1 .resource-value,
-.pf1 .hp-value,
-.pf1 .attribute-value,
-.pf1 .roll-value {
+.pf1.sheet.actor .skills-list .skill .skill-value,
+.pf1.sheet.actor .skill-value {
+  color: var(--baph-gold, #b8943e);
   font-family: var(--baph-font-mono);
 }
 
-/* --- Subtle Grain Overlay ---
+/* Initiative, Speed, AC values */
+.pf1.sheet.actor .initiative .value,
+.pf1.sheet.actor .speed .value,
+.pf1.sheet.actor .ac .value,
+.pf1.sheet.actor .ac-value {
+  color: var(--baph-gold, #b8943e);
+  font-family: var(--baph-font-mono);
+  font-weight: 700;
+}
+
+.pf1.sheet.actor .initiative .label,
+.pf1.sheet.actor .speed .label,
+.pf1.sheet.actor .ac .label {
+  color: var(--baph-text-label, #c2b49a);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+/* ============================================================
+   PF1e CHARACTER SHEET — MISC UI ELEMENTS
+   Background fixes for tab content areas, section dividers,
+   and pill/tag elements that PF1e injects with light backgrounds.
+   ============================================================ */
+
+/* Tab content areas */
+.pf1.sheet.actor .tab-content,
+.pf1.sheet.actor .sheet-content,
+.pf1.sheet.actor .tab.active {
+  background: var(--baph-bg-mid, #1e1917);
+}
+
+/* Section headers inside tabs */
+.pf1.sheet.actor .items-header,
+.pf1.sheet.actor .item-header,
+.pf1.sheet.actor .list-header {
+  background: var(--baph-bg-dark, #161210);
+  color: var(--baph-text-label, #c2b49a);
+  border-bottom: 1px solid var(--baph-border-light, #3e3830);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+}
+
+/* Item rows */
+.pf1.sheet.actor .item-list .item,
+.pf1.sheet.actor .items-list .item {
+  border-bottom: 1px solid var(--baph-border, #2e2824);
+  color: var(--baph-text-primary, #d4c9b8);
+}
+
+.pf1.sheet.actor .item-list .item:hover,
+.pf1.sheet.actor .items-list .item:hover {
+  background: var(--baph-bg-light, #2a2421);
+}
+
+/* Currency, weight, encumbrance labels */
+.pf1.sheet.actor .currency .label,
+.pf1.sheet.actor .encumbrance .label,
+.pf1.sheet.actor .weight-label {
+  color: var(--baph-text-secondary, #9a8e7e);
+  font-family: var(--baph-font-heading);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.pf1.sheet.actor .currency .value,
+.pf1.sheet.actor .encumbrance .value {
+  color: var(--baph-text-label, #c2b49a);
+  font-family: var(--baph-font-mono);
+}
+
+/* ============================================================
+   SUBTLE GRAIN OVERLAY
    Applied to UI elements only (not the canvas).
    Simulates aged paper texture. Opacity kept very low
-   to avoid obscuring readability. */
+   to avoid obscuring readability.
+   ============================================================ */
 #ui-top::after {
   content: '';
   position: fixed;
