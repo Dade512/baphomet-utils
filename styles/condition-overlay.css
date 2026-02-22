@@ -86,19 +86,24 @@
 }
 
 /* --- Condition Row (grid cells) ---
-   Each row is a line in the index card's field notes. */
+   Each row is a line in the index card's field notes.
+   Column flex: label on top, tier-group below.
+   justify-content: space-between keeps them flush to
+   top and bottom of the cell without floating. */
 .baph-condition-row {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  justify-content: space-between;
   padding: 4px 6px;
   border-radius: 0;
   background: var(--baph-parchment-light, #ddd3c0);
   border: 1px solid transparent;
   border-left: 2px solid transparent;
   transition: border-color 0.15s ease, background 0.15s ease;
-  min-height: 28px;
+  min-height: 52px;   /* enough room for label + button row without crowding */
   position: relative;
+  box-sizing: border-box;
 }
 
 /* Active state — brass left-rail, like a bookmarked entry */
@@ -132,7 +137,8 @@
   font-size: 10px;
   color: var(--baph-ink-secondary, #5e5246);
   cursor: help;
-  margin-bottom: 3px;
+  margin-bottom: 0;   /* space-between on parent handles the gap */
+  line-height: 1.2;
 }
 
 /* Active condition label — full strength ink */
@@ -158,9 +164,12 @@
 /* --- Tier Button Group --- */
 .baph-tier-group {
   display: flex;
+  flex-direction: row;
+  align-items: center;
   gap: 2px;
   flex-shrink: 0;
-  margin-top: 2px;
+  width: 100%;
+  margin-top: 0;   /* space-between on .baph-condition-row handles vertical gap */
 }
 
 /* --- Tier Buttons ---
@@ -229,24 +238,37 @@
   pointer-events: none;
 }
 
-/* --- Toggle Rows --- */
+/* --- Toggle Rows ---
+   Single-line row: label left, button right.
+   Explicit display:flex here because the base .baph-condition-row
+   is flex-direction:column — this override needs its own axis. */
 .baph-toggle-row {
+  display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 32px;   /* shorter than tiered rows — no button group below */
 }
 
 .baph-toggle-label {
   flex: 1;
   margin-bottom: 0;
+  align-self: center;
+  line-height: 1.2;
 }
 
 /* --- Toggle Button ---
    Leather tag on the card — a physical ON/OFF latch.
-   No neon. No rounded pill. Hard stamped square. */
+   No neon. No rounded pill. Hard stamped square.
+   display:flex + align/justify center ensures the text
+   sits truly centered regardless of font metrics or line-height. */
 .baph-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 38px;
-  height: 20px;
+  height: 22px;      /* slightly taller to seat 11px text cleanly */
   padding: 0;
   margin: 0;
   border: 1px solid var(--baph-leather-mid, #8a7b66);
@@ -256,11 +278,13 @@
   font-family: var(--baph-font-heading, 'Courier Prime', monospace);
   font-size: 11px;
   font-weight: 700;
+  line-height: 1;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   cursor: pointer;
   transition: all 0.10s ease;
   flex-shrink: 0;
+  align-self: center;
   box-shadow: inset 0 1px 0 rgba(232, 223, 208, 0.6),
               inset 0 -1px 0 rgba(42, 35, 29, 0.15),
               0 1px 2px rgba(42, 35, 29, 0.15);
