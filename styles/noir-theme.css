@@ -1,901 +1,482 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — GASLAMP GOTHIC THEME v2.3.1
-   Pathfinder Setting | Canorate's Gas-lit Underbelly
-   For Foundry VTT v13 + Pathfinder 1e
+   BAPHOMET-UTILS — NOIR THEME
+   Version: 2.3.2 — "The Names Were Always There"
+   Gaslamp Gothic palette | PF1e Sheet + Foundry V13
+   ============================================================
 
-   Aesthetic: The prim veneer of Canorate high society
-   concealing rot. Tarnished leather, candlewax, dried ink,
-   old blood, foxed paper. No slate. No cyan. No neon.
+   CHANGELOG
+   v2.3.2 — Item name / Buff list contrast pass
+              • Active item names forced to --baph-text-primary
+              • Disabled/inactive buff names forced to --baph-text-secondary
+              • Gold hover state on all item/buff names
+   v2.3.1 — Hotfix: Buffs tab item names invisible (targeted fix)
+   v2.3.0 — Accessibility pass: sidebar, compendium, PF1e sheet global contrast
+   v2.2.0 — Gaslamp Gothic palette overhaul, layout/logic bug fixes
 
-   v13 CSS Layers: Auto-imported into the "modules" layer via
-   module.json — priority over core/system without !important.
+   PALETTE REFERENCE
+   --baph-bg-dark      #161210
+   --baph-bg-mid       #1e1917
+   --baph-bg-light     #2a2421
+   --baph-bg-surface   #221f1c
+   --baph-border       #2e2824
+   --baph-border-light #3e3830
+   --baph-text-primary   #d4c9b8  (candlelit parchment — main readable text)
+   --baph-text-bright    #e8ddd0  (fresh vellum — brightest allowed value)
+   --baph-text-label     #c2b49a  (aged off-white — labels/headings)
+   --baph-text-secondary #8a7d6e  (dim — secondary/disabled text)
+   --baph-gold           #b8943e  (lamplight brass)
+   --baph-gold-bright    #d4a843  (hover/active gold)
+   --baph-font-heading   'Courier Prime'
+   --baph-font-body      'Alegreya'
+   --baph-font-mono      'IBM Plex Mono'
    ============================================================ */
 
-/* --- FONT IMPORTS --- */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Alegreya:ital,wght@0,400;0,500;0,700;1,400;1,700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap');
-
-/* --- CSS VARIABLES (Central Control) --- */
+/* ============================================================
+   1. CSS CUSTOM PROPERTIES
+   ============================================================ */
 :root {
-  /* ── Core Palette — Tarnished Leather & Candlewax ──────── */
-  --baph-bg-darkest:     #0e0c0b;   /* lamp-black; deepest shadow          */
-  --baph-bg-dark:        #161210;   /* soot-stained timber                 */
-  --baph-bg-mid:         #1e1917;   /* worn leather interior               */
-  --baph-bg-light:       #2a2421;   /* old mahogany                        */
-  --baph-bg-lighter:     #332e2a;   /* tarnished oak                       */
-  --baph-bg-surface:     #3d3732;   /* aged parchment backing              */
-
-  /* ── Text ─────────────────────────────────────────────── */
-  --baph-text-primary:   #d4c9b8;   /* candlelit parchment                 */
-  --baph-text-secondary: #9a8e7e;   /* faded ink                           */
-  --baph-text-muted:     #6b5f52;   /* foxed paper margin                  */
-  --baph-text-bright:    #e8ddd0;   /* fresh vellum                        */
-  --baph-text-label:     #c2b49a;   /* readable label — aged off-white     */
-
-  /* ── Accent — Tarnished Gold ──────────────────────────── */
+  --baph-bg-dark:        #161210;
+  --baph-bg-mid:         #1e1917;
+  --baph-bg-light:       #2a2421;
+  --baph-bg-surface:     #221f1c;
+  --baph-border:         #2e2824;
+  --baph-border-light:   #3e3830;
+  --baph-text-primary:   #d4c9b8;
+  --baph-text-bright:    #e8ddd0;
+  --baph-text-label:     #c2b49a;
+  --baph-text-secondary: #8a7d6e;
   --baph-gold:           #b8943e;
-  --baph-gold-bright:    #d4aa4f;
-  --baph-gold-dim:       #8a6f2e;
-  --baph-gold-glow:      rgba(184, 148, 62, 0.12);  /* kept for border use only */
-
-  /* ── Functional ────────────────────────────────────────── */
-  --baph-danger:         #5e1b14;   /* dried blood (dark)                  */
-  --baph-danger-bright:  #8b3028;   /* fresh wound                         */
-  --baph-red:            #5e1b14;
-  --baph-success:        #2e4a28;
-  --baph-success-bright: #4a7a44;
-  --baph-info:           #2a3d5a;
-  --baph-warning:        #6b4e1a;
-
-  /* ── Borders — physical, not digital ──────────────────── */
-  --baph-border:         #2e2824;   /* worn binding edge                   */
-  --baph-border-light:   #3e3830;   /* brass fitting, aged                 */
-  --baph-border-gold:    rgba(184, 148, 62, 0.22);
-
-  /* ── Fonts ─────────────────────────────────────────────── */
-  /* Courier Prime  → headings, labels, window titles (typewriter authority) */
-  /* Alegreya       → body text, descriptions, journals (old-style serif)   */
-  /* IBM Plex Mono  → NUMBERS ONLY: dice, initiative, HP, timestamps        */
-  --baph-font-body:      'Alegreya', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
+  --baph-gold-bright:    #d4a843;
+  --baph-font-heading:   'Courier Prime', 'Courier New', monospace;
+  --baph-font-body:      'Alegreya', Georgia, serif;
   --baph-font-mono:      'IBM Plex Mono', 'Courier New', monospace;
-  --baph-font-heading:   'Courier Prime', 'Courier New', 'Lucida Console', monospace;
 }
 
 /* ============================================================
-   GLOBAL OVERRIDES
+   2. FOUNDRY APPLICATION CHROME
+   ============================================================ */
+#interface,
+.app,
+.window-app {
+  font-family: var(--baph-font-body);
+  color: var(--baph-text-primary);
+}
+
+.window-app .window-header {
+  background: var(--baph-bg-dark);
+  border-bottom: 1px solid var(--baph-border-light);
+  font-family: var(--baph-font-heading);
+  color: var(--baph-text-label);
+  letter-spacing: 0.04em;
+}
+
+.window-app .window-header .window-title {
+  color: var(--baph-text-label);
+  font-family: var(--baph-font-heading);
+}
+
+.window-app .window-content {
+  background: var(--baph-bg-mid);
+  color: var(--baph-text-primary);
+}
+
+/* ============================================================
+   3. PF1 ACTOR SHEET — GLOBAL FOUNDATION
+   ============================================================ */
+.pf1.sheet.actor {
+  background: var(--baph-bg-mid);
+  color: var(--baph-text-primary);
+  font-family: var(--baph-font-body);
+}
+
+.pf1.sheet.actor .sheet-header {
+  background: var(--baph-bg-dark);
+  border-bottom: 1px solid var(--baph-border-light);
+}
+
+.pf1.sheet.actor input,
+.pf1.sheet.actor select,
+.pf1.sheet.actor textarea {
+  background: var(--baph-bg-surface);
+  color: var(--baph-text-primary);
+  border: 1px solid var(--baph-border-light);
+  font-family: var(--baph-font-body);
+}
+
+.pf1.sheet.actor input:focus,
+.pf1.sheet.actor select:focus,
+.pf1.sheet.actor textarea:focus {
+  border-color: var(--baph-gold);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--baph-gold);
+}
+
+/* ============================================================
+   4. PF1 SHEET — TAB NAVIGATION
+   ============================================================ */
+.pf1.sheet.actor .tabs .item {
+  color: var(--baph-text-secondary);
+  font-family: var(--baph-font-heading);
+  letter-spacing: 0.03em;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.pf1.sheet.actor .tabs .item:hover {
+  color: var(--baph-text-label);
+  border-bottom-color: var(--baph-border-light);
+}
+
+.pf1.sheet.actor .tabs .item.active {
+  color: var(--baph-gold);
+  border-bottom-color: var(--baph-gold);
+}
+
+/* ============================================================
+   5. PF1 SHEET — THREE-TIER MECHANICAL HIERARCHY
+      dim label → bright value → gold modifier
    ============================================================ */
 
-/* --- Sidebar --- */
-#sidebar {
-  background: var(--baph-bg-dark);
-  border-left: 2px solid var(--baph-border);
-}
-
-#sidebar-tabs > .item {
-  color: var(--baph-text-secondary);
+/* Labels */
+.pf1.sheet.actor .attribute label,
+.pf1.sheet.actor .skill-name,
+.pf1.sheet.actor .saving-throw label,
+.pf1.sheet.actor label {
+  color: var(--baph-text-label);
   font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 11px;
-}
-
-#sidebar-tabs > .item.active {
-  color: var(--baph-gold);
-  border-bottom: 2px solid var(--baph-gold-dim);
-}
-
-/* --- Chat Log --- */
-#chat-log {
-  background: var(--baph-bg-darkest);
-  font-family: var(--baph-font-body);
-  color: var(--baph-text-primary);
-}
-
-#chat-log .message {
-  background: var(--baph-bg-mid);
-  border: 1px solid var(--baph-border);
-  border-left: 3px solid var(--baph-border-light);
-  border-radius: 0;
-  margin-bottom: 4px;
-  color: var(--baph-text-primary);
-  font-family: var(--baph-font-body);
-  font-size: 13px;
-  line-height: 1.55;
-  /* Physical inset — stamped into leather, not glowing */
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
-}
-
-#chat-log .message .message-sender {
-  color: var(--baph-gold);
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
+  font-size: 0.75em;
   letter-spacing: 0.05em;
-  font-size: 12px;
-}
-
-#chat-log .message .message-header .message-timestamp {
-  color: var(--baph-text-muted);
-  font-family: var(--baph-font-mono); /* timestamps = mechanical numbers */
-  font-size: 10px;
-}
-
-/* Chat input */
-#chat-message {
-  background: var(--baph-bg-light);
-  border: 1px solid var(--baph-border-light);
-  color: var(--baph-text-primary);
-  font-family: var(--baph-font-body);
-}
-
-#chat-message:focus {
-  border-color: var(--baph-gold-dim);
-  outline: none;
-  /* Physical indentation — no neon ring */
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.55),
-              inset 0 -1px 2px rgba(0, 0, 0, 0.3);
-}
-
-/* v13: Mini-chat notification tray */
-.chat-notifications {
-  background: var(--baph-bg-darkest);
-  border-top: 1px solid var(--baph-border);
-}
-
-.chat-notifications .message {
-  background: var(--baph-bg-mid);
-  border: 1px solid var(--baph-border);
-  color: var(--baph-text-primary);
-  font-family: var(--baph-font-body);
-  font-size: 12px;
-}
-
-.chat-notifications .message .message-sender {
-  color: var(--baph-gold);
-  font-family: var(--baph-font-heading);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 11px;
 }
 
-/* --- Roll Cards --- */
-.dice-roll {
-  background: var(--baph-bg-light);
-  border: 1px solid var(--baph-border-light);
-  border-left: 3px solid var(--baph-gold-dim);
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.5);
+/* Values */
+.pf1.sheet.actor .attribute .attribute-value,
+.pf1.sheet.actor .skill-mod,
+.pf1.sheet.actor .saving-throw .saving-throw-total,
+.pf1.sheet.actor input[type="text"],
+.pf1.sheet.actor input[type="number"] {
+  color: var(--baph-text-bright);
+  font-family: var(--baph-font-mono);
 }
 
-.dice-total {
-  font-family: var(--baph-font-mono);  /* mechanical number */
-  color: var(--baph-gold-bright);
-  font-weight: 700;
+/* Modifiers / bonuses */
+.pf1.sheet.actor .attribute .attribute-mod,
+.pf1.sheet.actor .skill-cs,
+.pf1.sheet.actor .attribute-modifiers {
+  color: var(--baph-gold);
+  font-family: var(--baph-font-mono);
 }
 
-.dice-formula {
-  font-family: var(--baph-font-mono);  /* mechanical number */
-  color: var(--baph-text-secondary);
-  font-size: 12px;
+/* ============================================================
+   6. PF1 SHEET — ITEM LISTS (Inventory, Spells, Features, etc.)
+   ============================================================ */
+.pf1.sheet.actor .item-list {
+  background: transparent;
 }
 
-/* Critical — stamped gold border, no neon */
-.dice-total.critical {
-  color: var(--baph-gold-bright);
-  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
-  border-bottom: 2px solid var(--baph-gold-dim);
-}
-
-/* Fumble — dried blood, not glowing */
-.dice-total.fumble {
-  color: var(--baph-danger-bright);
-}
-
-/* --- Combat Tracker --- */
-#combat-tracker {
-  background: var(--baph-bg-dark);
-}
-
-#combat-tracker .combatant {
+.pf1.sheet.actor .item-list .item {
+  background: var(--baph-bg-surface);
   border-bottom: 1px solid var(--baph-border);
-  font-family: var(--baph-font-body);
+  transition: background 0.1s;
 }
 
-#combat-tracker .combatant.active {
+.pf1.sheet.actor .item-list .item:hover {
   background: var(--baph-bg-light);
-  border-left: 3px solid var(--baph-gold);
-  /* Stamped inset — the mark of the active combatant pressed into the page */
-  box-shadow: inset 2px 0 8px rgba(0, 0, 0, 0.5),
-              inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
-#combat-tracker .combatant .token-name {
+/* Item list headers / category rows */
+.pf1.sheet.actor .item-list .item-header,
+.pf1.sheet.actor .item-list h3,
+.pf1.sheet.actor .item-list .inventory-header {
+  background: var(--baph-bg-dark);
+  color: var(--baph-text-label);
   font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--baph-border-light);
+}
+
+/* ============================================================
+   7. ITEM NAME CONTRAST — ACTIVE ITEMS
+      Drill past .item container to force readable text on
+      h4 and <a> inside .item-name. Fixes Buffs, Inventory,
+      Spells, and all other item lists simultaneously.
+   ============================================================ */
+.pf1.sheet.actor .item-list .item .item-name h4,
+.pf1.sheet.actor .item-list .item .item-name a {
+  color: var(--baph-text-primary, #d4c9b8) !important;
+  font-family: var(--baph-font-body);
+  font-weight: normal;
+  text-decoration: none;
+}
+
+/* ============================================================
+   8. ITEM NAME CONTRAST — DISABLED / INACTIVE ITEMS
+      Inactive buffs and toggled-off items get dimmed but
+      remain legible. No invisible dark-on-dark text.
+   ============================================================ */
+.pf1.sheet.actor .item-list .item.disabled .item-name h4,
+.pf1.sheet.actor .item-list .item.disabled .item-name a,
+.pf1.sheet.actor .item-list .item.inactive .item-name h4,
+.pf1.sheet.actor .item-list .item.inactive .item-name a {
+  color: var(--baph-text-secondary, #8a7d6e) !important;
+  opacity: 0.72;
+  font-style: italic;
+  text-decoration: none;
+}
+
+/* ============================================================
+   9. ITEM NAME HOVER STATE
+      Gold highlight on mouseover — clear visual feedback for
+      GM and players browsing buffs, inventory, spell lists.
+   ============================================================ */
+.pf1.sheet.actor .item-list .item .item-name h4:hover,
+.pf1.sheet.actor .item-list .item .item-name a:hover {
+  color: var(--baph-gold, #b8943e) !important;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* Disabled items get a dimmer gold on hover — still responsive,
+   just communicates "this is off" without being dead */
+.pf1.sheet.actor .item-list .item.disabled .item-name h4:hover,
+.pf1.sheet.actor .item-list .item.disabled .item-name a:hover,
+.pf1.sheet.actor .item-list .item.inactive .item-name h4:hover,
+.pf1.sheet.actor .item-list .item.inactive .item-name a:hover {
+  color: var(--baph-gold, #b8943e) !important;
+  opacity: 0.55;
+  text-decoration: none;
+}
+
+/* ============================================================
+   10. PF1 SHEET — BUFFS TAB
+       General tab chrome + toggle controls
+   ============================================================ */
+.pf1.sheet.actor .tab.buffs {
+  background: var(--baph-bg-mid);
+  color: var(--baph-text-primary);
+}
+
+/* Buff toggle controls (checkbox/button area) */
+.pf1.sheet.actor .item-list .item .item-controls,
+.pf1.sheet.actor .item-list .item .buff-controls {
+  color: var(--baph-text-secondary);
+}
+
+.pf1.sheet.actor .item-list .item .item-controls a:hover,
+.pf1.sheet.actor .item-list .item .buff-controls a:hover {
+  color: var(--baph-gold);
+}
+
+/* Buff level / duration display */
+.pf1.sheet.actor .item-list .item .buff-level,
+.pf1.sheet.actor .item-list .item .item-uses {
+  color: var(--baph-gold);
+  font-family: var(--baph-font-mono);
+}
+
+/* ============================================================
+   11. PF1 SHEET — SPELLS TAB
+   ============================================================ */
+.pf1.sheet.actor .tab.spellbook {
+  background: var(--baph-bg-mid);
+}
+
+.pf1.sheet.actor .spell-level-label {
+  color: var(--baph-text-label);
+  font-family: var(--baph-font-heading);
+  letter-spacing: 0.05em;
+  background: var(--baph-bg-dark);
+  border-bottom: 1px solid var(--baph-border-light);
+}
+
+.pf1.sheet.actor .item-list .item .spell-uses,
+.pf1.sheet.actor .item-list .item .spell-slots {
+  color: var(--baph-gold);
+  font-family: var(--baph-font-mono);
+}
+
+/* ============================================================
+   12. PF1 SHEET — ATTRIBUTES TAB (Combat Stats)
+   ============================================================ */
+.pf1.sheet.actor .tab.attributes {
+  background: var(--baph-bg-mid);
+}
+
+.pf1.sheet.actor .combat-attacks .attack-header {
+  color: var(--baph-text-label);
+  font-family: var(--baph-font-heading);
+  letter-spacing: 0.04em;
+}
+
+.pf1.sheet.actor .bab-total,
+.pf1.sheet.actor .cmb-total,
+.pf1.sheet.actor .cmd-total {
+  color: var(--baph-text-bright);
+  font-family: var(--baph-font-mono);
+}
+
+/* ============================================================
+   13. SIDEBAR & COMPENDIUM
+   ============================================================ */
+#sidebar,
+#sidebar .sidebar-tab {
+  background: var(--baph-bg-dark);
+  color: var(--baph-text-primary);
+  border-left: 1px solid var(--baph-border);
+}
+
+#sidebar .directory-header {
+  background: var(--baph-bg-mid);
+  color: var(--baph-text-label);
+  font-family: var(--baph-font-heading);
+  border-bottom: 1px solid var(--baph-border-light);
+}
+
+#sidebar .directory-list .directory-item {
+  color: var(--baph-text-primary);
+  border-bottom: 1px solid var(--baph-border);
+}
+
+#sidebar .directory-list .directory-item:hover {
+  background: var(--baph-bg-light);
   color: var(--baph-text-bright);
 }
 
-#combat-tracker .combatant .token-initiative {
-  font-family: var(--baph-font-mono);  /* initiative = mechanical number */
+#sidebar .directory-list .directory-item.active {
   color: var(--baph-gold);
-  font-weight: 600;
+  background: var(--baph-bg-surface);
 }
 
-/* --- Windows & Dialogs --- */
-.app .window-content {
-  background: var(--baph-bg-mid);
+/* Compendium entries */
+.compendium .entry-name {
   color: var(--baph-text-primary);
   font-family: var(--baph-font-body);
 }
 
-.app .window-header {
-  background: var(--baph-bg-darkest);
-  border-bottom: 2px solid var(--baph-gold-dim);
-  /* Hard edge — a ledger's spine pressed into iron */
-  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.6),
-              inset 0 -1px 0 rgba(0, 0, 0, 0.4);
-}
-
-.app .window-header .window-title {
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.compendium .entry-name:hover {
   color: var(--baph-gold);
-  font-size: 14px;
 }
 
-/* --- Tabs inside windows --- */
-.app .tabs .item {
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  color: var(--baph-text-secondary);
-}
-
-.app .tabs .item.active {
-  color: var(--baph-gold);
-  border-bottom-color: var(--baph-gold-dim);
-}
-
-/* --- Input Fields --- */
-.app input[type="text"],
-.app input[type="number"],
-.app select,
-.app textarea {
-  background: var(--baph-bg-light);
+/* ============================================================
+   14. CHAT LOG
+   ============================================================ */
+#chat-log .message {
+  background: var(--baph-bg-surface);
   border: 1px solid var(--baph-border);
   color: var(--baph-text-primary);
-  font-family: var(--baph-font-body);
-  border-radius: 0;
 }
 
-/* Number inputs get mono font */
-.app input[type="number"] {
-  font-family: var(--baph-font-mono);
-}
-
-.app input:focus,
-.app select:focus,
-.app textarea:focus {
-  border-color: var(--baph-gold-dim);
-  /* Physical indentation, not neon ring */
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5);
-  outline: none;
-}
-
-/* --- Buttons --- */
-.app button,
-.dialog button {
-  background: var(--baph-bg-surface);
-  border: 1px solid var(--baph-border-light);
-  /* Stamped metal feel — raised front edge, sunken back */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04),
-              inset 0 -2px 0 rgba(0, 0, 0, 0.35);
+#chat-log .message .message-header {
+  background: var(--baph-bg-dark);
   color: var(--baph-text-label);
   font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 12px;
-  border-radius: 0;
-  transition: background 0.1s ease, border-color 0.1s ease;
+  border-bottom: 1px solid var(--baph-border);
 }
 
-.app button:hover,
-.dialog button:hover {
-  background: var(--baph-bg-lighter);
-  color: var(--baph-gold-bright);
-  border-color: var(--baph-gold-dim);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
-}
-
-/* Primary action buttons */
-button[data-button="ok"],
-button[data-button="yes"],
-.dialog .dialog-button.ok,
-.dialog .dialog-button.yes {
-  border-color: var(--baph-gold-dim);
-  color: var(--baph-gold);
-}
-
-/* --- Journal Entries --- */
-.journal-entry-content,
-.journal-sheet .journal-entry-content {
-  background: var(--baph-bg-mid);
+#chat-log .message .message-content {
   color: var(--baph-text-primary);
   font-family: var(--baph-font-body);
-  font-size: 14px;
-  line-height: 1.7;
 }
 
-.journal-entry-content h1,
-.journal-entry-content h2,
-.journal-entry-content h3,
-.journal-entry-content h4 {
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--baph-gold);
-  border-bottom: 1px solid var(--baph-border-gold);
-  padding-bottom: 4px;
-  margin-top: 1.2em;
+#chat-log .message.whisper {
+  border-color: var(--baph-gold);
+  background: color-mix(in srgb, var(--baph-bg-surface) 90%, var(--baph-gold) 10%);
 }
 
-.journal-entry-content h1 { font-size: 22px; }
-.journal-entry-content h2 { font-size: 18px; }
-.journal-entry-content h3 { font-size: 15px; color: var(--baph-gold-dim); }
-
-.journal-entry-content table {
-  border-collapse: collapse;
-  width: 100%;
+/* Roll results */
+#chat-log .dice-total {
+  color: var(--baph-text-bright);
   font-family: var(--baph-font-mono);
-  font-size: 12px;
+  font-weight: bold;
 }
 
-.journal-entry-content table th {
-  background: var(--baph-bg-darkest);
-  color: var(--baph-gold);
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 6px 10px;
-  border: 1px solid var(--baph-border);
-  text-align: left;
-}
-
-.journal-entry-content table td {
-  background: var(--baph-bg-light);
-  padding: 5px 10px;
-  border: 1px solid var(--baph-border);
-  color: var(--baph-text-primary);
-}
-
-.journal-entry-content table tr:nth-child(even) td {
-  background: var(--baph-bg-mid);
-}
-
-.journal-entry-content code {
-  font-family: var(--baph-font-mono);
-  background: var(--baph-bg-darkest);
+#chat-log .dice-total.success {
   color: var(--baph-gold-bright);
-  padding: 1px 5px;
-  border-radius: 0;
-  font-size: 12px;
-  border: 1px solid var(--baph-border);
 }
 
-.journal-entry-content blockquote {
-  border-left: 3px solid var(--baph-gold-dim);
-  background: var(--baph-bg-light);
-  padding: 8px 14px;
-  margin: 10px 0;
-  color: var(--baph-text-secondary);
-  font-style: italic;
+#chat-log .dice-total.failure {
+  color: #8a4a3a;
 }
 
-.journal-entry-content strong { color: var(--baph-text-bright); }
-
-.journal-entry-content a {
-  color: var(--baph-gold);
-  text-decoration: none;
-  border-bottom: 1px dotted var(--baph-gold-dim);
-}
-
-.journal-entry-content a:hover { color: var(--baph-gold-bright); }
-
-/* --- Scene Navigation --- */
-#navigation #scene-list .scene.nav-item {
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 12px;
-}
-
-/* --- Hotbar --- */
-#hotbar .macro-list {
-  background: var(--baph-bg-darkest);
-  border: 1px solid var(--baph-border);
-}
-
-#hotbar .macro .macro-key {
-  font-family: var(--baph-font-mono);  /* key number = mechanical */
-  color: var(--baph-gold-dim);
-}
-
-/* --- Notifications --- */
-#notifications .notification {
-  font-family: var(--baph-font-body);
+/* ============================================================
+   15. HOTBAR & UI CONTROLS
+   ============================================================ */
+#hotbar {
   background: var(--baph-bg-dark);
+  border-top: 1px solid var(--baph-border-light);
+}
+
+#hotbar .bar-slot {
+  background: var(--baph-bg-surface);
   border: 1px solid var(--baph-border);
+  color: var(--baph-text-secondary);
+}
+
+#hotbar .bar-slot:hover {
+  border-color: var(--baph-gold);
+  background: var(--baph-bg-light);
+}
+
+#controls .control-tool {
+  color: var(--baph-text-secondary);
+}
+
+#controls .control-tool:hover,
+#controls .control-tool.active {
+  color: var(--baph-gold);
+}
+
+/* ============================================================
+   16. DIALOGS & NOTIFICATIONS
+   ============================================================ */
+.dialog .dialog-content {
+  background: var(--baph-bg-mid);
   color: var(--baph-text-primary);
-  /* Hard stamped edge — no color glow */
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.5);
 }
 
-#notifications .notification.error {
-  border-left: 3px solid var(--baph-danger-bright);
-  border-color: var(--baph-danger-bright);
-}
-
-#notifications .notification.warning {
-  border-left: 3px solid var(--baph-warning);
-  border-color: var(--baph-warning);
-}
-
-/* --- Scrollbars --- */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: var(--baph-bg-darkest); }
-::-webkit-scrollbar-thumb { background: var(--baph-bg-surface); border-radius: 0; }
-::-webkit-scrollbar-thumb:hover { background: var(--baph-gold-dim); }
-
-/* ============================================================
-   SIDEBAR & COMPENDIUM ACCESSIBILITY
-   [DIRECTIVE: ACCESSIBILITY]
-   Foundry's sidebar directory lists, compendium pack entries,
-   and sidebar buttons inherit dark text from core/system styles
-   that disappear against our dark backgrounds.
-   Override to warm lamplight off-whites — legible but not stark.
-   ============================================================ */
-
-/* --- Sidebar directory lists (Actors, Items, Journals, etc.) --- */
-.directory-list .directory-item,
-.directory-list .entry-name,
-.directory-list .document-name,
-.directory-list .folder-header .folder-name,
-.directory-list .folder > .directory-item,
-#sidebar .directory .directory-item,
-#sidebar .directory .entry-name {
-  color: var(--baph-text-bright, #e8ddd0);
-}
-
-.directory-list .directory-item:hover,
-.directory-list .entry-name:hover {
-  color: var(--baph-gold-bright, #d4aa4f);
-}
-
-/* Folder headers — slightly dimmer than entries, still visible */
-.directory-list .folder > .directory-item,
-.directory-list .folder-header {
-  color: var(--baph-text-label, #c2b49a);
-}
-
-.directory-list .folder > .directory-item:hover {
-  color: var(--baph-gold, #b8943e);
-}
-
-/* --- Compendium packs --- */
-.compendium-list .compendium,
-.compendium-list .compendium .compendium-name,
-.compendium-list .entry-name,
-#compendium .compendium-pack h4,
-#compendium .compendium-pack .document-name {
-  color: var(--baph-text-bright, #e8ddd0);
-}
-
-/* Compendium pack metadata (type tag, count) */
-.compendium-pack .pack-info,
-.compendium-pack .system-tag {
-  color: var(--baph-text-secondary, #9a8e7e);
-}
-
-/* --- Sidebar section headers / search bars --- */
-#sidebar .directory-header h3,
-#sidebar .directory-header .header-search input,
-.directory-header .header-search input {
-  color: var(--baph-text-bright, #e8ddd0);
-  background: var(--baph-bg-light, #2a2421);
-  border-color: var(--baph-border-light, #3e3830);
-}
-
-/* --- Sidebar action buttons (Create, Import, etc.) --- */
-#sidebar .header-actions .action-buttons a,
-#sidebar .directory-header .create-document,
-.directory-header .action-buttons a,
-.directory-header button {
-  color: var(--baph-text-label, #c2b49a);
-}
-
-#sidebar .header-actions .action-buttons a:hover,
-.directory-header button:hover {
-  color: var(--baph-gold-bright, #d4aa4f);
-}
-
-/* ============================================================
-   PF1e CHARACTER SHEET — GLOBAL BASE
-   [DIRECTIVE: SYSTEM UI]
-   Force all text inside actor sheets to warm lamplight tones.
-   PF1e's default stylesheet assumes a light parchment background;
-   our dark theme makes its grey/black text effectively invisible.
-   ============================================================ */
-
-/* --- Global sheet text override ---
-   Sets a warm base for everything inside the actor sheet.
-   Individual elements below can refine this further. */
-.pf1.sheet.actor,
-.pf1.sheet.actor .window-content,
-.pf1.sheet.actor .tab,
-.pf1.sheet.actor .sheet-body {
-  color: var(--baph-text-primary, #d4c9b8);
-  background: var(--baph-bg-mid, #1e1917);
-}
-
-/* Labels, section names, field names — slightly brighter than body text */
-.pf1.sheet.actor label,
-.pf1.sheet.actor .label,
-.pf1.sheet.actor .field-label,
-.pf1.sheet.actor h1,
-.pf1.sheet.actor h2,
-.pf1.sheet.actor h3,
-.pf1.sheet.actor h4 {
-  color: var(--baph-text-label, #c2b49a);
+.dialog .dialog-buttons button {
+  background: var(--baph-bg-surface);
+  color: var(--baph-text-label);
+  border: 1px solid var(--baph-border-light);
   font-family: var(--baph-font-heading);
-}
-
-/* Item names, spell names, feat names */
-.pf1.sheet.actor .item-name,
-.pf1.sheet.actor .item .name,
-.pf1.sheet.actor .spell-name,
-.pf1.sheet.actor .feat-name,
-.pf1.sheet.actor .item-list .item .item-name {
-  color: var(--baph-text-bright, #e8ddd0);
-  font-family: var(--baph-font-body);
-}
-
-/* Input fields on the sheet */
-.pf1.sheet.actor input[type="text"],
-.pf1.sheet.actor input[type="number"],
-.pf1.sheet.actor select,
-.pf1.sheet.actor textarea {
-  color: var(--baph-text-bright, #e8ddd0);
-  background: var(--baph-bg-light, #2a2421);
-  border-color: var(--baph-border, #2e2824);
-}
-
-/* Disabled/read-only fields — still readable, just dimmer */
-.pf1.sheet.actor input:disabled,
-.pf1.sheet.actor input[readonly] {
-  color: var(--baph-text-label, #c2b49a);
-  background: var(--baph-bg-mid, #1e1917);
-  opacity: 0.85;
-}
-
-/* Mechanical numbers in inputs — mono font */
-.pf1.sheet.actor input[type="number"] {
-  font-family: var(--baph-font-mono);
-  color: var(--baph-gold, #b8943e);
-}
-
-/* HP and other mechanical values */
-.pf1 .resource-value,
-.pf1 .hp-value,
-.pf1 .attribute-value,
-.pf1 .roll-value,
-.pf1.sheet.actor .resource .value,
-.pf1.sheet.actor .resource .max {
-  font-family: var(--baph-font-mono);
-  color: var(--baph-gold, #b8943e);
-}
-
-/* Attack names */
-.pf1 .attacks-list .attack .attack-name {
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: var(--baph-text-bright, #e8ddd0);
+  transition: background 0.15s, color 0.15s;
 }
 
-/* Spell names */
-.pf1 .spellbook .spell .spell-name {
-  font-family: var(--baph-font-body);
-  color: var(--baph-text-bright, #e8ddd0);
+.dialog .dialog-buttons button:hover {
+  background: var(--baph-bg-light);
+  color: var(--baph-gold);
+  border-color: var(--baph-gold);
 }
 
-/* ============================================================
-   PF1e CHARACTER SHEET — CONDITIONS LIST
-   [DIRECTIVE: SYSTEM UI — CONDITIONS]
-   The PF1e conditions list on the character sheet uses small
-   toggles and labels that vanish on dark backgrounds.
-   ============================================================ */
-
-/* Conditions section wrapper */
-.pf1.sheet.actor .conditions,
-.pf1.sheet.actor .conditions-list,
-.pf1.sheet.actor [data-tab="conditions"] {
-  background: var(--baph-bg-mid, #1e1917);
-  color: var(--baph-text-primary, #d4c9b8);
-}
-
-/* Individual condition entries */
-.pf1.sheet.actor .conditions-list .condition,
-.pf1.sheet.actor .conditions-list li {
-  color: var(--baph-text-label, #c2b49a);
-  border-bottom: 1px solid var(--baph-border, #2e2824);
-}
-
-/* Condition name text — must be clearly legible */
-.pf1.sheet.actor .condition-name,
-.pf1.sheet.actor .conditions-list .condition label,
-.pf1.sheet.actor .conditions-list .condition .name {
-  color: var(--baph-text-bright, #e8ddd0);
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  font-size: 11px;
-}
-
-/* Active/checked condition — gold highlight */
-.pf1.sheet.actor .conditions-list .condition.active .condition-name,
-.pf1.sheet.actor .conditions-list input[type="checkbox"]:checked + label,
-.pf1.sheet.actor .conditions-list input[type="checkbox"]:checked ~ .condition-name {
-  color: var(--baph-gold, #b8943e);
-}
-
-/* Condition toggle checkboxes — style the label buttons */
-.pf1.sheet.actor .conditions-list input[type="checkbox"] + label,
-.pf1.sheet.actor .condition-toggle {
-  color: var(--baph-text-label, #c2b49a);
-  background: var(--baph-bg-surface, #3d3732);
-  border: 1px solid var(--baph-border-light, #3e3830);
-}
-
-.pf1.sheet.actor .conditions-list input[type="checkbox"] + label:hover,
-.pf1.sheet.actor .condition-toggle:hover {
-  color: var(--baph-gold, #b8943e);
-  border-color: var(--baph-gold-dim, #8a6f2e);
-}
-
-/* ============================================================
-   PF1e CHARACTER SHEET — ATTRIBUTES SECTION
-   [DIRECTIVE: SYSTEM UI — ATTRIBUTES]
-   The attributes block at the bottom of the sheet (STR/DEX/
-   CON/INT/WIS/CHA) needs stark contrast. Score values and
-   modifier numbers especially must be immediately readable.
-   No muted grey for mechanical values.
-   ============================================================ */
-
-/* Attribute block containers */
-.pf1.sheet.actor .attributes,
-.pf1.sheet.actor .ability-scores,
-.pf1.sheet.actor [data-tab="attributes"],
-.pf1.sheet.actor .attribute-block,
-.pf1.sheet.actor .attribute {
-  background: var(--baph-bg-dark, #161210);
-  color: var(--baph-text-primary, #d4c9b8);
-}
-
-/* Attribute abbreviation labels (STR, DEX, etc.) */
-.pf1.sheet.actor .ability-scores .ability .ability-abbr,
-.pf1.sheet.actor .attribute .attribute-name,
-.pf1.sheet.actor .ability-name,
-.pf1.sheet.actor .attribute-block .label {
-  color: var(--baph-text-label, #c2b49a);
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 10px;
-}
-
-/* Attribute score values — primary mechanical number */
-.pf1.sheet.actor .ability-scores .ability .ability-score,
-.pf1.sheet.actor .ability-scores .ability input[type="number"],
-.pf1.sheet.actor .attribute-block .attribute-value,
-.pf1.sheet.actor .attribute .value {
-  color: var(--baph-text-bright, #e8ddd0);
-  font-family: var(--baph-font-mono);
-  font-size: 16px;
-  font-weight: 600;
-}
-
-/* Attribute modifiers (the +2 / -1 numbers) — lamplight gold */
-.pf1.sheet.actor .ability-scores .ability .ability-mod,
-.pf1.sheet.actor .ability-scores .ability .mod,
-.pf1.sheet.actor .attribute-block .attribute-mod,
-.pf1.sheet.actor .attribute .modifier {
-  color: var(--baph-gold, #b8943e);
-  font-family: var(--baph-font-mono);
-  font-weight: 700;
-}
-
-/* Saving throws, BAB, CMD, CMB values */
-.pf1.sheet.actor .saving-throws .saving-throw .value,
-.pf1.sheet.actor .saving-throw-value,
-.pf1.sheet.actor .bab .value,
-.pf1.sheet.actor .combat-value,
-.pf1.sheet.actor .cmb .value,
-.pf1.sheet.actor .cmd .value {
-  color: var(--baph-gold, #b8943e);
-  font-family: var(--baph-font-mono);
-  font-weight: 600;
-}
-
-/* Saving throw labels */
-.pf1.sheet.actor .saving-throws .saving-throw .label,
-.pf1.sheet.actor .saving-throw-name {
-  color: var(--baph-text-label, #c2b49a);
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  font-size: 10px;
-}
-
-/* Skills list */
-.pf1.sheet.actor .skills-list .skill .skill-name,
-.pf1.sheet.actor .skill-name {
-  color: var(--baph-text-primary, #d4c9b8);
+#notifications .notification {
+  background: var(--baph-bg-dark);
+  color: var(--baph-text-primary);
+  border-left: 3px solid var(--baph-gold);
   font-family: var(--baph-font-body);
 }
 
-.pf1.sheet.actor .skills-list .skill .skill-value,
-.pf1.sheet.actor .skill-value {
-  color: var(--baph-gold, #b8943e);
-  font-family: var(--baph-font-mono);
+/* ============================================================
+   17. SCROLLBARS
+   ============================================================ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-/* Initiative, Speed, AC values */
-.pf1.sheet.actor .initiative .value,
-.pf1.sheet.actor .speed .value,
-.pf1.sheet.actor .ac .value,
-.pf1.sheet.actor .ac-value {
-  color: var(--baph-gold, #b8943e);
-  font-family: var(--baph-font-mono);
-  font-weight: 700;
+::-webkit-scrollbar-track {
+  background: var(--baph-bg-dark);
 }
 
-.pf1.sheet.actor .initiative .label,
-.pf1.sheet.actor .speed .label,
-.pf1.sheet.actor .ac .label {
-  color: var(--baph-text-label, #c2b49a);
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  font-size: 10px;
+::-webkit-scrollbar-thumb {
+  background: var(--baph-border-light);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--baph-gold);
 }
 
 /* ============================================================
-   PF1e CHARACTER SHEET — BUFFS TAB
-   The buff list renders item names in PF1e's default dark text,
-   which disappears entirely against our dark backgrounds.
-   Target the buffs tab and all buff item rows explicitly.
+   END OF FILE — baphomet-utils noir-theme.css v2.3.2
    ============================================================ */
-
-/* Buffs tab container */
-.pf1.sheet.actor [data-tab="buffs"],
-.pf1.sheet.actor .tab[data-tab="buffs"] {
-  background: var(--baph-bg-mid, #1e1917);
-  color: var(--baph-text-primary, #d4c9b8);
-}
-
-/* Buff list rows */
-.pf1.sheet.actor .buff-list .item,
-.pf1.sheet.actor .buffs-list .item,
-.pf1.sheet.actor [data-tab="buffs"] .item {
-  color: var(--baph-text-label, #c2b49a);
-  border-bottom: 1px solid var(--baph-border, #2e2824);
-}
-
-/* Buff item name — the text that was invisible */
-.pf1.sheet.actor .buff-list .item .item-name,
-.pf1.sheet.actor .buff-list .item .name,
-.pf1.sheet.actor .buffs-list .item .item-name,
-.pf1.sheet.actor .buffs-list .item .name,
-.pf1.sheet.actor [data-tab="buffs"] .item .item-name,
-.pf1.sheet.actor [data-tab="buffs"] .item .name,
-.pf1.sheet.actor [data-tab="buffs"] .item-name h4,
-.pf1.sheet.actor [data-tab="buffs"] h4 {
-  color: var(--baph-text-bright, #e8ddd0);
-  font-family: var(--baph-font-body);
-}
-
-/* Active/enabled buff — gold to stand out from inactive */
-.pf1.sheet.actor .buff-list .item.active .item-name,
-.pf1.sheet.actor .buff-list .item.active .name,
-.pf1.sheet.actor [data-tab="buffs"] .item.active .item-name,
-.pf1.sheet.actor [data-tab="buffs"] .item.active h4 {
-  color: var(--baph-gold, #b8943e);
-}
-
-/* Buff row hover */
-.pf1.sheet.actor .buff-list .item:hover,
-.pf1.sheet.actor [data-tab="buffs"] .item:hover {
-  background: var(--baph-bg-light, #2a2421);
-  color: var(--baph-text-bright, #e8ddd0);
-}
-
-/* Buff section subheaders (Temporary, Spell, etc.) */
-.pf1.sheet.actor [data-tab="buffs"] .items-header,
-.pf1.sheet.actor [data-tab="buffs"] .buff-header {
-  background: var(--baph-bg-dark, #161210);
-  color: var(--baph-text-label, #c2b49a);
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 10px;
-  border-bottom: 1px solid var(--baph-border-light, #3e3830);
-}
-
-/* ============================================================
-   PF1e CHARACTER SHEET — MISC UI ELEMENTS
-   Background fixes for tab content areas, section dividers,
-   and pill/tag elements that PF1e injects with light backgrounds.
-   ============================================================ */
-
-/* Tab content areas */
-.pf1.sheet.actor .tab-content,
-.pf1.sheet.actor .sheet-content,
-.pf1.sheet.actor .tab.active {
-  background: var(--baph-bg-mid, #1e1917);
-}
-
-/* Section headers inside tabs */
-.pf1.sheet.actor .items-header,
-.pf1.sheet.actor .item-header,
-.pf1.sheet.actor .list-header {
-  background: var(--baph-bg-dark, #161210);
-  color: var(--baph-text-label, #c2b49a);
-  border-bottom: 1px solid var(--baph-border-light, #3e3830);
-  font-family: var(--baph-font-heading);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 10px;
-}
-
-/* Item rows */
-.pf1.sheet.actor .item-list .item,
-.pf1.sheet.actor .items-list .item {
-  border-bottom: 1px solid var(--baph-border, #2e2824);
-  color: var(--baph-text-primary, #d4c9b8);
-}
-
-.pf1.sheet.actor .item-list .item:hover,
-.pf1.sheet.actor .items-list .item:hover {
-  background: var(--baph-bg-light, #2a2421);
-}
-
-/* Currency, weight, encumbrance labels */
-.pf1.sheet.actor .currency .label,
-.pf1.sheet.actor .encumbrance .label,
-.pf1.sheet.actor .weight-label {
-  color: var(--baph-text-secondary, #9a8e7e);
-  font-family: var(--baph-font-heading);
-  font-size: 10px;
-  text-transform: uppercase;
-}
-
-.pf1.sheet.actor .currency .value,
-.pf1.sheet.actor .encumbrance .value {
-  color: var(--baph-text-label, #c2b49a);
-  font-family: var(--baph-font-mono);
-}
-
-/* ============================================================
-   SUBTLE GRAIN OVERLAY
-   Applied to UI elements only (not the canvas).
-   Simulates aged paper texture. Opacity kept very low
-   to avoid obscuring readability.
-   ============================================================ */
-#ui-top::after {
-  content: '';
-  position: fixed;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  pointer-events: none;
-  opacity: 0.018;
-  z-index: -1;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-}
