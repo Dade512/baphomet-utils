@@ -1,6 +1,20 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.4
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.5
    Applies PF2e-style conditions as PF1e system Buffs.
+
+   v2.5 Changes:
+   - [BUG FIX] Auto-decrement (Frightened, Stunned) was not
+     firing on turn advance. Root cause: pf1PostTurnChange hook
+     may not fire reliably in all PF1e v13 builds, AND the
+     combatTurn fallback had a guard that skipped it whenever
+     pf1PostTurnChange had any listeners registered.
+   
+   - New approach: Use Foundry core hooks (combatTurn, combatRound)
+     as PRIMARY triggers. pf1PostTurnChange kept as secondary.
+     Debounce flag prevents double-decrements if multiple hooks
+     fire for the same turn change.
+   
+   - Added console logging for all auto-decrement events.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
                   Enfeebled, Drained, Stunned, Slowed, Fascinated
@@ -16,13 +30,10 @@ const MODULE_ID = 'baphomet-utils';
 
 /* ----------------------------------------------------------
    CORRUPTED EDGE SVG FILTER INJECTION
-   Injected once at ready. Referenced in CSS as url(#baph-corrupted-edge).
-   feTurbulence creates fractal noise; feDisplacementMap warps edges.
-   Low scale keeps it subtle — torn parchment, not a glitch effect.
    ---------------------------------------------------------- */
 
 function _injectCorruptedEdgeFilter() {
-  if (document.getElementById('baph-corrupted-edge')) return; // idempotent
+  if (document.getElementById('baph-corrupted-edge')) return;
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('id', 'baph-svg-filters');
@@ -438,25 +449,20 @@ function _postConditionChat(actor, cond, tier, action) {
 
 /* ----------------------------------------------------------
    UI: Token HUD Condition Panel
-   Updated: wraps all conditions in .baph-conditions-grid
-   for CSS Grid layout (auto-fill columns, inset shadow).
    ---------------------------------------------------------- */
 
 function _buildConditionPanel(actor) {
   const panel = document.createElement('div');
   panel.classList.add('baph-condition-panel');
 
-  // Pinned header
   const tieredHeader = document.createElement('div');
   tieredHeader.classList.add('baph-section-header');
   tieredHeader.textContent = 'Conditions';
   panel.appendChild(tieredHeader);
 
-  // Scrollable grid — all conditions live here
   const grid = document.createElement('div');
   grid.classList.add('baph-conditions-grid');
 
-  // Tiered conditions sub-label
   const tieredLabel = document.createElement('div');
   tieredLabel.style.cssText = 'grid-column: 1 / -1; font-family: var(--baph-font-heading, monospace); font-size: 8px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--baph-text-muted, #5c6370); padding: 2px 0 1px; border-bottom: 1px solid var(--baph-border, #2a2f38);';
   tieredLabel.textContent = '— Tiered —';
@@ -467,7 +473,6 @@ function _buildConditionPanel(actor) {
     grid.appendChild(_buildTieredRow(actor, key, cond));
   }
 
-  // Toggle conditions sub-label
   const toggleLabel = document.createElement('div');
   toggleLabel.style.cssText = tieredLabel.style.cssText;
   toggleLabel.textContent = '— Status —';
@@ -490,7 +495,6 @@ function _buildTieredRow(actor, key, cond) {
   row.classList.add('baph-condition-row');
   if (currentTier > 0) row.classList.add('active');
 
-  // Label row
   const labelRow = document.createElement('div');
   labelRow.style.display = 'flex';
   labelRow.style.alignItems = 'center';
@@ -511,7 +515,6 @@ function _buildTieredRow(actor, key, cond) {
 
   row.appendChild(labelRow);
 
-  // Tier buttons
   const tierGroup = document.createElement('div');
   tierGroup.classList.add('baph-tier-group');
 
@@ -599,14 +602,12 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.4`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.5`);
 });
 
 Hooks.once('ready', () => {
-  // Inject the corrupted-edge SVG filter into the DOM
   _injectCorruptedEdgeFilter();
 
-  // Expose API for macros
   game.baphometConditions = {
     apply: applyCondition,
     remove: removeCondition,
@@ -628,12 +629,10 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.4 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.5 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
-  console.log(`${MODULE_ID} | API: game.baphometConditions.getTier(actor, 'enfeebled')`);
-  console.log(`${MODULE_ID} | API: game.baphometConditions.listActive(actor)`);
 });
 
 // Token HUD button — v13 compatible
@@ -702,43 +701,139 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
   }
 });
 
-// Auto-decrement conditions at end of turn (Frightened, Stunned)
-Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
+/* ----------------------------------------------------------
+   AUTO-DECREMENT — v2.5 REWRITE
+   
+   Problem in v2.4:
+   - pf1PostTurnChange was the primary hook but may not fire
+     reliably across all PF1e v13 builds.
+   - combatTurn fallback had a guard: 
+       if (Hooks.events['pf1PostTurnChange']?.length > 0) return;
+     This meant if pf1PostTurnChange was *registered* but firing
+     with wrong args (silent failure), the fallback never ran.
+   - Result: auto-decrement never triggered.
+   
+   Fix:
+   - Use a debounce map keyed by "{combatId}-{round}-{turn}"
+     to prevent double-decrements if multiple hooks fire.
+   - ALL hooks call the same _handleAutoDecrement() function.
+   - No more "skip if other hook exists" guards.
+   - Diagnostic logging on every trigger for debugging.
+   ---------------------------------------------------------- */
+
+// Debounce: track which turn changes we've already processed
+const _decrementProcessed = new Set();
+
+/**
+ * Process auto-decrement for the combatant whose turn just ENDED.
+ * @param {Combat} combat - The active combat
+ * @param {string} priorCombatantId - ID of the combatant whose turn ended
+ * @param {string} source - Which hook triggered this (for logging)
+ */
+async function _handleAutoDecrement(combat, priorCombatantId, source) {
   if (!game.user.isGM) return;
+  if (!priorCombatantId) {
+    console.log(`${MODULE_ID} | Auto-decrement (${source}): no prior combatant ID, skipping`);
+    return;
+  }
 
-  const priorCombatant = combat.combatants.get(prior.combatantId);
-  if (!priorCombatant?.actor) return;
+  // Build a unique key for this specific turn transition
+  const dedupeKey = `${combat.id}-${combat.round}-${combat.turn}-${priorCombatantId}`;
+  if (_decrementProcessed.has(dedupeKey)) {
+    console.log(`${MODULE_ID} | Auto-decrement (${source}): already processed ${dedupeKey}, skipping duplicate`);
+    return;
+  }
+  _decrementProcessed.add(dedupeKey);
 
-  const actor = priorCombatant.actor;
+  // Clean old entries (keep set from growing forever)
+  if (_decrementProcessed.size > 50) {
+    const entries = [..._decrementProcessed];
+    entries.slice(0, entries.length - 20).forEach(k => _decrementProcessed.delete(k));
+  }
 
+  const combatant = combat.combatants.get(priorCombatantId);
+  if (!combatant?.actor) {
+    console.log(`${MODULE_ID} | Auto-decrement (${source}): combatant ${priorCombatantId} has no actor`);
+    return;
+  }
+
+  const actor = combatant.actor;
+  console.log(`${MODULE_ID} | Auto-decrement (${source}): processing end-of-turn for ${actor.name}`);
+
+  let decremented = false;
   for (const [key, cond] of Object.entries(CONDITIONS)) {
     if (!cond.autoDecrement) continue;
+    
     const buff = _findExistingBuff(actor, key);
     if (!buff) continue;
+    
     const currentTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
-    if (currentTier > 0) adjustCondition(actor, key, -1);
+    if (currentTier > 0) {
+      console.log(`${MODULE_ID} | Auto-decrement: ${actor.name} ${cond.name} ${currentTier} → ${currentTier - 1}`);
+      await adjustCondition(actor, key, -1);
+      decremented = true;
+    }
   }
-});
 
-Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
-  if (Hooks.events['pf1PostTurnChange']?.length > 0) return;
-  if (!game.user.isGM) return;
+  if (!decremented) {
+    console.log(`${MODULE_ID} | Auto-decrement (${source}): ${actor.name} has no auto-decrement conditions active`);
+  }
+}
 
-  const prevTurn = updateData.turn != null
-    ? (updateData.turn === 0 ? combat.turns.length - 1 : updateData.turn - 1)
-    : null;
-  if (prevTurn == null) return;
+/**
+ * Determine who just finished their turn based on combat state.
+ * Called by combatTurn and combatRound hooks which don't directly
+ * tell us who the *previous* combatant was.
+ */
+function _getPriorCombatantId(combat, updateData) {
+  // combat.current reflects the NEW state after the update.
+  // We need the PREVIOUS combatant.
+  const currentTurn = combat.current?.turn ?? updateData?.turn ?? 0;
+  const currentRound = combat.current?.round ?? updateData?.round ?? combat.round;
+  
+  // If we're on turn 0 of a new round, previous was the LAST combatant
+  // of the prior round (or same round if updateData.turn wrapped).
+  let prevTurn;
+  if (currentTurn === 0) {
+    // Wrapped to start of initiative order
+    prevTurn = combat.turns.length - 1;
+  } else {
+    prevTurn = currentTurn - 1;
+  }
 
   const priorCombatant = combat.turns[prevTurn];
-  if (!priorCombatant?.actor) return;
+  return priorCombatant?.id ?? null;
+}
 
-  const actor = priorCombatant.actor;
+/* ── Hook: pf1PostTurnChange (PF1e system hook) ────────────
+   May or may not fire depending on PF1e version.
+   If it fires, it gives us prior combatant directly. */
+Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
+  console.log(`${MODULE_ID} | Hook fired: pf1PostTurnChange`, { prior, current });
+  
+  // prior might be an object with combatantId, or might be structured differently
+  const priorId = prior?.combatantId ?? prior?.id ?? prior?.combatant?.id ?? null;
+  _handleAutoDecrement(combat, priorId, 'pf1PostTurnChange');
+});
 
-  for (const [key, cond] of Object.entries(CONDITIONS)) {
-    if (!cond.autoDecrement) continue;
-    const buff = _findExistingBuff(actor, key);
-    if (!buff) continue;
-    const currentTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
-    if (currentTier > 0) adjustCondition(actor, key, -1);
-  }
+/* ── Hook: combatTurn (Foundry core) ──────────────────────
+   Fires on every turn advance within a round.
+   We calculate who the prior combatant was. */
+Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
+  console.log(`${MODULE_ID} | Hook fired: combatTurn`, { turn: combat.current?.turn, round: combat.current?.round });
+  
+  const priorId = _getPriorCombatantId(combat, updateData);
+  _handleAutoDecrement(combat, priorId, 'combatTurn');
+});
+
+/* ── Hook: combatRound (Foundry core) ─────────────────────
+   Fires when the round advances (wraps from last to first).
+   The last combatant in the previous round needs processing. */
+Hooks.on('combatRound', (combat, updateData, updateOptions) => {
+  console.log(`${MODULE_ID} | Hook fired: combatRound`, { turn: combat.current?.turn, round: combat.current?.round });
+  
+  // On round advance, the previous combatant was the LAST in turn order
+  const lastCombatant = combat.turns[combat.turns.length - 1];
+  const priorId = lastCombatant?.id ?? null;
+  _handleAutoDecrement(combat, priorId, 'combatRound');
 });
