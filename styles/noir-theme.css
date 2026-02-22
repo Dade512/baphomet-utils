@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — GASLAMP GOTHIC THEME v2.3
+   ECHOES OF BAPHOMET — GASLAMP GOTHIC THEME v2.3.1
    Pathfinder Setting | Canorate's Gas-lit Underbelly
    For Foundry VTT v13 + Pathfinder 1e
 
@@ -765,6 +765,68 @@ button[data-button="yes"],
   font-family: var(--baph-font-heading);
   text-transform: uppercase;
   font-size: 10px;
+}
+
+/* ============================================================
+   PF1e CHARACTER SHEET — BUFFS TAB
+   The buff list renders item names in PF1e's default dark text,
+   which disappears entirely against our dark backgrounds.
+   Target the buffs tab and all buff item rows explicitly.
+   ============================================================ */
+
+/* Buffs tab container */
+.pf1.sheet.actor [data-tab="buffs"],
+.pf1.sheet.actor .tab[data-tab="buffs"] {
+  background: var(--baph-bg-mid, #1e1917);
+  color: var(--baph-text-primary, #d4c9b8);
+}
+
+/* Buff list rows */
+.pf1.sheet.actor .buff-list .item,
+.pf1.sheet.actor .buffs-list .item,
+.pf1.sheet.actor [data-tab="buffs"] .item {
+  color: var(--baph-text-label, #c2b49a);
+  border-bottom: 1px solid var(--baph-border, #2e2824);
+}
+
+/* Buff item name — the text that was invisible */
+.pf1.sheet.actor .buff-list .item .item-name,
+.pf1.sheet.actor .buff-list .item .name,
+.pf1.sheet.actor .buffs-list .item .item-name,
+.pf1.sheet.actor .buffs-list .item .name,
+.pf1.sheet.actor [data-tab="buffs"] .item .item-name,
+.pf1.sheet.actor [data-tab="buffs"] .item .name,
+.pf1.sheet.actor [data-tab="buffs"] .item-name h4,
+.pf1.sheet.actor [data-tab="buffs"] h4 {
+  color: var(--baph-text-bright, #e8ddd0);
+  font-family: var(--baph-font-body);
+}
+
+/* Active/enabled buff — gold to stand out from inactive */
+.pf1.sheet.actor .buff-list .item.active .item-name,
+.pf1.sheet.actor .buff-list .item.active .name,
+.pf1.sheet.actor [data-tab="buffs"] .item.active .item-name,
+.pf1.sheet.actor [data-tab="buffs"] .item.active h4 {
+  color: var(--baph-gold, #b8943e);
+}
+
+/* Buff row hover */
+.pf1.sheet.actor .buff-list .item:hover,
+.pf1.sheet.actor [data-tab="buffs"] .item:hover {
+  background: var(--baph-bg-light, #2a2421);
+  color: var(--baph-text-bright, #e8ddd0);
+}
+
+/* Buff section subheaders (Temporary, Spell, etc.) */
+.pf1.sheet.actor [data-tab="buffs"] .items-header,
+.pf1.sheet.actor [data-tab="buffs"] .buff-header {
+  background: var(--baph-bg-dark, #161210);
+  color: var(--baph-text-label, #c2b49a);
+  font-family: var(--baph-font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+  border-bottom: 1px solid var(--baph-border-light, #3e3830);
 }
 
 /* ============================================================

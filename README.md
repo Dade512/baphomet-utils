@@ -2,7 +2,7 @@
 
 **For Foundry VTT v13.350 + Pathfinder 1e System**
 
-Version 2.3.0 | [GitHub](https://github.com/Dade512/baphomet-utils)
+Version 2.3.1 | [GitHub](https://github.com/Dade512/baphomet-utils)
 
 ---
 
@@ -296,6 +296,10 @@ These console errors are from **other modules or the PF1e system**, not baphomet
 ---
 
 ## Changelog
+
+### v2.3.1 (2026-02-22)
+- **[BUG FIX] Buffs tab text invisible** — Buff item names on the Buffs character sheet tab were rendering in PF1e's default dark text against our dark background. Added explicit targeting for `.buff-list`, `.buffs-list`, and `[data-tab="buffs"]` to force buff names to `--baph-text-bright`. Active buffs display in `--baph-gold`; inactive buffs in off-white. Section subheaders (Temporary, Spell, etc.) styled to match the rest of the sheet
+- Only `noir-theme.css` changed
 
 ### v2.3.0 (2026-02-22)
 - **[ACCESSIBILITY] Sidebar & Compendium contrast** — Directory lists, compendium pack entries, folder headers, and sidebar buttons now render in warm lamplight off-whites (`--baph-text-bright`, `--baph-text-label`). Previously invisible against dark backgrounds
