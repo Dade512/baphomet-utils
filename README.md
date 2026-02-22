@@ -2,13 +2,13 @@
 
 **For Foundry VTT v13.350 + Pathfinder 1e System**
 
-Version 2.1.0 | [GitHub](https://github.com/Dade512/baphomet-utils)
+Version 2.2.0 | [GitHub](https://github.com/Dade512/baphomet-utils)
 
 ---
 
 ## What This Module Does
 
-- **Black Company Grimoire Theme** — Replaces Foundry's default parchment look with a slate/dark steel aesthetic. Typography uses Courier Prime (headings, labels) and Alegreya (body text) for a worn mercenary-ledger feel, with IBM Plex Mono for mechanical values. Tarnished gold accents, dried-blood red, and a subtle grain texture overlay.
+- **Gaslamp Gothic Theme** — Replaces Foundry's default parchment look with warm, dark, weathered tones: tarnished leather, candlewax, foxed paper. Typography uses Courier Prime (headings, labels), Alegreya (body text), and IBM Plex Mono strictly for mechanical numbers. Tarnished gold accents, dried-blood red (`#5e1b14`), and a subtle grain texture overlay. No digital slate. No cyan. No neon.
 - **Automated PF1.5 Condition Overlay** — 18 PF2e-style conditions implemented as native PF1e Buff items with full Token HUD integration. Tiered conditions (1–4) with automatic mechanical penalties, auto-decrement support, and a macro API. Panel uses CSS Grid layout with a corrupted-ink-bleed hover effect.
 - **Action Economy Tracker** — Visual 3-action + reaction pip display in the Combat Tracker sidebar. Click to spend (triggers a shard-burn animation), auto-resets on turn advance, reads conditions to auto-lock lost actions. Supports Combat Reflexes feat detection.
 
@@ -232,13 +232,14 @@ game.baphometConditions.listActive(actor)
 
 | Role | Color | Hex |
 |------|-------|-----|
-| Background (darkest) | Dark slate | `#0f1114` – `#353c47` |
-| Text (primary) | Cool grey | `#c8ccd4` |
-| Text (secondary) | Muted grey | `#8a919d` |
+| Background (darkest) | Lamp-black | `#0e0c0b` – `#3d3732` |
+| Text (primary) | Candlelit parchment | `#d4c9b8` |
+| Text (labels) | Aged off-white | `#c2b49a` |
+| Text (secondary) | Faded ink | `#9a8e7e` |
 | Accent | Tarnished gold | `#b8943e` (bright: `#d4aa4f`) |
 | Reaction pip | Verdigris / oxidised copper | `#4b7a7a` |
 | AoO pip | Cold iron | `#3a5a78` |
-| Danger / condition-locked | Dried blood | `#8b2020` |
+| Danger / condition-locked | Dried blood | `#5e1b14` (bright: `#8b3028`) |
 
 ### Customization
 
@@ -295,6 +296,17 @@ These console errors are from **other modules or the PF1e system**, not baphomet
 ---
 
 ## Changelog
+
+### v2.2.0 (2026-02-22)
+- **THEME: Gaslamp Gothic** — `noir-theme.css` palette overhauled from digital slate/cyan to warm weathered tones (`#0e0c0b`, `#1e1917`, `#2a2421`). Tarnished leather replaces cold industrial grey throughout
+- **Dried blood** updated to `#5e1b14` (deeper, more desaturated) from `#8b2020`
+- **Text readability** — new `--baph-text-label` variable (`#c2b49a`, aged parchment off-white) for labels/buttons replacing muted grey `#5c6370`
+- **`.baph-toggle-btn`** font-size raised from `8px` to `11px`; color updated to `--baph-text-label` for high contrast on dark backgrounds; font-family changed to `Courier Prime` (labels use Courier Prime, numbers use IBM Plex Mono)
+- **Neon purge** — all outer/color `box-shadow` glow effects replaced with physical inset shadows (stamped iron, pressed leather) throughout all three CSS files
+- **IBM Plex Mono reserved strictly for mechanical numbers** — dice totals, initiative, HP, timestamps, tier buttons. Headings and labels use Courier Prime
+- **[BUG FIX] Action Tracker layout** — pip row now injected BELOW the combatant stats row (after `.token-initiative`), not inline. Pips render as a full-width block beneath name/HP/initiative; initiative score no longer pushed off-screen
+- **[BUG FIX] `_readConditionActionLoss()`** — rewritten with boolean flags (`isStaggered`, `isNauseated`) and integer accumulators (`stunnedTotal`, `slowedTotal`) set inside the loop. Post-loop calculation is deterministic and order-independent. `Math.max()` removed from inside the loop
+- Action Tracker bumped to v1.2
 
 ### v2.1.0 (2026-02-21)
 - **AESTHETIC OVERHAUL:** Fonts changed from Oswald to Courier Prime (headings) + Alegreya (body) for a Black Company grimoire feel

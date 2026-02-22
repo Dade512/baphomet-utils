@@ -1,16 +1,25 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.0
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.2
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
-   LOCATION: Injected per-combatant in Combat Tracker sidebar
+   LOCATION: Injected BELOW combatant name row in Combat Tracker sidebar
    BEHAVIOR: Manual click-to-spend. Auto-reset on turn advance.
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated
-             from baphomet-utils condition buffs to auto-spend pips.
+             from baphomet-utils condition buffs to auto-lock pips.
+
+   v1.2 Changes:
+   - [UI BUG FIX] Pip row injected as full-width block BELOW the
+     combatant name row, not appended inline with HP/Initiative.
+     Uses insertAdjacentElement('afterend') on the name/stats
+     wrapper, ensuring it never crowds the initiative display.
+   - [LOGIC BUG FIX] _readConditionActionLoss() rewritten to use
+     boolean tracking (isStaggered, isNauseated) + integer accumulators
+     (stunnedTotal, slowedTotal) inside the loop. Final calculation
+     happens AFTER the loop — no order-dependent Math.max() calls.
 
    For Foundry VTT v13 + PF1e System
    Requires: baphomet-utils condition-overlay.js (for condition reading)
-   Source:   HANDOFF-Action-Tracker-PF15.md
    ============================================================ */
 
 const AT_MODULE_ID = 'baphomet-utils';
@@ -30,7 +39,7 @@ function _initState(combatantId, hasCombatReflex) {
     reaction: [true],
     combatReflex: hasCombatReflex,
     reflexPip: hasCombatReflex ? [true] : [],
-    conditionLocked: 0  // number of action pips locked by conditions
+    conditionLocked: 0
   });
 }
 
@@ -48,16 +57,43 @@ function _resetState(combatantId) {
 }
 
 /* ----------------------------------------------------------
-   CONDITION READING
-   Reads baphomet-utils condition buffs from actor items.
+   CONDITION READING — v1.2 REWRITE
+   [DIRECTIVE: LOGIC BUG FIX]
+
+   Previous implementation used Math.max() inside the item loop
+   for Staggered/Nauseated, creating order-dependent results when
+   conditions stacked (e.g. Staggered 2 + Stunned 1 could yield
+   wrong totals depending on item array order).
+
+   New implementation:
+   1. Declare ALL condition trackers BEFORE the loop.
+   2. Inside the loop: set booleans (isStaggered, isNauseated)
+      and accumulate integers (stunnedTotal, slowedTotal).
+      NO Math.max() or conditional logic inside the loop.
+   3. AFTER the loop: calculate final actionsLost from all
+      tracked values in one deterministic pass.
+
+   Formula:
+     baseBlock    = isStaggered || isNauseated ? 2 : 0
+     additive     = stunnedTotal + slowedTotal
+     actionsLost  = max(baseBlock, additive if not blocked) ...
+     
+   Actual rule: Staggered/Nauseated block to 2 actions lost
+   (1 action remaining). Stunned/Slowed add on top of that.
+   Combined: actionsLost = max(baseBlock, additive), capped at 3.
    ---------------------------------------------------------- */
 
 function _readConditionActionLoss(actor) {
   if (!actor) return { actionsLost: 0, fullyIncapacitated: false };
 
-  let actionsLost = 0;
+  /* ── Declare all trackers before the loop ────────────── */
+  let isStaggered       = false;   // boolean: move-or-standard only
+  let isNauseated       = false;   // boolean: move only (same action loss as staggered)
+  let stunnedTotal      = 0;       // integer: sum of all Stunned tiers
+  let slowedTotal       = 0;       // integer: sum of all Slowed tiers
   let fullyIncapacitated = false;
 
+  /* ── Loop: ONLY set/accumulate, no calculations ──────── */
   for (const item of actor.items) {
     if (item.type !== 'buff') continue;
     const flags = item.flags?.[AT_MODULE_ID];
@@ -68,16 +104,16 @@ function _readConditionActionLoss(actor) {
 
     switch (flags.conditionKey) {
       case 'stunned':
-        actionsLost += tier;
+        stunnedTotal += tier;    // accumulate; do NOT clamp here
         break;
       case 'slowed':
-        actionsLost += tier;
+        slowedTotal += tier;     // accumulate; do NOT clamp here
         break;
       case 'staggered':
-        actionsLost = Math.max(actionsLost, 2);  // 1 action remains
+        isStaggered = true;      // boolean flag only
         break;
       case 'nauseated':
-        actionsLost = Math.max(actionsLost, 2);  // move only
+        isNauseated = true;      // boolean flag only
         break;
       case 'paralyzed':
         fullyIncapacitated = true;
@@ -85,10 +121,24 @@ function _readConditionActionLoss(actor) {
     }
   }
 
-  return {
-    actionsLost: Math.min(actionsLost, 3),
-    fullyIncapacitated
-  };
+  /* ── Post-loop calculation ────────────────────────────── */
+  if (fullyIncapacitated) {
+    return { actionsLost: 3, fullyIncapacitated: true };
+  }
+
+  // Base block: Staggered or Nauseated each lock 2 action pips (1 remains)
+  const baseBlock = (isStaggered || isNauseated) ? 2 : 0;
+
+  // Additive: Stunned and Slowed stack together
+  const additive = stunnedTotal + slowedTotal;
+
+  // Final: take the greater of the two (they don't simply add —
+  // Staggered doesn't add 2 on top of Stunned 2, it competes).
+  // Combined conditions: if Stunned 3 + Staggered, Stunned wins (3 > 2).
+  // If Staggered + Stunned 1, Staggered wins (2 > 1).
+  const actionsLost = Math.min(Math.max(baseBlock, additive), 3);
+
+  return { actionsLost, fullyIncapacitated: false };
 }
 
 function _hasCombatReflexes(actor) {
@@ -101,7 +151,7 @@ function _hasCombatReflexes(actor) {
 
 /* ----------------------------------------------------------
    APPLY CONDITION LOCKS
-   Auto-spend pips at turn start based on conditions.
+   Auto-lock pips at turn start based on conditions.
    ---------------------------------------------------------- */
 
 function _applyConditionLocks(combatantId, actor) {
@@ -111,7 +161,6 @@ function _applyConditionLocks(combatantId, actor) {
   const { actionsLost, fullyIncapacitated } = _readConditionActionLoss(actor);
 
   if (fullyIncapacitated) {
-    // Lock all action pips
     state.actions = [false, false, false];
     state.reaction = [false];
     if (state.combatReflex) state.reflexPip = [false];
@@ -119,7 +168,7 @@ function _applyConditionLocks(combatantId, actor) {
     return;
   }
 
-  // Lock leftmost action pips
+  // Lock leftmost pips (index 0 first)
   const toLock = Math.min(actionsLost, 3);
   for (let i = 0; i < toLock; i++) {
     state.actions[i] = false;
@@ -231,7 +280,6 @@ function _togglePip(combatantId, type, index) {
   if (!state) return;
 
   if (type === 'action') {
-    // Don't allow toggling condition-locked pips back on
     if (index < state.conditionLocked && !state.actions[index]) return;
     state.actions[index] = !state.actions[index];
   } else if (type === 'reaction') {
@@ -240,7 +288,6 @@ function _togglePip(combatantId, type, index) {
     state.reflexPip[index] = !state.reflexPip[index];
   }
 
-  // Re-render just this combatant's pip row
   _refreshPipRow(combatantId);
 }
 
@@ -259,27 +306,42 @@ function _refreshPipRow(combatantId) {
 }
 
 /* ----------------------------------------------------------
-   COMBAT TRACKER INJECTION
-   Hook into renderCombatTracker to add pips to each row.
+   COMBAT TRACKER INJECTION — v1.2 LAYOUT FIX
+   [DIRECTIVE: UI BUG FIX]
+
+   Previous behavior: pip row was appended to the combatant
+   entry with nameBlock.after(pipRow), which inserted it as a
+   sibling of .token-name. In PF1e's flexbox combat tracker,
+   this caused the row to sit inline with HP and Initiative,
+   pushing the initiative score off-screen.
+
+   New behavior:
+   1. Find the combatant's "stats wrapper" — the element that
+      contains the name, HP, and initiative together in a row.
+   2. Insert the pip row AFTER that entire wrapper as a new
+      block-level element, so it sits beneath the stats row.
+   3. CSS (.baph-action-tracker) uses width:100% to fill the
+      full combatant width without overlapping anything.
+
+   Insertion priority:
+     a) .combatant-controls wrapper (PF1e v13 structure)
+     b) .token-image (insert after the avatar block)
+     c) First child of the combatant entry (safe fallback)
+     d) append() as last resort
    ---------------------------------------------------------- */
 
 Hooks.on('renderCombatTracker', (app, html, data) => {
   const combat = game.combat;
   if (!combat) return;
 
-  // Normalize html to HTMLElement (v13 compat)
   const root = html instanceof HTMLElement ? html
     : html instanceof jQuery ? html[0]
     : html;
-
   if (!root) return;
 
-  // Find all combatant entries in the tracker
-  // v13 PF1e uses .combatant or [data-combatant-id] in the combat tracker list
   const combatantEntries = root.querySelectorAll('.combatant, [data-combatant-id]');
 
   combatantEntries.forEach(entry => {
-    // Get combatant ID from the DOM
     const combatantId = entry.dataset.combatantId
       ?? entry.getAttribute('data-combatant-id')
       ?? entry.closest('[data-combatant-id]')?.dataset.combatantId;
@@ -294,7 +356,7 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
       _initState(combatantId, _hasCombatReflexes(combatant.actor));
     }
 
-    // Check if Combat Reflexes changed (feat added/removed mid-combat)
+    // Sync Combat Reflexes if feat changed mid-combat
     const state = _getState(combatantId);
     const currentHasCR = _hasCombatReflexes(combatant.actor);
     if (state.combatReflex !== currentHasCR) {
@@ -302,30 +364,60 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
       state.reflexPip = currentHasCR ? [true] : [];
     }
 
-    // Remove any existing pip row (re-render)
+    // Remove stale pip row before re-render
     const oldRow = entry.querySelector('.baph-action-tracker');
     if (oldRow) oldRow.remove();
 
-    // Permission check: GM can click any; players can click their own
     const isOwner = game.user.isGM || combatant.isOwner;
-
     const pipRow = _buildPipRow(combatantId, isOwner);
-    if (pipRow) {
-      pipRow.dataset.isOwner = String(isOwner);
+    if (!pipRow) return;
 
-      // Insert pip row into the combatant entry
-      // Try to find the best insertion point — after the name/stats area
-      const nameBlock = entry.querySelector('.token-name')
-        ?? entry.querySelector('.combatant-name')
-        ?? entry.querySelector('.token-resource');
+    pipRow.dataset.isOwner = String(isOwner);
 
-      if (nameBlock) {
-        // Insert after the name block
-        nameBlock.after(pipRow);
-      } else {
-        // Fallback: append to end of combatant entry
-        entry.appendChild(pipRow);
-      }
+    /* ── INJECTION POINT (Layout Fix) ──────────────────────
+       We want the pip row to appear as a NEW ROW below the
+       existing combatant stats row (name + HP + initiative).
+
+       Strategy: find the stats wrapper and insert AFTER it.
+       The stats wrapper is whatever contains .token-name,
+       .token-resource, and .token-initiative together.
+
+       In PF1e v13's combat tracker, the structure is typically:
+         <li.combatant>
+           <img.token-image />
+           <div.token-name>...</div>         ← name
+           <div.token-resource>HP</div>      ← hp
+           <div.token-initiative>...</div>   ← initiative
+           <div.combatant-controls>...</div> ← buttons
+         </li>
+
+       We insert our pip row after .token-initiative (or before
+       .combatant-controls). This puts it below all stat items
+       but above the control buttons, keeping it visually
+       associated with the combatant without crowding the row.
+    ─────────────────────────────────────────────────────── */
+
+    // Find the best anchor: insert pip row AFTER this element
+    const initiativeEl   = entry.querySelector('.token-initiative');
+    const resourceEl     = entry.querySelector('.token-resource');
+    const nameEl         = entry.querySelector('.token-name, .combatant-name');
+    const controlsEl     = entry.querySelector('.combatant-controls');
+
+    if (initiativeEl) {
+      // Best case: insert after initiative (below full stats row)
+      initiativeEl.insertAdjacentElement('afterend', pipRow);
+    } else if (controlsEl) {
+      // Insert before controls (still below stats)
+      entry.insertBefore(pipRow, controlsEl);
+    } else if (resourceEl) {
+      // Insert after HP display
+      resourceEl.insertAdjacentElement('afterend', pipRow);
+    } else if (nameEl) {
+      // Fallback: insert after name only
+      nameEl.insertAdjacentElement('afterend', pipRow);
+    } else {
+      // Last resort: append to end of combatant entry
+      entry.appendChild(pipRow);
     }
   });
 });
@@ -334,35 +426,27 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
    TURN ADVANCE: AUTO-RESET + CONDITION APPLICATION
    ---------------------------------------------------------- */
 
-// PF1e-specific turn change hook
 Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
   if (!game.user.isGM) return;
   _handleTurnChange(combat, current.combatantId);
 });
 
-// Generic Foundry fallback
 Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
-  if (Hooks.events['pf1PostTurnChange']?.length > 1) return;  // >1 because our hook counts
+  if (Hooks.events['pf1PostTurnChange']?.length > 1) return;
   if (!game.user.isGM) return;
 
   const currentTurn = combat.current?.turn ?? updateData.turn;
   if (currentTurn == null) return;
 
   const currentCombatant = combat.turns[currentTurn];
-  if (currentCombatant) {
-    _handleTurnChange(combat, currentCombatant.id);
-  }
+  if (currentCombatant) _handleTurnChange(combat, currentCombatant.id);
 });
 
-// Also handle round advance
 Hooks.on('combatRound', (combat, updateData, updateOptions) => {
   if (!game.user.isGM) return;
-
   const currentTurn = combat.current?.turn ?? 0;
   const currentCombatant = combat.turns[currentTurn];
-  if (currentCombatant) {
-    _handleTurnChange(combat, currentCombatant.id);
-  }
+  if (currentCombatant) _handleTurnChange(combat, currentCombatant.id);
 });
 
 function _handleTurnChange(combat, activeCombatantId) {
@@ -371,18 +455,13 @@ function _handleTurnChange(combat, activeCombatantId) {
   const combatant = combat.combatants.get(activeCombatantId);
   if (!combatant?.actor) return;
 
-  // Ensure state exists
   if (!_getState(activeCombatantId)) {
     _initState(activeCombatantId, _hasCombatReflexes(combatant.actor));
   }
 
-  // Reset pips to full
   _resetState(activeCombatantId);
-
-  // Apply condition locks
   _applyConditionLocks(activeCombatantId, combatant.actor);
 
-  // Schedule UI refresh after Foundry finishes its own combat tracker re-render
   setTimeout(() => _refreshPipRow(activeCombatantId), 50);
 }
 
@@ -391,10 +470,7 @@ function _handleTurnChange(combat, activeCombatantId) {
    ---------------------------------------------------------- */
 
 Hooks.on('deleteCombat', (combat) => {
-  // Clear all state for this combat's combatants
-  for (const c of combat.combatants) {
-    pipState.delete(c.id);
-  }
+  for (const c of combat.combatants) pipState.delete(c.id);
 });
 
 Hooks.on('deleteCombatant', (combatant) => {
@@ -416,7 +492,6 @@ Hooks.on('combatStart', (combat) => {
     _initState(combatant.id, _hasCombatReflexes(combatant.actor));
   }
 
-  // Apply condition locks for the first combatant
   const firstCombatant = combat.turns[0];
   if (firstCombatant?.actor) {
     _applyConditionLocks(firstCombatant.id, firstCombatant.actor);
@@ -425,8 +500,6 @@ Hooks.on('combatStart', (combat) => {
 
 /* ----------------------------------------------------------
    MACRO API
-   game.baphometActions.reset(combatantId)
-   game.baphometActions.getState(combatantId)
    ---------------------------------------------------------- */
 
 Hooks.once('ready', () => {
@@ -465,5 +538,5 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${AT_MODULE_ID} | Action Tracker v1.0 ready`);
+  console.log(`${AT_MODULE_ID} | Action Tracker v1.2 ready`);
 });
