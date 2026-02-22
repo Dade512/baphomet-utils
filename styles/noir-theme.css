@@ -640,6 +640,136 @@
 }
 
 /* ============================================================
+   16b. PF1e V13 ROLL DIALOGS — SAVING THROWS & SKILL CHECKS
+        These are native <dialog> elements with class chain:
+        application dialog pf1-v2 roll-prompt
+        Structure: .window-content > form.standard-form >
+                   .dialog-content.standard-form > .form-group > label
+                                                              > .form-fields
+                   footer.form-footer > button[data-action]
+
+        Problem: body.theme-dark Foundry CSS variables were
+        winning the cascade on label color inside these dialogs.
+        Fix: explicit high-specificity selectors matching the
+        exact DOM structure from the inspector dump, with
+        !important on color properties that theme-dark overrides.
+   ============================================================ */
+
+/* Window chrome — leather header band */
+dialog.roll-prompt .window-header,
+.dialog.roll-prompt .window-header {
+  background: var(--baph-leather-mid);
+  color: var(--baph-parchment-bright);
+  border-bottom: 2px solid var(--baph-leather-dark);
+}
+
+dialog.roll-prompt .window-title,
+.dialog.roll-prompt .window-title {
+  color: var(--baph-parchment-bright);
+  font-family: var(--baph-font-heading);
+}
+
+/* Window content area — parchment */
+dialog.roll-prompt .window-content,
+.dialog.roll-prompt .window-content {
+  background: var(--baph-parchment-mid);
+  color: var(--baph-ink-primary);
+}
+
+/* Form wrapper */
+dialog.roll-prompt .dialog-content,
+dialog.roll-prompt .standard-form,
+.dialog.roll-prompt .dialog-content,
+.dialog.roll-prompt .standard-form {
+  background: var(--baph-parchment-mid);
+  color: var(--baph-ink-primary);
+  font-family: var(--baph-font-body);
+}
+
+/* form-group rows */
+dialog.roll-prompt .form-group,
+.dialog.roll-prompt .form-group {
+  border-bottom: 1px solid rgba(138, 123, 102, 0.3);
+  padding: 4px 0;
+}
+
+/* THE CRITICAL FIX — theme-dark was winning on label color.
+   !important needed specifically here to beat Foundry's own
+   dark-theme variable injection on body.theme-dark. */
+dialog.roll-prompt .form-group label,
+dialog.roll-prompt label,
+.dialog.roll-prompt .form-group label,
+.dialog.roll-prompt label {
+  color: var(--baph-ink-primary, #2a231d) !important;
+  font-family: var(--baph-font-heading);
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Icons inside form-fields */
+dialog.roll-prompt .form-fields i,
+.dialog.roll-prompt .form-fields i {
+  color: var(--baph-ink-faint, #8a7b6e);
+}
+
+/* Text / number inputs and selects */
+dialog.roll-prompt .form-fields input,
+dialog.roll-prompt .form-fields select,
+.dialog.roll-prompt .form-fields input,
+.dialog.roll-prompt .form-fields select {
+  background: var(--baph-parchment-bright);
+  color: var(--baph-ink-primary) !important;
+  border: 1px solid var(--baph-leather-mid);
+  font-family: var(--baph-font-mono);
+}
+
+dialog.roll-prompt .form-fields input:focus,
+dialog.roll-prompt .form-fields select:focus,
+.dialog.roll-prompt .form-fields input:focus,
+.dialog.roll-prompt .form-fields select:focus {
+  border-color: var(--baph-brass);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--baph-brass);
+}
+
+dialog.roll-prompt .form-fields input::placeholder,
+.dialog.roll-prompt .form-fields input::placeholder {
+  color: var(--baph-ink-faint);
+  opacity: 0.7;
+}
+
+/* Footer — Normal / Take 10 / Take 20 buttons */
+dialog.roll-prompt .form-footer,
+.dialog.roll-prompt .form-footer {
+  border-top: 1px solid var(--baph-leather-mid);
+  padding-top: 6px;
+  background: transparent;
+}
+
+dialog.roll-prompt .form-footer button,
+.dialog.roll-prompt .form-footer button {
+  background: var(--baph-parchment-dark);
+  color: var(--baph-ink-primary) !important;
+  border: 1px solid var(--baph-leather-mid);
+  font-family: var(--baph-font-heading);
+  font-size: 0.82em;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  box-shadow: inset 0 1px 0 rgba(232, 223, 208, 0.4),
+              inset 0 -1px 0 rgba(42, 35, 29, 0.15);
+}
+
+dialog.roll-prompt .form-footer button:hover,
+.dialog.roll-prompt .form-footer button:hover {
+  background: var(--baph-parchment-light);
+  color: var(--baph-blood) !important;
+  border-color: var(--baph-blood);
+}
+
+/* ============================================================
    17. COMBAT TRACKER
        Parchment interior pages, leather header band.
    ============================================================ */
