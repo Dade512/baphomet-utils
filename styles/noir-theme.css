@@ -258,6 +258,48 @@
 }
 
 /* ============================================================
+   5b. ROLL LINK TEXT-SHADOW FIX
+       PF1e applies a dark text-shadow to clickable roll anchors
+       (BAB, Fortitude, Reflex, Will, CMB, Initiative, etc.)
+       designed for dark backgrounds. On parchment this causes
+       a visible "doubled letter" artifact.
+       Zero out text-shadow on all roll links within the sheet.
+       The brass color alone carries sufficient visual weight.
+   ============================================================ */
+.pf1.sheet.actor a.rollable,
+.pf1.sheet.actor .saving-throw a,
+.pf1.sheet.actor .saving-throw .saving-throw-label,
+.pf1.sheet.actor .attribute a,
+.pf1.sheet.actor .bab a,
+.pf1.sheet.actor .cmb a,
+.pf1.sheet.actor .initiative a,
+.pf1.sheet.actor a[data-action="roll"],
+.pf1.sheet.actor a[data-roll] {
+  text-shadow: none !important;
+  color: var(--baph-brass);
+  font-family: var(--baph-font-heading);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.75em;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.12s;
+}
+
+.pf1.sheet.actor a.rollable:hover,
+.pf1.sheet.actor .saving-throw a:hover,
+.pf1.sheet.actor .attribute a:hover,
+.pf1.sheet.actor .bab a:hover,
+.pf1.sheet.actor .cmb a:hover,
+.pf1.sheet.actor .initiative a:hover,
+.pf1.sheet.actor a[data-action="roll"]:hover,
+.pf1.sheet.actor a[data-roll]:hover {
+  text-shadow: none !important;
+  color: var(--baph-blood);
+  text-decoration: none;
+}
+
+/* ============================================================
    6. PF1 SHEET — ITEM LISTS (Inventory, Spells, Features, etc.)
    ============================================================ */
 .pf1.sheet.actor .item-list {
@@ -276,10 +318,19 @@
   background: rgba(158, 125, 67, 0.12);
 }
 
-/* Item list headers / category rows */
+/* Item list headers / category rows.
+   display:block + width:100% forces the background to stretch
+   the full row width — prevents the "embossed patch" artifact
+   where PF1e renders the element as inline/inline-block and
+   the background only fills the text content width. */
 .pf1.sheet.actor .item-list .item-header,
 .pf1.sheet.actor .item-list h3,
-.pf1.sheet.actor .item-list .inventory-header {
+.pf1.sheet.actor .item-list .inventory-header,
+.pf1.sheet.actor .item-list .item-header span,
+.pf1.sheet.actor .item-list h3 span {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
   background: var(--baph-parchment-dark);
   color: var(--baph-ink-secondary);
   font-family: var(--baph-font-heading);
@@ -287,6 +338,7 @@
   border-bottom: 2px solid var(--baph-leather-mid);
   text-transform: uppercase;
   font-size: 0.75em;
+  text-shadow: none;
 }
 
 /* ============================================================
