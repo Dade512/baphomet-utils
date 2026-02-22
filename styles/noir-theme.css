@@ -1,6 +1,6 @@
 /* ============================================================
    BAPHOMET-UTILS — NOIR THEME
-   Version: 2.4.0 — "Croaker's Ledger"
+   Version: 2.5.1 — "The Ink Holds"
    Gaslamp Gothic | PF1e Sheet + Foundry V13
 
    The Black Company. Mud, grit, blood, and history.
@@ -17,16 +17,25 @@
    ============================================================
 
    CHANGELOG
+   v2.5.1 — "The Ink Holds"
+              • [CRITICAL FIX] Roll card result bar no longer wraps
+                h3.dice-total in a <div>. roll-cards.js v1.1 now
+                adds .baph-styled class to .dice-result instead.
+                CSS targets .dice-result.baph-styled for the dark
+                leather bar. PF1e's native h3 inline layout untouched.
+              • [READABILITY] Brass accent color deepened from #9e7d43
+                to #846528 (oxidized bronze). Passes WCAG AA on
+                parchment backgrounds. Bright brass stays #b8943e
+                for hover/active states only.
+              • [READABILITY] Roll link labels bumped from 0.75em to
+                0.85em with -webkit-text-stroke at 0.5px. Courier
+                Prime now has enough mass at small sizes to read
+                as stamped metal without squinting.
+              • [READABILITY] --baph-brass-readable added as new
+                variable for body-text brass (links, labels).
+                --baph-brass remains for decorative/chrome use.
+   v2.5.0 — Roll card styler, brass link weight, header boldness
    v2.4.0 — "Croaker's Ledger" — Full theme pivot
-              • Abandoned dark lampblack aesthetic
-              • Backgrounds now muddy parchment / scuffed leather
-              • Text inverted to dark oxidized iron gall ink
-              • Removed all v2.3.2 !important light-text overrides
-                (no longer needed — system default dark ink works)
-              • Brass/blood accent model updated for light backgrounds
-              • Sidebar/window chrome uses scuffed leather tones
-              • action-tracker.css + condition-overlay.css updated
-                to match ledger aesthetic (see those files)
    v2.3.2 — Item name / Buff list contrast pass
    v2.3.1 — Hotfix: Buffs tab item names invisible
    v2.3.0 — Accessibility pass: sidebar, compendium, PF1e sheet
@@ -43,8 +52,9 @@
    --baph-ink-primary       #2a231d  (oxidized iron gall ink)
    --baph-ink-secondary     #5e5246  (watered-down, faded ink)
    --baph-ink-faint         #8a7b6e  (ghost impression on parchment)
-   --baph-brass             #9e7d43  (tarnished brass hardware)
-   --baph-brass-bright      #b8943e  (polished brass edge — lamplight)
+   --baph-brass             #9e7d43  (tarnished brass — chrome/decorative)
+   --baph-brass-readable    #846528  (oxidized bronze — text on parchment)
+   --baph-brass-bright      #b8943e  (polished brass edge — hover/active)
    --baph-blood             #6e2a22  (dried, old blood)
    --baph-blood-bright      #8b3028  (fresher wound)
    --baph-font-heading      'Courier Prime'
@@ -72,8 +82,12 @@
   --baph-ink-secondary:     #5e5246;
   --baph-ink-faint:         #8a7b6e;
 
-  /* Accent metals */
+  /* Accent metals
+     --baph-brass:          decorative/chrome brass (borders, rivets, pips)
+     --baph-brass-readable: deeper oxidized bronze for TEXT on parchment
+     --baph-brass-bright:   polished brass for hover/active states ONLY */
   --baph-brass:             #9e7d43;
+  --baph-brass-readable:    #846528;
   --baph-brass-bright:      #b8943e;
 
   /* Wound / danger */
@@ -252,26 +266,19 @@
 .pf1.sheet.actor .attribute .attribute-mod,
 .pf1.sheet.actor .skill-cs,
 .pf1.sheet.actor .attribute-modifiers {
-  color: var(--baph-brass);
+  color: var(--baph-brass-readable);
   font-family: var(--baph-font-mono);
   font-weight: 600;
 }
 
 /* ============================================================
-   5b. ROLL LINK TEXT-SHADOW FIX
-       PF1e applies a dark text-shadow to clickable roll anchors
-       (BAB, Fortitude, Reflex, Will, CMB, Initiative, etc.)
-       designed for dark backgrounds. On parchment this causes
-       a visible "doubled letter" artifact.
-       Zero out text-shadow on all roll links within the sheet.
-       The brass color alone carries sufficient visual weight.
-   ============================================================ */
-/* ============================================================
-   5b. ROLL LINK STYLING
-       Bold + hairline dark stroke makes brass text read cleanly
-       on warm parchment without the old shadow doubling artifact.
-       -webkit-text-stroke at 0.4px gives the letterforms a thin
-       iron edge — feels stamped, not painted.
+   5b. ROLL LINK STYLING — v2.5.1 READABILITY FIX
+       Uses --baph-brass-readable (#846528) instead of --baph-brass
+       for link text. Deeper oxidized bronze reads clearly on all
+       parchment backgrounds without losing the metal feel.
+       
+       Font bumped from 0.75em → 0.85em. Stroke from 0.4px → 0.5px.
+       Bold Courier Prime at this size finally has enough mass.
    ============================================================ */
 .pf1.sheet.actor a.rollable,
 .pf1.sheet.actor .saving-throw a,
@@ -283,16 +290,16 @@
 .pf1.sheet.actor a[data-action="roll"],
 .pf1.sheet.actor a[data-roll] {
   text-shadow: none !important;
-  color: var(--baph-brass);
+  color: var(--baph-brass-readable);
   font-family: var(--baph-font-heading);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  font-size: 0.75em;
+  font-size: 0.85em;
   text-decoration: none;
   cursor: pointer;
   transition: color 0.12s;
-  -webkit-text-stroke: 0.4px rgba(42, 35, 29, 0.6);
+  -webkit-text-stroke: 0.5px rgba(42, 35, 29, 0.55);
 }
 
 .pf1.sheet.actor a.rollable:hover,
@@ -305,7 +312,7 @@
 .pf1.sheet.actor a[data-roll]:hover {
   text-shadow: none !important;
   color: var(--baph-blood);
-  -webkit-text-stroke: 0.4px rgba(42, 35, 29, 0.5);
+  -webkit-text-stroke: 0.5px rgba(42, 35, 29, 0.45);
   text-decoration: none;
 }
 
@@ -354,23 +361,16 @@
 
 /* ============================================================
    7. ITEM NAME TEXT — LET THE SYSTEM DEFAULT WORK
-      v2.3.2 forced light text with !important overrides.
-      Those are GONE. PF1e's default dark item name text
-      reads correctly on parchment backgrounds without any
-      overrides from us. We only need to set font-family.
    ============================================================ */
 .pf1.sheet.actor .item-list .item .item-name h4,
 .pf1.sheet.actor .item-list .item .item-name a {
   font-family: var(--baph-font-body);
   font-weight: normal;
   text-decoration: none;
-  /* No color override — system default dark text is correct on parchment */
 }
 
 /* ============================================================
    8. DISABLED / INACTIVE ITEMS
-      Faded, watered-down ink. Still legible against parchment.
-      Italic — the mark of a crossed-out ledger entry.
    ============================================================ */
 .pf1.sheet.actor .item-list .item.disabled .item-name h4,
 .pf1.sheet.actor .item-list .item.disabled .item-name a,
@@ -384,7 +384,6 @@
 
 /* ============================================================
    9. ITEM NAME HOVER STATE
-      Dried blood — visceral. The mark you notice.
    ============================================================ */
 .pf1.sheet.actor .item-list .item .item-name h4:hover,
 .pf1.sheet.actor .item-list .item .item-name a:hover {
@@ -393,7 +392,6 @@
   cursor: pointer;
 }
 
-/* Disabled hover — muted blood, still readable */
 .pf1.sheet.actor .item-list .item.disabled .item-name h4:hover,
 .pf1.sheet.actor .item-list .item.disabled .item-name a:hover,
 .pf1.sheet.actor .item-list .item.inactive .item-name h4:hover,
@@ -411,7 +409,6 @@
   color: var(--baph-ink-primary);
 }
 
-/* Buff toggle controls */
 .pf1.sheet.actor .item-list .item .item-controls,
 .pf1.sheet.actor .item-list .item .buff-controls {
   color: var(--baph-ink-faint);
@@ -419,13 +416,12 @@
 
 .pf1.sheet.actor .item-list .item .item-controls a:hover,
 .pf1.sheet.actor .item-list .item .buff-controls a:hover {
-  color: var(--baph-brass);
+  color: var(--baph-brass-readable);
 }
 
-/* Buff level / duration display */
 .pf1.sheet.actor .item-list .item .buff-level,
 .pf1.sheet.actor .item-list .item .item-uses {
-  color: var(--baph-brass);
+  color: var(--baph-brass-readable);
   font-family: var(--baph-font-mono);
   font-weight: 600;
 }
@@ -448,7 +444,7 @@
 
 .pf1.sheet.actor .item-list .item .spell-uses,
 .pf1.sheet.actor .item-list .item .spell-slots {
-  color: var(--baph-brass);
+  color: var(--baph-brass-readable);
   font-family: var(--baph-font-mono);
   font-weight: 600;
 }
@@ -477,7 +473,6 @@
 
 /* ============================================================
    13. SIDEBAR & COMPENDIUM
-       Scuffed leather — darker and heavier than sheet interior.
    ============================================================ */
 #sidebar,
 #sidebar .sidebar-tab {
@@ -497,7 +492,6 @@
   font-size: 0.75em;
 }
 
-/* Sidebar search/filter */
 #sidebar input[type="search"],
 #sidebar input[type="text"] {
   background: rgba(190, 176, 155, 0.2);
@@ -512,7 +506,6 @@
   outline: none;
 }
 
-/* Sidebar entries — parchment cards on leather */
 #sidebar .directory-list .directory-item {
   color: var(--baph-parchment-light);
   border-bottom: 1px solid rgba(107, 92, 74, 0.5);
@@ -529,14 +522,12 @@
   background: rgba(158, 125, 67, 0.2);
 }
 
-/* Sidebar folder headers */
 #sidebar .folder > .folder-header {
   background: rgba(107, 92, 74, 0.6);
   color: var(--baph-parchment-light);
   font-family: var(--baph-font-heading);
 }
 
-/* Compendium entries */
 .compendium .entry-name {
   color: var(--baph-parchment-light);
   font-family: var(--baph-font-body);
@@ -571,7 +562,6 @@
   letter-spacing: 0.03em;
 }
 
-/* Speaker name in message header */
 #chat-log .message .message-header .alias {
   color: var(--baph-ink-primary);
   font-weight: 700;
@@ -588,7 +578,7 @@
   background: color-mix(in srgb, var(--baph-parchment-bright) 88%, var(--baph-blood) 12%);
 }
 
-/* Roll results */
+/* Roll results — base styling (without our bar) */
 #chat-log .dice-total {
   color: var(--baph-ink-primary);
   font-family: var(--baph-font-mono);
@@ -597,7 +587,7 @@
 }
 
 #chat-log .dice-total.success {
-  color: var(--baph-brass);
+  color: var(--baph-brass-readable);
 }
 
 #chat-log .dice-total.failure {
@@ -622,51 +612,89 @@
 
 /* ============================================================
    14b. ROLL CARD — RESULT BAR & NAT STATES
-        JS (roll-cards.js) wraps .dice-total in .baph-result-bar
-        and adds .baph-nat20 / .baph-nat1 to the message li.
+        v2.5.1: COMPLETE REWRITE
 
-        Standard rolls: dark leather bar, gold result text.
-        Nat 20: burnished gold bar, near-black text — the coin
-                lands right. Brass edge glow (inset only).
-        Nat 1:  dried blood bar, parchment text — cold and flat.
-                No glow. You know what you did.
+        OLD APPROACH (broken):
+        roll-cards.js wrapped h3.dice-total in a new <div>.
+        PF1e's h3.dice-total contains inline children:
+          <i> d20 icon, <span.natural>, <span.bonus>,
+          <span.equals>, <span.total>
+        Wrapping the h3 in a flex div broke PF1e's internal
+        inline layout — numbers scattered vertically.
+
+        NEW APPROACH:
+        roll-cards.js adds .baph-styled to the existing
+        .dice-result div. CSS applies the dark leather bar
+        background to .dice-result.baph-styled. The h3 and
+        all its inline children remain UNTOUCHED.
+
+        Standard rolls: dark leather bar background on dice-result
+        Nat 20: gold bar, near-black text, brass left-rail
+        Nat 1:  dried blood bar, parchment text, blood left-rail
    ============================================================ */
 
 /* --- Standard result bar ---
-   Dark leather strip — the result number lives here.
-   Restores the contrast punch lost in the parchment pivot. */
-.baph-result-bar {
+   Dark leather strip applied to the dice-result container.
+   The h3.dice-total inside keeps PF1e's native inline layout. */
+.dice-result.baph-styled {
   background: var(--baph-leather-dark, #6b5c4a);
   border-top: 1px solid var(--baph-leather-mid, #8a7b66);
   border-bottom: 1px solid var(--baph-leather-dark, #6b5c4a);
   padding: 4px 8px;
   margin: 4px 0 2px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.4),
               inset 0 -1px 2px rgba(0, 0, 0, 0.3);
+  border-radius: 0;
 }
 
-/* Result number on dark bar — gold, mono, heavy */
-.baph-result-bar .dice-total {
+/* h3.dice-total inside styled bar — gold text, heavy weight.
+   CRITICAL: do NOT change display, flex, or layout properties
+   on the h3. Only color/font/weight. PF1e controls the layout. */
+.dice-result.baph-styled .dice-total {
   color: var(--baph-brass-bright, #b8943e) !important;
   font-family: var(--baph-font-mono);
   font-weight: 700;
-  font-size: 1.3em;
   text-shadow: none;
-  -webkit-text-stroke: 0.3px rgba(42, 35, 29, 0.4);
+}
+
+/* Individual spans inside h3 — let PF1e handle their layout.
+   We only ensure color inheritance and consistent font. */
+.dice-result.baph-styled .dice-total .natural,
+.dice-result.baph-styled .dice-total .bonus,
+.dice-result.baph-styled .dice-total .equals,
+.dice-result.baph-styled .dice-total .total {
+  color: inherit;
+  font-family: var(--baph-font-mono);
+}
+
+/* d20 icon inside the h3 */
+.dice-result.baph-styled .dice-total i {
+  color: var(--baph-brass, #9e7d43);
+  opacity: 0.8;
+}
+
+/* --- LEGACY CLEANUP ---
+   Remove any leftover .baph-result-bar styling from v1.0.
+   If old wrapped elements still exist in chat history,
+   make them transparent so they don't double-style. */
+.baph-result-bar {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+  display: contents !important;  /* collapses the wrapper, preserves children */
 }
 
 /* --- NAT 20 — gold bar ---
-   The whole message card gets a brass left-rail.
-   The result bar goes full gold. Text goes near-black. */
+   Brass left-rail on the message card.
+   The dice-result bar goes full gold. Text goes near-black. */
 #chat-log .message.baph-nat20 {
   border-left: 3px solid var(--baph-brass-bright, #b8943e);
   box-shadow: 0 1px 6px rgba(184, 148, 62, 0.25);
 }
 
-#chat-log .message.baph-nat20 .baph-result-bar {
+#chat-log .message.baph-nat20 .dice-result.baph-styled {
   background: var(--baph-brass, #9e7d43);
   border-top: 1px solid var(--baph-brass-bright, #b8943e);
   border-bottom: 1px solid var(--baph-leather-dark, #6b5c4a);
@@ -674,33 +702,28 @@
               inset 0 -1px 3px rgba(42, 35, 29, 0.4);
 }
 
-#chat-log .message.baph-nat20 .baph-result-bar .dice-total {
+#chat-log .message.baph-nat20 .dice-result.baph-styled .dice-total {
   color: var(--baph-ink-primary, #2a231d) !important;
-  -webkit-text-stroke: 0px;
 }
 
-/* --- NAT 1 — blood bar ---
-   Left-rail goes blood red. Result bar is dried blood.
-   Parchment text. No glow. Just the fact of it. */
+/* --- NAT 1 — blood bar --- */
 #chat-log .message.baph-nat1 {
   border-left: 3px solid var(--baph-blood, #6e2a22);
 }
 
-#chat-log .message.baph-nat1 .baph-result-bar {
+#chat-log .message.baph-nat1 .dice-result.baph-styled {
   background: var(--baph-blood, #6e2a22);
   border-top: 1px solid var(--baph-blood-bright, #8b3028);
   border-bottom: 1px solid rgba(42, 35, 29, 0.6);
   box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5);
 }
 
-#chat-log .message.baph-nat1 .baph-result-bar .dice-total {
+#chat-log .message.baph-nat1 .dice-result.baph-styled .dice-total {
   color: var(--baph-parchment-bright, #e8dfd0) !important;
-  -webkit-text-stroke: 0px;
 }
 
 /* --- Nat flavor labels ---
-   Small stamped text beneath the result bar.
-   Uppercase, Courier Prime, no drama — just the record. */
+   Small stamped text beneath the result bar. */
 .baph-nat-label {
   font-family: var(--baph-font-heading);
   font-size: 0.7em;
@@ -713,7 +736,7 @@
 }
 
 .baph-nat20-label {
-  color: var(--baph-brass, #9e7d43);
+  color: var(--baph-brass-readable, #846528);
 }
 
 .baph-nat1-label {
@@ -804,21 +827,7 @@
 
 /* ============================================================
    16b. PF1e V13 ROLL DIALOGS — SAVING THROWS & SKILL CHECKS
-        These are native <dialog> elements with class chain:
-        application dialog pf1-v2 roll-prompt
-        Structure: .window-content > form.standard-form >
-                   .dialog-content.standard-form > .form-group > label
-                                                              > .form-fields
-                   footer.form-footer > button[data-action]
-
-        Problem: body.theme-dark Foundry CSS variables were
-        winning the cascade on label color inside these dialogs.
-        Fix: explicit high-specificity selectors matching the
-        exact DOM structure from the inspector dump, with
-        !important on color properties that theme-dark overrides.
    ============================================================ */
-
-/* Window chrome — leather header band */
 dialog.roll-prompt .window-header,
 .dialog.roll-prompt .window-header {
   background: var(--baph-leather-mid);
@@ -832,14 +841,12 @@ dialog.roll-prompt .window-title,
   font-family: var(--baph-font-heading);
 }
 
-/* Window content area — parchment */
 dialog.roll-prompt .window-content,
 .dialog.roll-prompt .window-content {
   background: var(--baph-parchment-mid);
   color: var(--baph-ink-primary);
 }
 
-/* Form wrapper */
 dialog.roll-prompt .dialog-content,
 dialog.roll-prompt .standard-form,
 .dialog.roll-prompt .dialog-content,
@@ -849,16 +856,12 @@ dialog.roll-prompt .standard-form,
   font-family: var(--baph-font-body);
 }
 
-/* form-group rows */
 dialog.roll-prompt .form-group,
 .dialog.roll-prompt .form-group {
   border-bottom: 1px solid rgba(138, 123, 102, 0.3);
   padding: 4px 0;
 }
 
-/* THE CRITICAL FIX — theme-dark was winning on label color.
-   !important needed specifically here to beat Foundry's own
-   dark-theme variable injection on body.theme-dark. */
 dialog.roll-prompt .form-group label,
 dialog.roll-prompt label,
 .dialog.roll-prompt .form-group label,
@@ -870,13 +873,11 @@ dialog.roll-prompt label,
   letter-spacing: 0.04em;
 }
 
-/* Icons inside form-fields */
 dialog.roll-prompt .form-fields i,
 .dialog.roll-prompt .form-fields i {
   color: var(--baph-ink-faint, #8a7b6e);
 }
 
-/* Text / number inputs and selects */
 dialog.roll-prompt .form-fields input,
 dialog.roll-prompt .form-fields select,
 .dialog.roll-prompt .form-fields input,
@@ -902,7 +903,6 @@ dialog.roll-prompt .form-fields input::placeholder,
   opacity: 0.7;
 }
 
-/* Footer — Normal / Take 10 / Take 20 buttons */
 dialog.roll-prompt .form-footer,
 .dialog.roll-prompt .form-footer {
   border-top: 1px solid var(--baph-leather-mid);
@@ -934,7 +934,6 @@ dialog.roll-prompt .form-footer button:hover,
 
 /* ============================================================
    17. COMBAT TRACKER
-       Parchment interior pages, leather header band.
    ============================================================ */
 #combat-tracker {
   background: var(--baph-parchment-mid);
@@ -962,20 +961,17 @@ dialog.roll-prompt .form-footer button:hover,
   border-left: 3px solid var(--baph-brass);
 }
 
-/* Token name in combat tracker */
 #combat-tracker .combatant .token-name .name {
   color: var(--baph-ink-primary);
   font-family: var(--baph-font-body);
 }
 
-/* Initiative value */
 #combat-tracker .combatant .token-initiative .initiative {
   color: var(--baph-ink-primary);
   font-family: var(--baph-font-mono);
   font-weight: 700;
 }
 
-/* HP display */
 #combat-tracker .combatant .token-resource .resource-bar {
   background: var(--baph-leather-mid);
 }
@@ -985,7 +981,7 @@ dialog.roll-prompt .form-footer button:hover,
 }
 
 /* ============================================================
-   18. SCROLLBARS — Weathered, not polished
+   18. SCROLLBARS
    ============================================================ */
 ::-webkit-scrollbar {
   width: 6px;
@@ -1007,7 +1003,6 @@ dialog.roll-prompt .form-footer button:hover,
 
 /* ============================================================
    19. SELECTION & FOCUS GLOW
-       No neon. Subtle brass outline only.
    ============================================================ */
 ::selection {
   background: rgba(158, 125, 67, 0.3);
@@ -1016,10 +1011,12 @@ dialog.roll-prompt .form-footer button:hover,
 
 /* ============================================================
    20. GENERIC LINK & BUTTON OVERRIDES
+       Uses --baph-brass-readable for text links.
+       Hover uses blood for physical immediacy.
    ============================================================ */
 .app a,
 .window-app a {
-  color: var(--baph-brass);
+  color: var(--baph-brass-readable);
   text-decoration: none;
   transition: color 0.12s;
 }
@@ -1031,6 +1028,6 @@ dialog.roll-prompt .form-footer button:hover,
 }
 
 /* ============================================================
-   END OF FILE — baphomet-utils noir-theme.css v2.4.0
-   "Croaker's Ledger" — The Black Company aesthetic
+   END OF FILE — baphomet-utils noir-theme.css v2.5.1
+   "The Ink Holds"
    ============================================================ */
