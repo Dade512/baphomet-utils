@@ -1,0 +1,43 @@
+name: Build and Release Module
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build module zip
+        run: |
+          mkdir -p build/baphomet-utils/scripts build/baphomet-utils/styles
+          cp module.json build/baphomet-utils/
+          cp scripts/*.js build/baphomet-utils/scripts/
+          cp styles/*.css build/baphomet-utils/styles/
+          [ -f README.md ] && cp README.md build/baphomet-utils/
+          cd build && zip -r ../baphomet-utils.zip baphomet-utils/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.tag.outputs.version }}
+          body: |
+            **v${{ steps.tag.outputs.version }} — "The Ledger Counts Slower"**
+
+            Revised XP progression with smoother early-game ramp (2k/5k/10k/18k/28k/42k).
+            Session pacing updated for ~120 session campaign.
+            Levels 8-20 unchanged.
+
+            See [README](https://github.com/Dade512/baphomet-utils/blob/main/README.md) for full changelog.
+          files: |
+            baphomet-utils.zip
+            module.json
