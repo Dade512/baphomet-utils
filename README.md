@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.5.0
+**Current Version:** 2.7.0
 
 ---
 
@@ -22,15 +22,30 @@ https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 - **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic
 - **Roll Card Styler** — Dark leather result bar on all roll cards; nat 20 gold bar and nat 1 blood bar with flavor labels
+- **Custom XP Progression** — Campaign-specific modified slow track overriding PF1e's "Fast" track; integrates organically with character sheet level-up, skill points, feats, and class features
 
 ---
 
 ## Changelog
 
+### v2.7.0 — "The Ledger Counts Slower"
+- **Updated:** `scripts/xp-progression.js` — Revised early-game XP ramp for smoother acceleration into mid-levels. New values: 2k/5k/10k/18k/28k/42k (was 1k/3k/6k/10k/15k/21k). Session pacing updated for ~120 session campaign. Levels 8–20 unchanged.
+- **New:** GitHub Actions release workflow — automatic zip build and release asset attachment on tag push.
+
+### v2.6.0 — "The Ledger Counts the Cost"
+- **New:** `scripts/xp-progression.js` — Custom XP progression system. Overwrites PF1e's "Fast" XP track with the campaign's modified slow track table. Escalating reductions on the standard slow track (10% at levels 8–12, 15% at 13–15, 20% at 16–20) with custom early-game values for levels 1–7. Integrates organically with PF1e character sheets — skill points, feats, BAB, saves, and class features all calculate correctly against the custom thresholds.
+
+### v2.5.1 — "The Ink Holds"
+- **Critical Fix:** Roll card result bar no longer wraps `h3.dice-total` in a `<div>`. PF1e's `h3.dice-total` contains all inline roll elements (d20 icon, natural, bonus, ⇒, total) as child spans — wrapping it in a flex container scrambled the native layout. `roll-cards.js` v1.1 now adds `.baph-styled` class to the existing `.dice-result` div instead. Zero DOM reparenting.
+- **Fix:** Brass accent color deepened from `#9e7d43` to `#846528` (`--baph-brass-readable`) for text-on-parchment links. Passes WCAG AA contrast on all parchment backgrounds.
+- **Fix:** Roll link labels bumped from `0.75em` to `0.85em` with `-webkit-text-stroke: 0.5px`.
+- **Fix:** Legacy `.baph-result-bar` wrapper collapses via `display: contents` so old chat messages don't double-style.
+
 ### v2.5.0 — "The Ledger Notes the Result"
-- **New:** `scripts/roll-cards.js` — Roll Card Styler. Dark leather result bar injected on all dice roll messages. Nat 20 detected via d20 die face reading; result bar turns burnished gold, left-rail goes brass, flavor label reads "⚔ Critical Success". Nat 1 result bar goes dried blood, parchment text, label reads "✖ Critical Failure". No glow on either — physical materials only.
-- **Fix:** Brass roll links (BAB, Fortitude, Reflex, Will, CMB, Initiative, skill links) — added `font-weight: 700` and `‑webkit‑text‑stroke: 0.4px` dark iron edge. Text reads as stamped brass on parchment rather than painted-on thin lettering.
-- **Fix:** Category headers (WEAPONS, CONSUMABLES, EQUIPMENT, etc.) — bumped to `font-weight: 700`, `font-size: 0.82em`, `letter-spacing: 0.08em`. Courier Prime bold uppercase now has real weight at small sizes.
+- **New:** `scripts/roll-cards.js` — Roll Card Styler. Dark leather result bar on all dice roll messages. Nat 20 gold bar, nat 1 blood bar with flavor labels.
+- **Fix:** Brass roll links — added `font-weight: 700` and `-webkit-text-stroke: 0.4px` dark iron edge.
+- **Fix:** Category headers bumped to `font-weight: 700`, `font-size: 0.82em`, `letter-spacing: 0.08em`.
+- **Fix:** Auto-decrement for Frightened/Stunned conditions rewritten with debounced multi-hook system.
 
 ### v2.4.0 — "Croaker's Ledger"
 - Full theme pivot to battered mercenary ledger aesthetic
@@ -61,7 +76,9 @@ https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 | Sidebar / chrome | `#8a7b66` (scuffed leather) |
 | Primary text | `#2a231d` (oxidized iron gall ink) |
 | Secondary text | `#5e5246` (watered-down faded ink) |
-| Accent hover | `#9e7d43` (tarnished brass) |
+| Accent (text) | `#846528` (oxidized bronze — readable) |
+| Accent (chrome) | `#9e7d43` (tarnished brass — decorative) |
+| Accent hover | `#b8943e` (polished brass — active states) |
 | Danger / active tab | `#6e2a22` (dried blood) |
 | No neon/cyan/digital glow | Everything reads as physical materials |
 | Font: Labels/Headings | Courier Prime |
@@ -76,101 +93,15 @@ https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 /opt/foundrydata/Data/modules/baphomet-utils/
 ```
 
-Replace: `styles/noir-theme.css`, `module.json`, `README.md`  
-Add new: `scripts/roll-cards.js`
-
 ---
 
-## Git Workflow
+## Release Workflow
+
+Pushing a version tag automatically builds and publishes a GitHub release:
 
 ```bash
-git add styles/noir-theme.css scripts/roll-cards.js module.json README.md
-git commit -m "v2.5.0 — Roll card styler, brass link weight, header boldness"
-git tag v2.5.0
-git push && git push --tags
+git tag v2.7.0
+git push origin v2.7.0
 ```
 
----
-
-## Installation
-
-Manifest URL:
-```
-https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
-```
-
----
-
-## Features
-
-- **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
-- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
-- **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic
-
----
-
-## Changelog
-
-### v2.4.0 — "Croaker's Ledger"
-- **Theme Pivot:** Abandoned dark lampblack aesthetic. Full pivot to *The Black Company* mercenary ledger aesthetic.
-- **Backgrounds:** Mid-tone muddy parchment (`#d1c6b4`, `#beb09b`) for sheet interiors; scuffed leather (`#8a7b66`) for sidebar and window chrome.
-- **Text Inversion:** All text now dark oxidized iron gall ink (`#2a231d` primary, `#5e5246` secondary/faded). Removed all v2.3.2 `!important` light-text overrides — PF1e system default dark text now works correctly without interference.
-- **Accents:** Tarnished brass (`#9e7d43`) for active/hover states; dried blood (`#6e2a22`) for danger, active tab indicators, and hover on item names.
-- **Action Tracker (`action-tracker.css`):** Pip row background updated to parchment inset tray. All pips given stronger outer borders to read as physical objects on a light background. Spent ash darkened for legibility. Condition-locked blood pips increased to 85% opacity.
-- **Condition Overlay (`condition-overlay.css`):** Panel now reads as a physical brass-and-leather index card clipped to the open ledger. Parchment backgrounds throughout, brass rivets for tier buttons, leather scrollbars.
-- **CSS Variables:** Full legacy alias system added so `--baph-bg-dark`, `--baph-gold`, etc. continue to resolve correctly in all three CSS files without a full rewrite of condition-overlay and action-tracker.
-
-### v2.3.2 — "The Names Were Always There"
-- **Fix:** Active item names forced to `--baph-text-primary` via deep selector targeting `.item-name h4` and `.item-name a`
-- **Fix:** Disabled/inactive buff names rendered in `--baph-text-secondary` with `italic` style
-- **Fix:** Gold hover state added to all item/buff names; disabled items get dimmed gold variant
-
-### v2.3.1 — "The Candle Wasn't Enough"
-- **Hotfix:** Buffs tab item names invisible — targeted contrast fix applied
-
-### v2.3.0 — "The Lamp is Lit"
-- Accessibility pass: sidebar, compendium, PF1e sheet global contrast improvements
-
-### v2.2.0 — "The Ledger Rebound"
-- Gaslamp Gothic palette overhaul
-- Layout and logic bug fixes
-
----
-
-## Aesthetic Rules — Croaker's Ledger
-
-| Rule | Value |
-|------|-------|
-| Brightest value | `#e8dfd0` (fresh vellum) — no pure white |
-| Background (main) | `#d1c6b4` (field parchment) |
-| Background (worn) | `#beb09b` (mud-stained parchment) |
-| Sidebar / chrome | `#8a7b66` (scuffed leather) |
-| Primary text | `#2a231d` (oxidized iron gall ink) |
-| Secondary text | `#5e5246` (watered-down faded ink) |
-| Accent hover | `#9e7d43` (tarnished brass) |
-| Danger / active tab | `#6e2a22` (dried blood) |
-| No neon/cyan/digital glow | Everything reads as physical materials |
-| Font: Labels/Headings | Courier Prime |
-| Font: Body/Descriptions | Alegreya |
-| Font: Numbers only | IBM Plex Mono |
-
----
-
-## Server Deployment
-
-```
-/opt/foundrydata/Data/modules/baphomet-utils/
-```
-
-Replace: `styles/noir-theme.css`, `styles/action-tracker.css`, `styles/condition-overlay.css`, `module.json`, `README.md`
-
----
-
-## Git Workflow
-
-```bash
-git add styles/noir-theme.css styles/action-tracker.css styles/condition-overlay.css module.json README.md
-git commit -m "v2.4.0 — Croaker's Ledger: full parchment/leather theme pivot"
-git tag v2.4.0
-git push && git push --tags
-```
+The GitHub Actions workflow builds the module zip and attaches both `module.json` and `baphomet-utils.zip` to the release. Foundry pulls updates from the manifest URL automatically.
