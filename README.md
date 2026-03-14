@@ -70,13 +70,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 - **New:** GitHub Actions release workflow — automatic zip build and release asset attachment on tag push.
 
 ### v2.6.0 — "The Ledger Counts the Cost"
-- **New:** `scripts/xp-progression.js` — Custom XP progression system. Overwrites PF1e's "Fast" XP track with the campaign's modified slow track table. Escalating reductions on the standard slow track (10% at levels 8–12, 15% at 13–15, 20% at 16–20) with custom early-game values for levels 1–7.
+- **New:** `scripts/xp-progression.js` — Custom XP progression system. Overwrites PF1e's "Fast" XP track with the campaign's modified slow track table.
 
 ### v2.5.1 — "The Ink Holds"
 - **Critical Fix:** Roll card result bar no longer wraps `h3.dice-total` in a `<div>`. Zero DOM reparenting.
 - **Fix:** Brass accent color deepened to `#846528` for text-on-parchment links. WCAG AA compliant.
-- **Fix:** Roll link labels bumped to `0.85em` with heavier stroke weight.
-- **Fix:** Legacy `.baph-result-bar` wrapper collapses via `display: contents`.
 
 ### v2.5.0 — "The Ledger Notes the Result"
 - **New:** `scripts/roll-cards.js` — Roll Card Styler. Dark leather result bar, nat 20 gold bar, nat 1 blood bar.
@@ -84,16 +82,8 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 
 ### v2.4.0 — "Croaker's Ledger"
 - Full theme pivot to battered mercenary ledger aesthetic
-- Parchment backgrounds, dark ink text, brass/blood accents
 
-### v2.3.2 — "The Names Were Always There"
-- Item name contrast pass across all item lists
-
-### v2.3.1 — "The Candle Wasn't Enough"
-- Hotfix: Buffs tab item names invisible
-
-### v2.3.0 — "The Lamp is Lit"
-- Accessibility pass: sidebar, compendium, PF1e sheet
+### v2.3.0–v2.3.2 — Accessibility and contrast fixes
 
 ### v2.2.0 — "The Ledger Rebound"
 - Gaslamp Gothic palette overhaul, layout/logic bug fixes
@@ -138,4 +128,4 @@ git tag v2.8.0
 git push origin v2.8.0
 ```
 
-The GitHub Actions workflow builds the module zip and attaches both `module.json` and `baphomet-utils.zip` to the release. Foundry pulls updates from the manifest URL automatically.
+The GitHub Actions workflow builds the module zip and attaches both `module.json` and `baphomet-utils.zip` to the release.
