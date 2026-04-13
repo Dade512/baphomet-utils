@@ -1,24 +1,30 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — WEATHER ENGINE v1.0
+   ECHOES OF BAPHOMET — WEATHER ENGINE v1.1
    Season-aware, climate-zone-based weather generation
    integrated with Simple Calendar.
+
+   v1.1 Changes:
+   - [BUG FIX] Math.clamp → Math.clamped (Foundry API).
+   - [BUG FIX] getWeatherFor API properly async — was mixing
+     sync + async, silently defaulting to 'temperate'.
+   - [CLEANUP] Trimmed verbose debug logging for production.
+   - [UI] Weather state exposed for weather-ui.js consumption.
 
    WHAT IT DOES:
    - Reads current date from Simple Calendar
    - Determines current season from Golarion calendar
    - Generates daily weather (temp, wind, precipitation, clouds)
      based on the active climate zone
-   - GM can change climate zone via macro API or chat command
-   - Stores current weather in module flags for persistence
-   - Displays weather in a Croaker's Ledger styled panel
-   - Posts daily weather to chat on day advance (optional)
+   - GM can change climate zone via macro API or Weather UI
+   - Stores current weather in module settings for persistence
+   - Posts daily weather to chat in Croaker's Ledger style
 
    HOOKS:
    - simple-calendar-date-time-change: fires when SC date changes
    - ready: initialize weather state
 
    DEPENDENCIES:
-   - Simple Calendar (foundryvtt-simple-calendar)
+   - Simple Calendar Reborn (foundryvtt-simple-calendar-reborn)
    - baphomet-utils climate-zones.js (loaded first via module.json)
 
    For Foundry VTT v13 + PF1e System
@@ -28,16 +34,6 @@ const WE_MODULE_ID = 'baphomet-utils';
 
 /* ----------------------------------------------------------
    GOLARION SEASON MAPPING
-   Maps month index (0-11) to season name.
-   Months: 0=Abadius, 1=Calistril, 2=Pharast, 3=Gozran,
-           4=Desnus, 5=Sarenith, 6=Erastus, 7=Arodus,
-           8=Rova, 9=Lamashan, 10=Neth, 11=Kuthona
-
-   Seasons from Fantasy Calendar export:
-   Spring: starts month 2 (Pharast)
-   Summer: starts month 5 (Sarenith)
-   Fall:   starts month 8 (Rova)
-   Winter: starts month 11 (Kuthona)
    ---------------------------------------------------------- */
 
 const GOLARION_MONTHS = [
@@ -47,25 +43,13 @@ const GOLARION_MONTHS = [
 ];
 
 const MONTH_TO_SEASON = {
-  0: 'winter',    // Abadius
-  1: 'winter',    // Calistril
-  2: 'spring',    // Pharast
-  3: 'spring',    // Gozran
-  4: 'spring',    // Desnus
-  5: 'summer',    // Sarenith
-  6: 'summer',    // Erastus
-  7: 'summer',    // Arodus
-  8: 'fall',      // Rova
-  9: 'fall',      // Lamashan
-  10: 'fall',     // Neth
-  11: 'winter',   // Kuthona
+  0: 'winter', 1: 'winter', 2: 'spring', 3: 'spring',
+  4: 'spring', 5: 'summer', 6: 'summer', 7: 'summer',
+  8: 'fall',   9: 'fall',  10: 'fall',  11: 'winter',
 };
 
 /* ----------------------------------------------------------
-   SEEDED RANDOM NUMBER GENERATOR
-   Deterministic based on year + day-of-year + seed.
-   Same date always produces same weather (unless climate
-   zone changes). Uses mulberry32 PRNG.
+   SEEDED RANDOM NUMBER GENERATOR (mulberry32)
    ---------------------------------------------------------- */
 
 function _mulberry32(seed) {
@@ -78,7 +62,6 @@ function _mulberry32(seed) {
 }
 
 function _getWeatherSeed(year, dayOfYear, climateName) {
-  // Combine date + climate name into a deterministic seed
   let hash = 0;
   const str = `${year}-${dayOfYear}-${climateName}`;
   for (let i = 0; i < str.length; i++) {
@@ -109,48 +92,35 @@ function generateWeather(year, monthIndex, day, climateKey) {
   const params = climate.seasons[season];
   const monthName = GOLARION_MONTHS[monthIndex] ?? 'Unknown';
 
-  // Calculate day of year for seed
+  // Day of year for seed
   const monthLengths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   let dayOfYear = day;
-  for (let i = 0; i < monthIndex; i++) {
-    dayOfYear += monthLengths[i];
-  }
+  for (let i = 0; i < monthIndex; i++) dayOfYear += monthLengths[i];
 
-  // Seeded RNG for this specific day
   const seed = _getWeatherSeed(year, dayOfYear, climateKey);
   const rng = _mulberry32(seed);
 
-  // --- Temperature ---
+  // Temperature
   const tempVariance = (rng() * 2 - 1) * params.variance;
   const highTemp = Math.round(params.base + tempVariance);
   const lowTemp = Math.round(highTemp - params.nightDrop + (rng() * 4 - 2));
 
-  // --- Precipitation ---
+  // Precipitation
   const precipRoll = rng() * 100;
   const isRaining = precipRoll < params.precipitation;
   let precipType = 'none';
   let precipIntensity = 'none';
 
   if (isRaining) {
-    // Pick precipitation type
     const typeIndex = Math.floor(rng() * params.precipType.length);
     precipType = params.precipType[typeIndex];
-
-    // Intensity
     const intensityRoll = rng();
     if (intensityRoll < 0.5) precipIntensity = 'light';
     else if (intensityRoll < 0.85) precipIntensity = 'moderate';
     else precipIntensity = 'heavy';
-
-    // Temperature adjustment for precipitation
-    // Rain cools slightly, snow means it's colder
-    if (['snow', 'blizzard'].includes(precipType) && highTemp > 34) {
-      // If it's snowing, cap temp at freezing-ish
-      // (don't override completely, just nudge)
-    }
   }
 
-  // --- Wind ---
+  // Wind
   const windVariance = rng() * 8 - 4;
   const windSpeed = Math.max(0, Math.round(params.windBase + windVariance));
   const gustChance = rng();
@@ -158,56 +128,29 @@ function generateWeather(year, monthIndex, day, climateKey) {
     ? Math.round(windSpeed + rng() * (params.windGust - params.windBase))
     : windSpeed;
 
-  // --- Cloud Cover ---
-  // Correlate with precipitation chance + some randomness
+  // Cloud Cover — v1.1 FIX: Math.clamped instead of Math.clamp
   const cloudBase = params.precipitation + (rng() * 20 - 10);
-  const cloudCover = Math.clamp(Math.round(cloudBase), 0, 100);
+  const cloudCover = Math.clamped(Math.round(cloudBase), 0, 100);
 
-  // --- Descriptive Text ---
+  // Descriptive text
   const tempDesc = _pickDescription(TEMP_DESCRIPTIONS, highTemp, rng);
   const windDesc = _pickDescription(WIND_DESCRIPTIONS, windSpeed, rng);
   const cloudDesc = _pickDescription(CLOUD_DESCRIPTIONS, cloudCover, rng);
 
-  // --- Precipitation description ---
   let precipDesc = 'No precipitation';
   if (isRaining) {
     const intensityWord = precipIntensity === 'light' ? 'Light'
-      : precipIntensity === 'moderate' ? 'Moderate'
-      : 'Heavy';
+      : precipIntensity === 'moderate' ? 'Moderate' : 'Heavy';
     precipDesc = `${intensityWord} ${precipType}`;
   }
 
   return {
-    // Raw data
-    year,
-    monthIndex,
-    monthName,
-    day,
-    season,
-    climate: climateKey,
-    climateName: climate.name,
-
-    // Temperature
-    highTemp,
-    lowTemp,
-    tempDesc,
-
-    // Precipitation
-    isRaining,
-    precipType,
-    precipIntensity,
-    precipDesc,
-
-    // Wind
-    windSpeed,
-    windGust,
-    windDesc,
-
-    // Clouds
-    cloudCover,
-    cloudDesc,
-
-    // Formatted summary
+    year, monthIndex, monthName, day, season,
+    climate: climateKey, climateName: climate.name,
+    highTemp, lowTemp, tempDesc,
+    isRaining, precipType, precipIntensity, precipDesc,
+    windSpeed, windGust, windDesc,
+    cloudCover, cloudDesc,
     summary: _buildWeatherSummary(highTemp, lowTemp, precipDesc, windDesc, cloudDesc, season, climate.name),
   };
 }
@@ -220,8 +163,7 @@ function _pickDescription(table, value, rng) {
       return tier.options[idx];
     }
   }
-  const last = table[table.length - 1];
-  return last.options[0];
+  return table[table.length - 1].options[0];
 }
 
 function _buildWeatherSummary(high, low, precip, wind, clouds, season, climateName) {
@@ -232,8 +174,6 @@ function _buildWeatherSummary(high, low, precip, wind, clouds, season, climateNa
 
 /* ----------------------------------------------------------
    STATE MANAGEMENT
-   Persists current climate zone and last generated weather
-   in a world-level flag.
    ---------------------------------------------------------- */
 
 async function _getWeatherState() {
@@ -251,23 +191,16 @@ async function _setWeatherState(state) {
 
 /* ----------------------------------------------------------
    SIMPLE CALENDAR INTEGRATION
-   Reads current date from Simple Calendar API.
    ---------------------------------------------------------- */
 
 function _getCurrentDateFromSC() {
-  // Simple Calendar API
-  if (typeof SimpleCalendar === 'undefined') {
-    console.warn(`${WE_MODULE_ID} | Weather: Simple Calendar not found`);
-    return null;
-  }
-
+  if (typeof SimpleCalendar === 'undefined') return null;
   const currentDate = SimpleCalendar.api.currentDateTime();
   if (!currentDate) return null;
-
   return {
     year: currentDate.year,
-    monthIndex: currentDate.month,   // 0-indexed
-    day: currentDate.day + 1,        // SC uses 0-indexed days, we want 1-indexed
+    monthIndex: currentDate.month,
+    day: currentDate.day + 1,
   };
 }
 
@@ -279,38 +212,28 @@ async function generateTodayWeather(forceRegenerate = false) {
   if (!game.user.isGM) return null;
 
   const date = _getCurrentDateFromSC();
-  if (!date) {
-    console.warn(`${WE_MODULE_ID} | Weather: Could not read date from Simple Calendar`);
-    return null;
-  }
+  if (!date) return null;
 
   const state = await _getWeatherState();
   const dateKey = `${date.year}-${date.monthIndex}-${date.day}`;
 
-  // Check if we already generated weather for today
   if (!forceRegenerate && state.lastDate === dateKey && state.lastWeather) {
-    console.log(`${WE_MODULE_ID} | Weather: Using cached weather for ${dateKey}`);
     return state.lastWeather;
   }
 
-  // Generate new weather
   const weather = generateWeather(date.year, date.monthIndex, date.day, state.climateZone);
   if (!weather) return null;
 
-  // Save state
   state.lastWeather = weather;
   state.lastDate = dateKey;
   await _setWeatherState(state);
 
-  console.log(`${WE_MODULE_ID} | Weather: Generated for ${weather.monthName} ${weather.day}, ${weather.year} (${weather.climateName}, ${weather.season})`);
-  console.log(`${WE_MODULE_ID} | Weather: ${weather.summary}`);
-
+  console.log(`${WE_MODULE_ID} | Weather: ${weather.monthName} ${weather.day}, ${weather.year} — ${weather.highTemp}°F/${weather.lowTemp}°F, ${weather.precipDesc} (${weather.climateName})`);
   return weather;
 }
 
 /* ----------------------------------------------------------
-   CHAT OUTPUT
-   Posts weather to chat in Croaker's Ledger style.
+   CHAT OUTPUT — Croaker's Ledger style
    ---------------------------------------------------------- */
 
 function _postWeatherToChat(weather) {
@@ -331,9 +254,7 @@ function _postWeatherToChat(weather) {
           <span style="color: var(--baph-ink-secondary, #5e5246);">${weather.lowTemp}°F</span>
           — ${weather.tempDesc}
         </div>
-        <div style="margin-bottom: 2px; color: ${precipColor};">
-          ${weather.precipDesc}
-        </div>
+        <div style="margin-bottom: 2px; color: ${precipColor};">${weather.precipDesc}</div>
         <div style="margin-bottom: 2px;">${weather.windDesc} (${weather.windSpeed} mph${weather.windGust > weather.windSpeed ? `, gusts ${weather.windGust}` : ''})</div>
         <div style="color: var(--baph-ink-secondary, #5e5246);">${weather.cloudDesc}</div>
       </div>
@@ -355,7 +276,6 @@ function _postWeatherToChat(weather) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  // Register weather state setting
   game.settings.register(WE_MODULE_ID, 'weatherState', {
     name: 'Weather Engine State',
     scope: 'world',
@@ -368,20 +288,18 @@ Hooks.once('init', () => {
       postToChat: true,
     }
   });
-
-  console.log(`${WE_MODULE_ID} | Weather Engine v1.0: Settings registered`);
+  console.log(`${WE_MODULE_ID} | Weather Engine v1.1: Settings registered`);
 });
 
 Hooks.once('ready', async () => {
   if (!game.user.isGM) return;
 
-  // Generate weather for current day on load
   const weather = await generateTodayWeather();
+  const state = await _getWeatherState();
   if (weather) {
-    console.log(`${WE_MODULE_ID} | Weather Engine v1.0 ready — ${weather.climateName}, ${weather.season}`);
-    console.log(`${WE_MODULE_ID} | Current weather: ${weather.highTemp}°F/${weather.lowTemp}°F, ${weather.precipDesc}`);
+    console.log(`${WE_MODULE_ID} | Weather Engine v1.1 ready — ${weather.climateName}, ${weather.season}`);
   } else {
-    console.log(`${WE_MODULE_ID} | Weather Engine v1.0 ready — no Simple Calendar date available`);
+    console.log(`${WE_MODULE_ID} | Weather Engine v1.1 ready — no Simple Calendar date available`);
   }
 
   // Expose API
@@ -398,8 +316,10 @@ Hooks.once('ready', async () => {
       _postWeatherToChat(weather);
     },
 
-    /** Get/set climate zone */
+    /** Get current climate zone key */
     getClimate: async () => (await _getWeatherState()).climateZone,
+
+    /** Set climate zone, regenerate + post weather */
     setClimate: async (zoneKey) => {
       if (!GOLARION_CLIMATES[zoneKey]) {
         const valid = Object.keys(GOLARION_CLIMATES).join(', ');
@@ -408,17 +328,17 @@ Hooks.once('ready', async () => {
       }
       const state = await _getWeatherState();
       state.climateZone = zoneKey;
-      state.lastWeather = null;  // Force regeneration
+      state.lastWeather = null;
       state.lastDate = null;
       await _setWeatherState(state);
-      console.log(`${WE_MODULE_ID} | Climate zone changed to: ${GOLARION_CLIMATES[zoneKey].name}`);
+      console.log(`${WE_MODULE_ID} | Climate zone → ${GOLARION_CLIMATES[zoneKey].name}`);
       const weather = await generateTodayWeather(true);
       _postWeatherToChat(weather);
     },
 
     /** List available climate zones */
     listClimates: () => {
-      console.log(`${WE_MODULE_ID} | Available climate zones:`);
+      console.log(`${WE_MODULE_ID} | Climate zones:`);
       for (const [key, zone] of Object.entries(GOLARION_CLIMATES)) {
         console.log(`  ${key}: ${zone.name} — ${zone.description}`);
       }
@@ -430,24 +350,26 @@ Hooks.once('ready', async () => {
       const state = await _getWeatherState();
       state.postToChat = !state.postToChat;
       await _setWeatherState(state);
-      console.log(`${WE_MODULE_ID} | Weather chat posting: ${state.postToChat ? 'ON' : 'OFF'}`);
+      console.log(`${WE_MODULE_ID} | Weather auto-post: ${state.postToChat ? 'ON' : 'OFF'}`);
     },
 
-    /** Get raw weather data for a specific date */
-    getWeatherFor: (year, monthIndex, day, climateKey) => {
-      const key = climateKey ?? _getWeatherState().then(s => s.climateZone) ?? 'temperate';
-      return generateWeather(year, monthIndex, day, typeof key === 'string' ? key : 'temperate');
+    /** Get weather for a specific date
+     *  v1.1 FIX: properly async — no longer silently defaults to temperate
+     */
+    getWeatherFor: async (year, monthIndex, day, climateKey) => {
+      let key = climateKey;
+      if (!key) {
+        const state = await _getWeatherState();
+        key = state.climateZone || 'temperate';
+      }
+      return generateWeather(year, monthIndex, day, key);
     },
   };
 });
 
-/* ── Simple Calendar date change hook ──────────────────────
-   Fires when the GM advances the date.
-   Generates new weather and optionally posts to chat. */
+/* ── Simple Calendar date change hook ────────────────────── */
 Hooks.on('simple-calendar-date-time-change', async (data) => {
   if (!game.user.isGM) return;
-
-  console.log(`${WE_MODULE_ID} | Weather: Simple Calendar date changed`, data);
 
   const weather = await generateTodayWeather(true);
   if (!weather) return;

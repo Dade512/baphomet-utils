@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.8.0
+**Current Version:** 2.9.0
 
 ---
 
@@ -24,12 +24,25 @@ https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 - **Roll Card Styler** — Dark leather result bar on all roll cards; nat 20 gold bar and nat 1 blood bar with flavor labels
 - **Custom XP Progression** — Campaign-specific modified slow track overriding PF1e's "Fast" track; integrates organically with character sheet level-up, skill points, feats, and class features
 - **Weather Engine** — Seeded RNG weather generation with 8 Golarion climate zones, integrated with Simple Calendar Reborn; posts daily weather to chat in Croaker's Ledger style
+- **Weather Config UI** — GM-facing weather panel accessible from Scene Controls; change climate zones, toggle auto-posting, reroll weather — no console commands needed
 
 ---
 
 ## Weather Engine
 
 The weather engine generates deterministic daily weather based on the current date and active climate zone. Same date always produces the same weather unless the climate zone changes.
+
+### Weather Config UI (New in v2.9.0)
+
+Open from **Scene Controls → Token Tools → ☁ Weather Config** (cloud icon, GM only).
+
+The config panel provides:
+- **Current weather display** — temperature, precipitation, wind, cloud cover for today's date
+- **Climate zone selector** — dropdown with all 8 Golarion zones and descriptions
+- **Apply Zone** — changes zone, regenerates weather, and posts to chat
+- **Post Today** — sends current weather to GM chat
+- **Reroll Today** — regenerates today's weather with a fresh seed
+- **Auto-post toggle** — enable/disable automatic chat posting on day advance
 
 ### Climate Zones
 
@@ -46,6 +59,8 @@ The weather engine generates deterministic daily weather based on the current da
 
 ### GM API
 
+The console API is still available for macro use:
+
 ```js
 game.baphometWeather.post()                // Show today's weather in chat
 game.baphometWeather.setClimate('arid')    // Party enters Osirion
@@ -57,9 +72,18 @@ game.baphometWeather.getWeatherFor(4712, 7, 15, 'temperate')  // Query specific 
 
 Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 
+**Note (v2.9.0):** `getWeatherFor()` is now async. If you omit the climate key, it correctly reads the stored zone instead of defaulting to temperate.
+
 ---
 
 ## Changelog
+
+### v2.9.0 — "The Ledger Opens Its Desk"
+- **New:** `scripts/weather-ui.js` + `styles/weather-ui.css` — GM-facing weather configuration panel built on ApplicationV2. Access from Scene Controls → Token Tools → cloud icon. Change climate zones, toggle auto-post, reroll weather, post to chat — all without touching the console.
+- **Critical Fix:** `Math.clamp` → `Math.clamped` in condition tier clamping (`condition-overlay.js`) and cloud cover calculation (`weather-engine.js`). `Math.clamp` is not standard JS; Foundry provides `Math.clamped`. Could hard-fail condition application and weather generation.
+- **Critical Fix:** `getWeatherFor` API was mixing sync + async — `_getWeatherState().then(...)` without `await` made the climate key a Promise object, silently defaulting to `'temperate'` regardless of active zone. Now properly `async`/`await`.
+- **Cleanup:** Trimmed verbose debug logging in weather-engine.js for production use.
+- **Manifest:** Minimum compatibility raised from v12 to v13. Code depends on v13 hooks, CSS structure, and ApplicationV2.
 
 ### v2.8.0 — "The Ledger Reads the Sky"
 - **New:** `data/climate-zones.js` — 8 Golarion climate zones with per-season temperature, precipitation, and wind parameters. Each zone includes descriptive text generators for immersive chat output.
@@ -124,8 +148,23 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 Pushing a version tag automatically builds and publishes a GitHub release:
 
 ```bash
-git tag v2.8.0
-git push origin v2.8.0
+git tag v2.9.0
+git push origin main --tags
 ```
 
 The GitHub Actions workflow builds the module zip and attaches both `module.json` and `baphomet-utils.zip` to the release.
+
+---
+
+## Test Checklist (v2.9.0)
+
+1. **Scene Controls button:** Log in as GM → Token Controls toolbar shows ☁ cloud icon → click opens Weather Config panel
+2. **Current weather display:** Panel shows today's temp/precip/wind/clouds (requires Simple Calendar active)
+3. **Zone switch:** Select a different climate zone → click Apply Zone → weather regenerates → chat message posts
+4. **Auto-post toggle:** Toggle OFF → advance day in Simple Calendar → no chat post. Toggle ON → advance → chat posts.
+5. **Post Today:** Click → current weather posted to GM chat
+6. **Reroll:** Click → weather regenerates with new values → panel updates
+7. **getWeatherFor without key:** In console, `await game.baphometWeather.getWeatherFor(4712, 7, 15)` → uses stored zone, NOT hardcoded temperate
+8. **No Math.clamp errors:** Apply a condition (e.g., `game.baphometConditions.apply(actor, 'frightened', 3)`) → no console error
+9. **Non-GM guard:** Log in as player → no cloud icon in scene controls → `game.baphometWeather` API returns null for generation calls
+10. **No Simple Calendar:** Disable SCR → open weather panel → shows graceful "Simple Calendar not detected" message

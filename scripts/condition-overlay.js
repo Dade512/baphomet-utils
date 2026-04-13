@@ -16,6 +16,10 @@
    
    - Added console logging for all auto-decrement events.
 
+   v2.5.1 Changes:
+   - [BUG FIX] Math.clamp → Math.clamped (Foundry API).
+     Math.clamp is not standard JS; Foundry provides Math.clamped.
+
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
                   Enfeebled, Drained, Stunned, Slowed, Fascinated
    TOGGLE (on/off): Fatigued, Off-Guard, Persistent Damage,
@@ -358,7 +362,7 @@ async function applyCondition(actor, condKey, tier) {
   if (!actor || !CONDITIONS[condKey]) return;
 
   const cond = CONDITIONS[condKey];
-  tier = Math.clamp(tier, 0, cond.maxTier);
+  tier = Math.clamped(tier, 0, cond.maxTier);
 
   if (tier === 0) return removeCondition(actor, condKey);
 
@@ -703,33 +707,10 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
 
 /* ----------------------------------------------------------
    AUTO-DECREMENT — v2.5 REWRITE
-   
-   Problem in v2.4:
-   - pf1PostTurnChange was the primary hook but may not fire
-     reliably across all PF1e v13 builds.
-   - combatTurn fallback had a guard: 
-       if (Hooks.events['pf1PostTurnChange']?.length > 0) return;
-     This meant if pf1PostTurnChange was *registered* but firing
-     with wrong args (silent failure), the fallback never ran.
-   - Result: auto-decrement never triggered.
-   
-   Fix:
-   - Use a debounce map keyed by "{combatId}-{round}-{turn}"
-     to prevent double-decrements if multiple hooks fire.
-   - ALL hooks call the same _handleAutoDecrement() function.
-   - No more "skip if other hook exists" guards.
-   - Diagnostic logging on every trigger for debugging.
    ---------------------------------------------------------- */
 
-// Debounce: track which turn changes we've already processed
 const _decrementProcessed = new Set();
 
-/**
- * Process auto-decrement for the combatant whose turn just ENDED.
- * @param {Combat} combat - The active combat
- * @param {string} priorCombatantId - ID of the combatant whose turn ended
- * @param {string} source - Which hook triggered this (for logging)
- */
 async function _handleAutoDecrement(combat, priorCombatantId, source) {
   if (!game.user.isGM) return;
   if (!priorCombatantId) {
@@ -737,7 +718,6 @@ async function _handleAutoDecrement(combat, priorCombatantId, source) {
     return;
   }
 
-  // Build a unique key for this specific turn transition
   const dedupeKey = `${combat.id}-${combat.round}-${combat.turn}-${priorCombatantId}`;
   if (_decrementProcessed.has(dedupeKey)) {
     console.log(`${MODULE_ID} | Auto-decrement (${source}): already processed ${dedupeKey}, skipping duplicate`);
@@ -745,7 +725,6 @@ async function _handleAutoDecrement(combat, priorCombatantId, source) {
   }
   _decrementProcessed.add(dedupeKey);
 
-  // Clean old entries (keep set from growing forever)
   if (_decrementProcessed.size > 50) {
     const entries = [..._decrementProcessed];
     entries.slice(0, entries.length - 20).forEach(k => _decrementProcessed.delete(k));
@@ -780,22 +759,11 @@ async function _handleAutoDecrement(combat, priorCombatantId, source) {
   }
 }
 
-/**
- * Determine who just finished their turn based on combat state.
- * Called by combatTurn and combatRound hooks which don't directly
- * tell us who the *previous* combatant was.
- */
 function _getPriorCombatantId(combat, updateData) {
-  // combat.current reflects the NEW state after the update.
-  // We need the PREVIOUS combatant.
   const currentTurn = combat.current?.turn ?? updateData?.turn ?? 0;
-  const currentRound = combat.current?.round ?? updateData?.round ?? combat.round;
-  
-  // If we're on turn 0 of a new round, previous was the LAST combatant
-  // of the prior round (or same round if updateData.turn wrapped).
+
   let prevTurn;
   if (currentTurn === 0) {
-    // Wrapped to start of initiative order
     prevTurn = combat.turns.length - 1;
   } else {
     prevTurn = currentTurn - 1;
@@ -805,20 +773,13 @@ function _getPriorCombatantId(combat, updateData) {
   return priorCombatant?.id ?? null;
 }
 
-/* ── Hook: pf1PostTurnChange (PF1e system hook) ────────────
-   May or may not fire depending on PF1e version.
-   If it fires, it gives us prior combatant directly. */
 Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
   console.log(`${MODULE_ID} | Hook fired: pf1PostTurnChange`, { prior, current });
   
-  // prior might be an object with combatantId, or might be structured differently
   const priorId = prior?.combatantId ?? prior?.id ?? prior?.combatant?.id ?? null;
   _handleAutoDecrement(combat, priorId, 'pf1PostTurnChange');
 });
 
-/* ── Hook: combatTurn (Foundry core) ──────────────────────
-   Fires on every turn advance within a round.
-   We calculate who the prior combatant was. */
 Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
   console.log(`${MODULE_ID} | Hook fired: combatTurn`, { turn: combat.current?.turn, round: combat.current?.round });
   
@@ -826,13 +787,9 @@ Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
   _handleAutoDecrement(combat, priorId, 'combatTurn');
 });
 
-/* ── Hook: combatRound (Foundry core) ─────────────────────
-   Fires when the round advances (wraps from last to first).
-   The last combatant in the previous round needs processing. */
 Hooks.on('combatRound', (combat, updateData, updateOptions) => {
   console.log(`${MODULE_ID} | Hook fired: combatRound`, { turn: combat.current?.turn, round: combat.current?.round });
   
-  // On round advance, the previous combatant was the LAST in turn order
   const lastCombatant = combat.turns[combat.turns.length - 1];
   const priorId = lastCombatant?.id ?? null;
   _handleAutoDecrement(combat, priorId, 'combatRound');
