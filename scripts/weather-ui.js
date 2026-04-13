@@ -14,6 +14,12 @@
    STYLE: Croaker's Ledger — parchment, brass, iron gall ink.
    Uses existing --baph-* CSS variables from noir-theme.css.
 
+   SCENE CONTROLS HOOK (v13 API):
+   - In Foundry v13, controls is Record<string, SceneControl>
+   - tools is Record<string, SceneControlTool>
+   - Button tools use onChange (NOT onClick, which was v12)
+   - order is required (non-optional number)
+
    For Foundry VTT v13 + PF1e System
    Requires: weather-engine.js (loaded before this file)
    ============================================================ */
@@ -90,10 +96,13 @@ class BaphometWeatherConfig extends foundry.applications.api.ApplicationV2 {
     container.appendChild(currentSection);
 
     // ── Action Buttons ──
+    // Post Today: enabled if SC is present (post() calls today() internally,
+    // which generates weather on demand even if none is cached yet)
+    // Reroll: enabled if SC is present
     const actions = document.createElement('div');
     actions.classList.add('baph-wui-actions');
     actions.innerHTML = `
-      <button type="button" class="baph-wui-btn" data-action="postToday" ${!weather ? 'disabled' : ''}>
+      <button type="button" class="baph-wui-btn" data-action="postToday" ${!hasSC ? 'disabled' : ''}>
         <i class="fas fa-scroll"></i> Post Today
       </button>
       <button type="button" class="baph-wui-btn" data-action="rerollToday" ${!hasSC ? 'disabled' : ''}>
@@ -188,11 +197,12 @@ class BaphometWeatherConfig extends foundry.applications.api.ApplicationV2 {
 
   static async #onPostToday() {
     await game.baphometWeather?.post();
+    // Refresh panel in case weather was generated for the first time
+    this.render({ force: true });
   }
 
   static async #onRerollToday() {
     await game.baphometWeather?.reroll();
-    // Post the rerolled weather
     const weather = await game.baphometWeather?.today();
     if (weather) game.baphometWeather?.post();
     this.render({ force: true });
@@ -205,21 +215,35 @@ class BaphometWeatherConfig extends foundry.applications.api.ApplicationV2 {
 }
 
 /* ----------------------------------------------------------
-   SCENE CONTROLS BUTTON (V13 API)
-   Adds a cloud icon to Token Controls that toggles the
-   weather config panel.
+   SCENE CONTROLS BUTTON
+   
+   Foundry v13 (13.350) API:
+   - controls is Record<string, SceneControl> (object, not array)
+   - tools is Record<string, SceneControlTool> (object, not array)
+   - Tool buttons use onChange (NOT onClick — that was v12)
+   - order is required (non-optional number)
+   - button: true makes it a one-shot button (no toggle state)
+   
+   Defensive: guard against controls.tokens not existing.
    ---------------------------------------------------------- */
 
 Hooks.on('getSceneControlButtons', (controls) => {
   if (!game.user.isGM) return;
 
-  controls.tokens.tools.baphWeather = {
+  // v13: controls is an object keyed by control name
+  const tokenControls = controls.tokens;
+  if (!tokenControls?.tools) {
+    console.warn(`${WU_MODULE_ID} | Weather UI: Could not find token controls for scene button`);
+    return;
+  }
+
+  tokenControls.tools.baphWeather = {
     name: 'baphWeather',
     title: 'Weather Config',
     icon: 'fas fa-cloud-sun',
     button: true,
     visible: game.user.isGM,
-    order: 99,
+    order: Object.keys(tokenControls.tools).length,
     onChange: () => {
       if (_weatherUIInstance?.rendered) {
         _weatherUIInstance.close();
