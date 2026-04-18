@@ -202,9 +202,11 @@ class BaphometWeatherConfig extends foundry.applications.api.ApplicationV2 {
   }
 
   static async #onRerollToday() {
+    // reroll() regenerates and updates the cache; post() reads that cache
+    // and writes to chat. No need for a separate today() call in between —
+    // _postWeatherToChat already null-guards internally.
     await game.baphometWeather?.reroll();
-    const weather = await game.baphometWeather?.today();
-    if (weather) game.baphometWeather?.post();
+    await game.baphometWeather?.post();
     this.render({ force: true });
   }
 

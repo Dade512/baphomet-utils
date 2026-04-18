@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.9.0
+**Current Version:** 2.9.1
 
 ---
 
@@ -78,6 +78,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 
 ## Changelog
 
+### v2.9.1 — "The Reroll Stops Talking to Itself"
+- **Cleanup:** `weather-ui.js` `#onRerollToday` had a redundant `today()` call sandwiched between `reroll()` and `post()`. Since `post()` internally reads the same cache `reroll()` populates, the middle call was wasted work. Cleaner flow now: `reroll()` → `post()` → re-render.
+- **Fix:** The `post()` call in `#onRerollToday` was unawaited, which could let the panel re-render before the chat write completed. Now properly `await`-ed.
+- No user-visible behavior change — reroll still posts exactly one chat message. Internal only.
+
 ### v2.9.0 — "The Ledger Opens Its Desk"
 - **New:** `scripts/weather-ui.js` + `styles/weather-ui.css` — GM-facing weather configuration panel built on ApplicationV2. Access from Scene Controls → Token Tools → cloud icon. Change climate zones, toggle auto-post, reroll weather, post to chat — all without touching the console.
 - **Critical Fix:** `Math.clamp` → `Math.clamped` in condition tier clamping (`condition-overlay.js`) and cloud cover calculation (`weather-engine.js`). `Math.clamp` is not standard JS; Foundry provides `Math.clamped`. Could hard-fail condition application and weather generation.
@@ -148,7 +153,7 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 Pushing a version tag automatically builds and publishes a GitHub release:
 
 ```bash
-git tag v2.9.0
+git tag v2.9.1
 git push origin main --tags
 ```
 
@@ -156,7 +161,7 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 
 ---
 
-## Test Checklist (v2.9.0)
+## Test Checklist (v2.9.1)
 
 1. **Scene Controls button:** Log in as GM → Token Controls toolbar shows ☁ cloud icon → click opens Weather Config panel
 2. **Current weather display:** Panel shows today's temp/precip/wind/clouds (requires Simple Calendar active)
