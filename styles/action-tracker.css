@@ -1,7 +1,13 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.3
+   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.4
    Gaslamp Gothic | Croaker's Ledger edition.
    Burnt brass, cold iron, dried blood — on PARCHMENT.
+
+   v1.4 Changes:
+   - Added native <button> reset (padding/font/appearance) so
+     pip elements (now <button> instead of <div>) look identical
+     to before but are semantically correct clickable controls.
+   - Added :disabled state for non-owner pips.
 
    v1.3 Changes (Ledger pivot):
    - Pip row background changed from dark void to parchment inset
@@ -66,12 +72,21 @@
 }
 
 /* --- Base Pip ---
-   Physical objects on parchment need crisp borders to read. */
+   Physical objects on parchment need crisp borders to read.
+   v1.4: pips are now <button>, so reset native button defaults
+   (padding, font, appearance) so the coin styling lands clean. */
 .baph-pip {
   width: 13px;
   height: 13px;
   border-radius: 1px;
   cursor: pointer;
+  /* Button defaults reset */
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+  -webkit-appearance: none;
   /* Stronger border — coins pressed against a ledger page */
   border: 1.5px solid rgba(42, 35, 29, 0.35);
   /* Relief: physical coin sitting on parchment */
@@ -88,6 +103,18 @@
 .baph-pip:hover {
   border-color: rgba(42, 35, 29, 0.6);
   filter: brightness(1.1);
+}
+
+/* v1.4: explicit disabled state for non-owner pips.
+   Same look as base, but no hover lift and no pointer cursor. */
+.baph-pip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.baph-pip:disabled:hover {
+  filter: none;
+  border-color: rgba(42, 35, 29, 0.35);
 }
 
 /* --- Action Pips (Tarnished Brass) ---

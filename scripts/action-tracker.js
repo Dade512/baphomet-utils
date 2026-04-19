@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.3
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.4
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -7,6 +7,32 @@
    BEHAVIOR: Manual click-to-spend. Auto-reset on turn advance.
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated
              from baphomet-utils condition buffs to auto-lock pips.
+
+   v1.4 Changes:
+   - [CLICK FIX] Pips are now <button type="button"> elements
+     instead of <div>. Native buttons handle click events more
+     reliably in sidebar UIs (Foundry's combat tracker, modules
+     like Token Action HUD that may register their own delegated
+     handlers, accessibility tooling, etc.). Divs with attached
+     click listeners are a known fragility point.
+   - [CLICK FIX] Row-level event suppression slimmed from five
+     events (mousedown/mouseup/click/pointerdown/pointerup) to
+     just mousedown + click. Mousedown is the actual trigger for
+     Foundry's _onCombatantMouseDown (which opens the actor sheet);
+     click is the secondary guard. The other three were over-broad
+     and could conflict with delegated handlers from other modules.
+   - [CLICK FIX] _refreshPipRow re-derives isOwner from the live
+     combatant rather than reading from the old DOM's stale
+     dataset attribute. Defends against the failure mode where
+     an early initial render captured isOwner=false (before
+     game.user or combatant ownership was fully resolved) and
+     every subsequent refresh perpetuated the broken state with
+     no click handlers attached.
+   - [DIAGNOSTIC] Three temporary console.log calls trace the
+     manual-click chain (click handler → _togglePip state mutation
+     → _refreshPipRow DOM update). These help identify where the
+     reported click regression originates. Logs prefix [DIAG] and
+     will be removed in v1.5 once the root cause is confirmed.
 
    v1.3 Changes:
    - [HARDENING] Turn-change handling refactored to match the
@@ -195,6 +221,14 @@ function _applyConditionLocks(combatantId, actor) {
 
 /* ----------------------------------------------------------
    UI: BUILD PIP ROW
+
+   v1.4: pips are <button type="button"> instead of <div>.
+   Buttons are the semantically correct element for clickable
+   controls and are handled more reliably by Foundry's combat
+   tracker, sidebar modules, and accessibility tooling. The
+   action-tracker.css gets an `appearance: none; padding: 0;
+   font: inherit;` reset so button defaults don't override the
+   coin-on-parchment styling.
    ---------------------------------------------------------- */
 
 function _buildPipRow(combatantId, isOwner) {
@@ -207,7 +241,8 @@ function _buildPipRow(combatantId, isOwner) {
 
   // --- Action pips (3) ---
   state.actions.forEach((available, idx) => {
-    const pip = document.createElement('div');
+    const pip = document.createElement('button');
+    pip.type = 'button';
     pip.classList.add('baph-pip', 'action');
     pip.dataset.pipType = 'action';
     pip.dataset.pipIndex = idx;
@@ -222,10 +257,14 @@ function _buildPipRow(combatantId, isOwner) {
 
     if (isOwner) {
       pip.addEventListener('click', (e) => {
+        console.log(`${AT_MODULE_ID} | [DIAG] action pip click handler FIRED`, { combatantId, idx });
         e.preventDefault();
         e.stopPropagation();
         _togglePip(combatantId, 'action', idx);
       });
+    } else {
+      // Non-owner: visually present but explicitly inert.
+      pip.disabled = true;
     }
 
     row.appendChild(pip);
@@ -238,7 +277,8 @@ function _buildPipRow(combatantId, isOwner) {
 
   // --- Reaction pip ---
   state.reaction.forEach((available, idx) => {
-    const pip = document.createElement('div');
+    const pip = document.createElement('button');
+    pip.type = 'button';
     pip.classList.add('baph-pip', 'reaction');
     pip.dataset.pipType = 'reaction';
     pip.dataset.pipIndex = idx;
@@ -252,6 +292,8 @@ function _buildPipRow(combatantId, isOwner) {
         e.stopPropagation();
         _togglePip(combatantId, 'reaction', idx);
       });
+    } else {
+      pip.disabled = true;
     }
 
     row.appendChild(pip);
@@ -260,7 +302,8 @@ function _buildPipRow(combatantId, isOwner) {
   // --- Combat Reflexes pip ---
   if (state.combatReflex) {
     state.reflexPip.forEach((available, idx) => {
-      const pip = document.createElement('div');
+      const pip = document.createElement('button');
+      pip.type = 'button';
       pip.classList.add('baph-pip', 'combat-reflex');
       pip.dataset.pipType = 'reflex';
       pip.dataset.pipIndex = idx;
@@ -274,14 +317,20 @@ function _buildPipRow(combatantId, isOwner) {
           e.stopPropagation();
           _togglePip(combatantId, 'reflex', idx);
         });
+      } else {
+        pip.disabled = true;
       }
 
       row.appendChild(pip);
     });
   }
 
-  // Block event propagation on the entire row
-  ['mousedown', 'mouseup', 'click', 'pointerdown', 'pointerup'].forEach(evt => {
+  // v1.4: only block what's strictly needed.
+  // - mousedown: triggers Foundry's _onCombatantMouseDown (opens actor sheet)
+  // - click:     belt-and-suspenders for any other delegated combat-tracker handlers
+  // The previous over-broad list (mouseup/pointerdown/pointerup) could conflict
+  // with delegated handlers from other modules (Token Action HUD, etc.).
+  ['mousedown', 'click'].forEach(evt => {
     row.addEventListener(evt, (e) => e.stopPropagation());
   });
 
@@ -294,7 +343,10 @@ function _buildPipRow(combatantId, isOwner) {
 
 function _togglePip(combatantId, type, index) {
   const state = _getState(combatantId);
-  if (!state) return;
+  if (!state) {
+    console.log(`${AT_MODULE_ID} | [DIAG] _togglePip: NO STATE for ${combatantId}`);
+    return;
+  }
 
   if (type === 'action') {
     if (index < state.conditionLocked && !state.actions[index]) return;
@@ -305,20 +357,52 @@ function _togglePip(combatantId, type, index) {
     state.reflexPip[index] = !state.reflexPip[index];
   }
 
+  console.log(`${AT_MODULE_ID} | [DIAG] _togglePip: state mutated`, {
+    combatantId,
+    type,
+    index,
+    actions: [...state.actions],
+    reaction: [...state.reaction],
+  });
+
   _refreshPipRow(combatantId);
 }
 
+/* ----------------------------------------------------------
+   _refreshPipRow — v1.4
+
+   Re-derives isOwner from the LIVE combatant in the current
+   game.combat, not from the old DOM's stale dataset attribute.
+   Reasoning: if an early initial render somehow captured
+   isOwner=false (game.user not yet resolved, ownership flag
+   not yet propagated, etc.), the old code would perpetuate
+   that broken state on every refresh and the pips would never
+   become clickable. Re-derive each time so we self-heal.
+   Falls back to the dataset only if no combat context is
+   available (e.g., refresh fired during a shutdown race).
+   ---------------------------------------------------------- */
+
 function _refreshPipRow(combatantId) {
   const existing = document.querySelector(`.baph-action-tracker[data-combatant-id="${combatantId}"]`);
-  if (!existing) return;
+  if (!existing) {
+    console.log(`${AT_MODULE_ID} | [DIAG] _refreshPipRow: NO ELEMENT FOUND for ${combatantId}`);
+    return;
+  }
 
   const parent = existing.parentElement;
-  const isOwner = existing.dataset.isOwner === 'true';
+
+  // v1.4: re-derive isOwner from live state, not stale DOM.
+  const combat = game.combat;
+  const combatant = combat?.combatants.get(combatantId);
+  const isOwner = combatant
+    ? (game.user.isGM || combatant.isOwner)
+    : (existing.dataset.isOwner === 'true');
 
   const newRow = _buildPipRow(combatantId, isOwner);
   if (newRow) {
     newRow.dataset.isOwner = String(isOwner);
     parent.replaceChild(newRow, existing);
+    console.log(`${AT_MODULE_ID} | [DIAG] _refreshPipRow: DOM replaced for ${combatantId}, isOwner=${isOwner}`);
   }
 }
 
@@ -567,5 +651,5 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${AT_MODULE_ID} | Action Tracker v1.3 ready`);
+  console.log(`${AT_MODULE_ID} | Action Tracker v1.4 ready`);
 });
