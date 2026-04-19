@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.9.2
+**Current Version:** 2.9.4
 
 ---
 
@@ -11,7 +11,7 @@ Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** �
 
 Manifest URL:
 ```
-https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
+https://raw.githubusercontent.com/Dade512/baphomet-utils/main/module.json
 ```
 
 ---
@@ -77,6 +77,19 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.9.4 — "Hardening Pass"
+- **Bug fix (weather):** the SC date-time-change hook's day-marker (`lastPostedDate`) was only updated when chat posting was enabled. With chat off, the marker never advanced — so every subsequent SC time bump (including 6-second combat ticks) re-entered the full handler, re-read settings, and re-called `generateTodayWeather`. Worse, re-enabling chat mid-day could surprise the GM with a back-posted weather card. Renamed to `lastProcessedDate` and updated unconditionally; days are now marked processed regardless of whether they were posted. The v2.9.2 combat-spam guard now actually short-circuits cleanly in both toggle states.
+- **Hardening (action tracker):** turn-change handler refactored to match the v2.5 condition-overlay pattern. Previously, the `combatTurn` fallback was gated by `Hooks.events['pf1PostTurnChange']?.length > 1` — a brittle check that counts ANY listeners on the hook, including ones from unrelated modules, and could fail open or fail closed depending on load order. New approach: all three turn-related hooks fire unconditionally; a dedupe Set keyed on `(combatId, round, turn, activeCombatantId)` ensures only the first hook to arrive does the work.
+- **Leak fix (condition overlay):** the Token HUD condition panel's `MutationObserver` was a closure-local variable. Manually closing the panel (clicking the button again) removed the panel but left the observer attached until the HUD itself mutated. Hoisted the observer reference to the outer scope and added a shared `_teardown()` so both close paths disconnect cleanly.
+- **New file:** `scripts/dom-utils.js` — tiny shared helper `_baphNormalizeHtml(html)` that coerces a hook's html argument to a native `HTMLElement`, with a `globalThis.jQuery`-guarded jQuery unwrap. Replaces inline `instanceof jQuery` checks in action-tracker and condition-overlay. Loaded first in `module.json`'s scripts array so other files can call it at top level.
+- No user-facing behavior changes other than the weather state-marker fix. All other changes are internal hardening that should make future Foundry updates and module-interaction edge cases less prone to regression.
+
+### v2.9.3 — "The Reroll Actually Rerolls"
+- **Bug fix:** the Reroll button (and `game.baphometWeather.reroll()`) was producing the same weather every time. The weather seed was deterministic on `(year, dayOfYear, climateName)` — calling `generateTodayWeather(true)` correctly skipped the cache, but then re-derived the same seed and ran the same RNG stream, so output was identical. Added a per-day `rerollSalt` to the weather state, included in the seed string. Salt increments on each forced reroll within a day, resets to 0 when the calendar day changes.
+- Same-day cache reads after a reroll still return the rerolled weather — closing and reopening the Weather Config UI no longer drifts back to the canonical (salt 0) variant.
+- `setClimate` intentionally does NOT bump the salt. Switching climate should land on that climate's canonical weather for today, not on "reroll #N of the previous climate's history."
+- Console log now appends `[reroll #N]` to the daily weather line when salt > 0, for debugging.
 
 ### v2.9.2 — "Stop Telling Me About the Weather Every Six Seconds"
 - **Bug fix:** Weather card was posting to chat after every combat turn. PF1e's combat tracker advances the in-game clock by ~6 seconds per turn, and SCR fires `simple-calendar-date-time-change` on ANY time change — not just date changes. The hook handler now tracks `lastPostedDate` in module state and only posts when the calendar day actually changes. Removed the `force=true` from the hook's regenerate call so the engine's own date cache also short-circuits intra-day re-runs. Belt and suspenders.

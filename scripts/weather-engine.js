@@ -1,7 +1,37 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — WEATHER ENGINE v1.2
+   ECHOES OF BAPHOMET — WEATHER ENGINE v1.4
    Season-aware, climate-zone-based weather generation
    integrated with Simple Calendar.
+
+   v1.4 Changes:
+   - [BUG FIX] State field `lastPostedDate` renamed to
+     `lastProcessedDate`, and the date marker is now updated
+     unconditionally after the SC hook handles a day, not gated
+     by `postToChat`. Previously: when chat posting was OFF, the
+     marker never advanced, so every subsequent SC time-change
+     hook (including 6-second combat ticks) would re-enter the
+     full handler, re-read settings, and re-call generateTodayWeather
+     (cache hit, but still wasted work). Worse, re-enabling chat
+     mid-day could surprise the GM with a back-posted weather card
+     for that day. Now: any time the hook handles a date, that date
+     is marked processed regardless of whether we posted.
+   - The old `lastPostedDate` field on existing saved state will
+     simply be ignored — first hook fire on a new day self-heals
+     by writing `lastProcessedDate`. No migration needed.
+
+   v1.3 Changes:
+   - [BUG FIX] Reroll button now actually rerolls. The seed was
+     deterministic on (year, dayOfYear, climateName), so calling
+     generateTodayWeather(true) skipped the cache but produced
+     identical output every time. Added a per-day rerollSalt to
+     the state, included in the seed. Salt increments on each
+     forced reroll within a day, resets to 0 when the day changes.
+     Same-day cache hits (UI re-opens, idempotent reads) still
+     return the cached rerolled weather rather than drifting back
+     to the canonical (salt 0) variant.
+   - setClimate intentionally does NOT bump the salt — climate
+     changes should land on the canonical variant for that climate,
+     not on reroll #N of the previous climate's history.
 
    v1.2 Changes:
    - [BUG FIX] Day-change hook no longer fires on every time bump.
@@ -72,9 +102,9 @@ function _mulberry32(seed) {
   };
 }
 
-function _getWeatherSeed(year, dayOfYear, climateName) {
+function _getWeatherSeed(year, dayOfYear, climateName, rerollSalt = 0) {
   let hash = 0;
-  const str = `${year}-${dayOfYear}-${climateName}`;
+  const str = `${year}-${dayOfYear}-${climateName}-${rerollSalt}`;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
@@ -87,7 +117,7 @@ function _getWeatherSeed(year, dayOfYear, climateName) {
    WEATHER GENERATION
    ---------------------------------------------------------- */
 
-function generateWeather(year, monthIndex, day, climateKey) {
+function generateWeather(year, monthIndex, day, climateKey, rerollSalt = 0) {
   const climate = GOLARION_CLIMATES[climateKey];
   if (!climate) {
     console.warn(`${WE_MODULE_ID} | Weather: Unknown climate zone "${climateKey}"`);
@@ -108,7 +138,7 @@ function generateWeather(year, monthIndex, day, climateKey) {
   let dayOfYear = day;
   for (let i = 0; i < monthIndex; i++) dayOfYear += monthLengths[i];
 
-  const seed = _getWeatherSeed(year, dayOfYear, climateKey);
+  const seed = _getWeatherSeed(year, dayOfYear, climateKey, rerollSalt);
   const rng = _mulberry32(seed);
 
   // Temperature
@@ -192,7 +222,8 @@ async function _getWeatherState() {
     climateZone: 'temperate',
     lastWeather: null,
     lastDate: null,
-    lastPostedDate: null,
+    lastProcessedDate: null,
+    rerollSalt: 0,
     postToChat: true,
   };
 }
@@ -228,19 +259,43 @@ async function generateTodayWeather(forceRegenerate = false) {
 
   const state = await _getWeatherState();
   const dateKey = `${date.year}-${date.monthIndex}-${date.day}`;
+  const isNewDay = state.lastDate !== dateKey;
 
-  if (!forceRegenerate && state.lastDate === dateKey && state.lastWeather) {
+  // Day change: reset the reroll salt so each new day starts at the
+  // canonical (salt 0) variant. Without this the salt would keep
+  // climbing forever across the campaign.
+  if (isNewDay) {
+    state.rerollSalt = 0;
+  }
+
+  // Cache hit: same day, no force, weather already generated → return as-is.
+  // This is the path the SC date-time-change hook takes during combat ticks
+  // (no force, same dateKey) and the path the UI takes when re-opening
+  // within a day after a reroll (returns the rerolled cached value, not
+  // a drift back to the canonical).
+  if (!forceRegenerate && !isNewDay && state.lastWeather) {
     return state.lastWeather;
   }
 
-  const weather = generateWeather(date.year, date.monthIndex, date.day, state.climateZone);
+  // Forced reroll on the same day: bump the salt so the seed changes
+  // and the RNG stream produces a different weather draw.
+  // Forced regen on a new day (e.g. setClimate fired right after midnight)
+  // keeps salt at 0 — we already reset above and don't want to skip the
+  // canonical variant for the new day.
+  if (forceRegenerate && !isNewDay) {
+    state.rerollSalt = (state.rerollSalt ?? 0) + 1;
+  }
+
+  const salt = state.rerollSalt ?? 0;
+  const weather = generateWeather(date.year, date.monthIndex, date.day, state.climateZone, salt);
   if (!weather) return null;
 
   state.lastWeather = weather;
   state.lastDate = dateKey;
   await _setWeatherState(state);
 
-  console.log(`${WE_MODULE_ID} | Weather: ${weather.monthName} ${weather.day}, ${weather.year} — ${weather.highTemp}°F/${weather.lowTemp}°F, ${weather.precipDesc} (${weather.climateName})`);
+  const saltTag = salt > 0 ? ` [reroll #${salt}]` : '';
+  console.log(`${WE_MODULE_ID} | Weather: ${weather.monthName} ${weather.day}, ${weather.year} — ${weather.highTemp}°F/${weather.lowTemp}°F, ${weather.precipDesc} (${weather.climateName})${saltTag}`);
   return weather;
 }
 
@@ -297,11 +352,12 @@ Hooks.once('init', () => {
       climateZone: 'temperate',
       lastWeather: null,
       lastDate: null,
-      lastPostedDate: null,
+      lastProcessedDate: null,
+      rerollSalt: 0,
       postToChat: true,
     }
   });
-  console.log(`${WE_MODULE_ID} | Weather Engine v1.2: Settings registered`);
+  console.log(`${WE_MODULE_ID} | Weather Engine v1.4: Settings registered`);
 });
 
 Hooks.once('ready', async () => {
@@ -310,9 +366,9 @@ Hooks.once('ready', async () => {
   const weather = await generateTodayWeather();
   const state = await _getWeatherState();
   if (weather) {
-    console.log(`${WE_MODULE_ID} | Weather Engine v1.2 ready — ${weather.climateName}, ${weather.season}`);
+    console.log(`${WE_MODULE_ID} | Weather Engine v1.4 ready — ${weather.climateName}, ${weather.season}`);
   } else {
-    console.log(`${WE_MODULE_ID} | Weather Engine v1.2 ready — no Simple Calendar date available`);
+    console.log(`${WE_MODULE_ID} | Weather Engine v1.4 ready — no Simple Calendar date available`);
   }
 
   // Expose API
@@ -400,20 +456,25 @@ Hooks.on('simple-calendar-date-time-change', async (data) => {
   const dateKey = `${date.year}-${date.monthIndex}-${date.day}`;
   const state = await _getWeatherState();
 
-  // If the calendar day hasn't changed since the last post, do nothing.
-  // This catches every intra-day time bump (combat turns, manual
-  // minute/hour advances, etc.) without firing a redundant post.
-  if (state.lastPostedDate === dateKey) return;
+  // If the calendar day hasn't changed since we last processed it,
+  // do nothing. This catches every intra-day time bump (combat
+  // turns, manual minute/hour advances, etc.) regardless of whether
+  // the chat-posting toggle is on or off.
+  if (state.lastProcessedDate === dateKey) return;
 
   const weather = await generateTodayWeather();
   if (!weather) return;
 
-  if (state.postToChat) {
+  // Refresh state since generateTodayWeather may have updated it.
+  const updatedState = await _getWeatherState();
+
+  // Mark this date processed BEFORE the (optional) chat post so
+  // even a postToChat=false day still short-circuits the next tick.
+  updatedState.lastProcessedDate = dateKey;
+
+  if (updatedState.postToChat) {
     _postWeatherToChat(weather);
-    // Refresh state since generateTodayWeather may have updated it,
-    // then mark this date as posted so we don't post again today.
-    const updatedState = await _getWeatherState();
-    updatedState.lastPostedDate = dateKey;
-    await _setWeatherState(updatedState);
   }
+
+  await _setWeatherState(updatedState);
 });

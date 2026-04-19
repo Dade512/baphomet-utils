@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.2
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.3
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -7,6 +7,23 @@
    BEHAVIOR: Manual click-to-spend. Auto-reset on turn advance.
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated
              from baphomet-utils condition buffs to auto-lock pips.
+
+   v1.3 Changes:
+   - [HARDENING] Turn-change handling refactored to match the
+     condition-overlay v2.5 pattern. Previously, the combatTurn
+     fallback was gated by `Hooks.events['pf1PostTurnChange']?.length > 1`
+     — a brittle check that counts ANY listeners on that hook,
+     including ones from unrelated modules. Could fail open
+     (no reset fires) or fail closed (double reset) depending on
+     module load order.
+     New approach: all three hooks (pf1PostTurnChange, combatTurn,
+     combatRound) fire unconditionally. A dedupe Set keyed on
+     (combatId, round, turn, activeCombatantId) ensures only the
+     first hook to arrive does the work; the rest no-op cleanly.
+   - [HARDENING] DOM normalization for the renderCombatTracker
+     hook now uses the shared _baphNormalizeHtml helper
+     (scripts/dom-utils.js) instead of an inline jQuery instanceof
+     check. Centralized + globalThis.jQuery guarded.
 
    v1.2 Changes:
    - [UI BUG FIX] Pip row injected as full-width block BELOW the
@@ -334,9 +351,7 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
   const combat = game.combat;
   if (!combat) return;
 
-  const root = html instanceof HTMLElement ? html
-    : html instanceof jQuery ? html[0]
-    : html;
+  const root = _baphNormalizeHtml(html);
   if (!root) return;
 
   const combatantEntries = root.querySelectorAll('.combatant, [data-combatant-id]');
@@ -424,33 +439,47 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 
 /* ----------------------------------------------------------
    TURN ADVANCE: AUTO-RESET + CONDITION APPLICATION
+   v1.3: dedupe-Set pattern (mirrors condition-overlay).
    ---------------------------------------------------------- */
+
+const _turnChangeProcessed = new Set();
 
 Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
   if (!game.user.isGM) return;
-  _handleTurnChange(combat, current.combatantId);
+  _handleTurnChange(combat, current?.combatantId, 'pf1PostTurnChange');
 });
 
 Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
-  if (Hooks.events['pf1PostTurnChange']?.length > 1) return;
   if (!game.user.isGM) return;
 
-  const currentTurn = combat.current?.turn ?? updateData.turn;
+  const currentTurn = combat.current?.turn ?? updateData?.turn;
   if (currentTurn == null) return;
 
   const currentCombatant = combat.turns[currentTurn];
-  if (currentCombatant) _handleTurnChange(combat, currentCombatant.id);
+  if (currentCombatant) _handleTurnChange(combat, currentCombatant.id, 'combatTurn');
 });
 
 Hooks.on('combatRound', (combat, updateData, updateOptions) => {
   if (!game.user.isGM) return;
   const currentTurn = combat.current?.turn ?? 0;
   const currentCombatant = combat.turns[currentTurn];
-  if (currentCombatant) _handleTurnChange(combat, currentCombatant.id);
+  if (currentCombatant) _handleTurnChange(combat, currentCombatant.id, 'combatRound');
 });
 
-function _handleTurnChange(combat, activeCombatantId) {
+function _handleTurnChange(combat, activeCombatantId, source) {
   if (!activeCombatantId) return;
+
+  // Dedupe: all three hooks may fire for the same turn change.
+  // Whichever arrives first wins; the rest no-op.
+  const dedupeKey = `${combat.id}-${combat.round}-${combat.turn}-${activeCombatantId}`;
+  if (_turnChangeProcessed.has(dedupeKey)) return;
+  _turnChangeProcessed.add(dedupeKey);
+
+  // Trim the Set so it doesn't grow unbounded across long campaigns.
+  if (_turnChangeProcessed.size > 50) {
+    const entries = [..._turnChangeProcessed];
+    entries.slice(0, entries.length - 20).forEach(k => _turnChangeProcessed.delete(k));
+  }
 
   const combatant = combat.combatants.get(activeCombatantId);
   if (!combatant?.actor) return;
@@ -538,5 +567,5 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${AT_MODULE_ID} | Action Tracker v1.2 ready`);
+  console.log(`${AT_MODULE_ID} | Action Tracker v1.3 ready`);
 });

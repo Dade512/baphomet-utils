@@ -1,6 +1,18 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.5
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.6
    Applies PF2e-style conditions as PF1e system Buffs.
+
+   v2.6 Changes:
+   - [LEAK FIX] Token HUD condition panel's MutationObserver was
+     created on each open as a closure-local variable. Manual
+     close (clicking the button again) removed the panel but
+     did NOT disconnect the observer — it would linger until
+     the HUD itself mutated. Hoisted the observer reference to
+     the outer scope so both manual-close and HUD-mediated-close
+     paths can disconnect cleanly.
+   - [HARDENING] DOM normalization for the renderTokenHUD hook
+     now uses the shared _baphNormalizeHtml helper
+     (scripts/dom-utils.js) instead of an inline guard.
 
    v2.5 Changes:
    - [BUG FIX] Auto-decrement (Frightened, Stunned) was not
@@ -606,7 +618,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.5`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.6`);
 });
 
 Hooks.once('ready', () => {
@@ -633,7 +645,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.5 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.6 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
@@ -647,24 +659,35 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
   const actor = token.actor;
   if (!actor) return;
 
-  const hudElement = html instanceof HTMLElement ? html : (html[0] ?? html);
+  const hudElement = _baphNormalizeHtml(html);
+  if (!hudElement) return;
 
   const btn = document.createElement('div');
   btn.classList.add('control-icon', 'baph-condition-hud-btn');
   btn.title = 'PF1.5 Conditions';
   btn.innerHTML = '<i class="fas fa-head-side-virus"></i>';
 
+  // v2.6: hoist these to the outer closure so manual-close can
+  // disconnect the observer (previously a closure-local that
+  // leaked until the HUD itself mutated).
   let panelOpen = false;
   let panelContainer = null;
+  let hudCloseObserver = null;
+
+  const _teardown = () => {
+    hudCloseObserver?.disconnect();
+    hudCloseObserver = null;
+    panelContainer?.remove();
+    panelContainer = null;
+    panelOpen = false;
+  };
 
   btn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
 
     if (panelOpen && panelContainer) {
-      panelContainer.remove();
-      panelContainer = null;
-      panelOpen = false;
+      _teardown();
       return;
     }
 
@@ -686,12 +709,9 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
 
     panelOpen = true;
 
-    const hudCloseObserver = new MutationObserver(() => {
+    hudCloseObserver = new MutationObserver(() => {
       if (!document.contains(hudElement) || !hudElement.querySelector('.baph-condition-hud-btn')) {
-        panelContainer?.remove();
-        panelContainer = null;
-        panelOpen = false;
-        hudCloseObserver.disconnect();
+        _teardown();
       }
     });
     hudCloseObserver.observe(hudElement.parentElement ?? document.body, { childList: true, subtree: true });
