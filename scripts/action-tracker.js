@@ -1,12 +1,35 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.4
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.5
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
    LOCATION: Injected BELOW combatant name row in Combat Tracker sidebar
-   BEHAVIOR: Manual click-to-spend. Auto-reset on turn advance.
-             Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated
-             from baphomet-utils condition buffs to auto-lock pips.
+   BEHAVIOR: Manual click-to-spend. Auto-reset on the combatant's next
+             turn start (NOT on round-advance — reactions spent during
+             other creatures' turns should persist until this combatant
+             acts again, per PF2-style reaction economy).
+             Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
+             baphomet-utils condition buffs to auto-lock pips.
+
+   v1.5 Changes:
+   - [BUG FIX] _refreshPipRow was using querySelector (single-match),
+     which meant that when the Encounter Tracker was popped out into
+     its own window, only ONE of the two rendered pip rows would
+     update on click. The click reached the right state (state is
+     keyed on combatantId and shared between both rows), but the
+     DOM refresh only hit the first match in document order. Result:
+     the popout visibly desynced from the sidebar and from the truth.
+     Switched to querySelectorAll and now replaces ALL matching rows.
+   - [BUG FIX] Turn-change hooks (combatTurn, combatRound) could
+     throw "Cannot read properties of undefined (reading '0')" when
+     fired during a transient state where combat.turns is briefly
+     undefined or empty — observed specifically in combination with
+     monks-combat-details, which triggers initiative re-rolls on
+     round advance. Added Array.isArray + length guards before any
+     turns[] access, plus index clamping to valid range.
+   - [CLEANUP] Removed [DIAG] console.log calls from the manual-click
+     chain. v1.4's button conversion + isOwner re-derivation fixed
+     the click bug; the diagnostics served their purpose and can go.
 
    v1.4 Changes:
    - [CLICK FIX] Pips are now <button type="button"> elements
@@ -257,7 +280,6 @@ function _buildPipRow(combatantId, isOwner) {
 
     if (isOwner) {
       pip.addEventListener('click', (e) => {
-        console.log(`${AT_MODULE_ID} | [DIAG] action pip click handler FIRED`, { combatantId, idx });
         e.preventDefault();
         e.stopPropagation();
         _togglePip(combatantId, 'action', idx);
@@ -343,10 +365,7 @@ function _buildPipRow(combatantId, isOwner) {
 
 function _togglePip(combatantId, type, index) {
   const state = _getState(combatantId);
-  if (!state) {
-    console.log(`${AT_MODULE_ID} | [DIAG] _togglePip: NO STATE for ${combatantId}`);
-    return;
-  }
+  if (!state) return;
 
   if (type === 'action') {
     if (index < state.conditionLocked && !state.actions[index]) return;
@@ -357,53 +376,48 @@ function _togglePip(combatantId, type, index) {
     state.reflexPip[index] = !state.reflexPip[index];
   }
 
-  console.log(`${AT_MODULE_ID} | [DIAG] _togglePip: state mutated`, {
-    combatantId,
-    type,
-    index,
-    actions: [...state.actions],
-    reaction: [...state.reaction],
-  });
-
   _refreshPipRow(combatantId);
 }
 
 /* ----------------------------------------------------------
-   _refreshPipRow — v1.4
+   _refreshPipRow — v1.5
 
-   Re-derives isOwner from the LIVE combatant in the current
-   game.combat, not from the old DOM's stale dataset attribute.
-   Reasoning: if an early initial render somehow captured
-   isOwner=false (game.user not yet resolved, ownership flag
-   not yet propagated, etc.), the old code would perpetuate
-   that broken state on every refresh and the pips would never
-   become clickable. Re-derive each time so we self-heal.
-   Falls back to the dataset only if no combat context is
-   available (e.g., refresh fired during a shutdown race).
+   Rebuilds every pip row currently rendered for this combatant.
+   Important when the Encounter Tracker is popped out: the same
+   combatant is rendered TWICE (once in the sidebar tracker, once
+   in the popout window), and both need to be replaced. State is
+   already shared between the two — pipState is keyed on
+   combatantId — so the fix is purely in the DOM write step.
+
+   Re-derives isOwner from the live combatant each time, not from
+   the old DOM's stale dataset. Defends against a perpetuation
+   failure mode where an early render captured isOwner=false
+   before game.user or ownership fully resolved, which would
+   otherwise carry forward forever with no click handlers.
+   Falls back to the dataset only if no combat context is available.
    ---------------------------------------------------------- */
 
 function _refreshPipRow(combatantId) {
-  const existing = document.querySelector(`.baph-action-tracker[data-combatant-id="${combatantId}"]`);
-  if (!existing) {
-    console.log(`${AT_MODULE_ID} | [DIAG] _refreshPipRow: NO ELEMENT FOUND for ${combatantId}`);
-    return;
-  }
+  const rows = document.querySelectorAll(`.baph-action-tracker[data-combatant-id="${combatantId}"]`);
+  if (!rows.length) return;
 
-  const parent = existing.parentElement;
-
-  // v1.4: re-derive isOwner from live state, not stale DOM.
   const combat = game.combat;
   const combatant = combat?.combatants.get(combatantId);
-  const isOwner = combatant
-    ? (game.user.isGM || combatant.isOwner)
-    : (existing.dataset.isOwner === 'true');
 
-  const newRow = _buildPipRow(combatantId, isOwner);
-  if (newRow) {
+  rows.forEach(existing => {
+    const parent = existing.parentElement;
+    if (!parent) return;
+
+    const isOwner = combatant
+      ? (game.user.isGM || combatant.isOwner)
+      : (existing.dataset.isOwner === 'true');
+
+    const newRow = _buildPipRow(combatantId, isOwner);
+    if (!newRow) return;
+
     newRow.dataset.isOwner = String(isOwner);
     parent.replaceChild(newRow, existing);
-    console.log(`${AT_MODULE_ID} | [DIAG] _refreshPipRow: DOM replaced for ${combatantId}, isOwner=${isOwner}`);
-  }
+  });
 }
 
 /* ----------------------------------------------------------
@@ -536,17 +550,29 @@ Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
 Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
   if (!game.user.isGM) return;
 
-  const currentTurn = combat.current?.turn ?? updateData?.turn;
-  if (currentTurn == null) return;
+  // v1.5: guard against transient undefined combat.turns. Seen with
+  // monks-combat-details triggering initiative re-rolls on new rounds,
+  // which briefly leaves combat.turns undefined while the hook fires.
+  const turns = combat?.turns;
+  if (!Array.isArray(turns) || !turns.length) return;
 
-  const currentCombatant = combat.turns[currentTurn];
+  const currentTurn = combat.current?.turn ?? updateData?.turn;
+  if (currentTurn == null || currentTurn < 0 || currentTurn >= turns.length) return;
+
+  const currentCombatant = turns[currentTurn];
   if (currentCombatant) _handleTurnChange(combat, currentCombatant.id, 'combatTurn');
 });
 
 Hooks.on('combatRound', (combat, updateData, updateOptions) => {
   if (!game.user.isGM) return;
+
+  // v1.5: guard against transient undefined combat.turns.
+  const turns = combat?.turns;
+  if (!Array.isArray(turns) || !turns.length) return;
+
   const currentTurn = combat.current?.turn ?? 0;
-  const currentCombatant = combat.turns[currentTurn];
+  const safeTurn = Math.max(0, Math.min(currentTurn, turns.length - 1));
+  const currentCombatant = turns[safeTurn];
   if (currentCombatant) _handleTurnChange(combat, currentCombatant.id, 'combatRound');
 });
 
@@ -651,5 +677,5 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${AT_MODULE_ID} | Action Tracker v1.4 ready`);
+  console.log(`${AT_MODULE_ID} | Action Tracker v1.5 ready`);
 });

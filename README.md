@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.9.5
+**Current Version:** 2.9.6
 
 ---
 
@@ -77,6 +77,12 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.9.6 — "Twin Trackers, Safer Hooks"
+- **Bug fix (action tracker popout desync):** when the Encounter Tracker was popped out into its own window, clicking a pip would only update the sidebar tracker or the popout — not both. The click reached the right state (state is keyed on combatantId and shared between the two rendered rows), but `_refreshPipRow` was using `querySelector`, which only returns the first match in document order. Switched to `querySelectorAll` and the function now replaces every matching row. Sidebar and popout stay in sync regardless of where the click happens.
+- **Bug fix (turn-hook crashes):** `combatTurn` and `combatRound` handlers in both `action-tracker.js` and `condition-overlay.js` could throw `Cannot read properties of undefined (reading 'length')` / `(reading '0')` during a transient state where `combat.turns` is briefly undefined or empty. Observed specifically when `monks-combat-details` triggers initiative re-rolls on round advance. Added `Array.isArray` + length guards and index clamping in all four hook paths. The hooks now no-op safely when combat data isn't ready, rather than throwing.
+- **Cleanup:** removed `[DIAG]` diagnostic console.log calls from the action tracker's manual-click chain. v1.4's button conversion + isOwner re-derivation fixed the click bug; the diagnostics served their purpose and are no longer needed.
+- **Documented:** pip reset timing is at the start of the creature's own next turn (correct for PF2-style reaction economy — reactions spent during other creatures' turns should persist until this combatant acts again). This was already the behavior; the behavior docstring just made it explicit.
 
 ### v2.9.5 — "Coins, Not Cards"
 - **Action tracker pips converted from `<div>` to `<button type="button">`.** Manual pip clicks were reported as unresponsive after a recent update. Native buttons handle clicks more reliably than divs in the combat-tracker sidebar — Foundry's built-in handlers, Token Action HUD, accessibility tooling, and various delegated event paths all expect real button elements. The CSS gets a small `appearance: none; padding: 0; font: inherit;` reset so the coin-on-parchment styling lands identically.

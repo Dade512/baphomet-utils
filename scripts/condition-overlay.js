@@ -1,6 +1,15 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.6
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.7
    Applies PF2e-style conditions as PF1e system Buffs.
+
+   v2.7 Changes:
+   - [BUG FIX] Turn/round hooks (combatTurn, combatRound) could
+     throw "Cannot read properties of undefined (reading 'length')"
+     during a transient state where combat.turns is briefly
+     undefined or empty — observed with monks-combat-details
+     triggering initiative re-rolls on round advance. Added
+     Array.isArray + length guards in _getPriorCombatantId and
+     in the combatRound handler before any turns[] access.
 
    v2.6 Changes:
    - [LEAK FIX] Token HUD condition panel's MutationObserver was
@@ -618,7 +627,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.6`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.7`);
 });
 
 Hooks.once('ready', () => {
@@ -645,7 +654,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.6 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.7 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
@@ -780,17 +789,17 @@ async function _handleAutoDecrement(combat, priorCombatantId, source) {
 }
 
 function _getPriorCombatantId(combat, updateData) {
+  // v2.7: guard against transient undefined combat.turns. Seen with
+  // monks-combat-details triggering initiative re-rolls on new rounds,
+  // which briefly leaves combat.turns undefined while the hook fires.
+  const turns = combat?.turns;
+  if (!Array.isArray(turns) || !turns.length) return null;
+
   const currentTurn = combat.current?.turn ?? updateData?.turn ?? 0;
+  const safeCurrentTurn = Math.max(0, Math.min(currentTurn, turns.length - 1));
 
-  let prevTurn;
-  if (currentTurn === 0) {
-    prevTurn = combat.turns.length - 1;
-  } else {
-    prevTurn = currentTurn - 1;
-  }
-
-  const priorCombatant = combat.turns[prevTurn];
-  return priorCombatant?.id ?? null;
+  const prevTurn = safeCurrentTurn === 0 ? turns.length - 1 : safeCurrentTurn - 1;
+  return turns[prevTurn]?.id ?? null;
 }
 
 Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
@@ -809,8 +818,12 @@ Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
 
 Hooks.on('combatRound', (combat, updateData, updateOptions) => {
   console.log(`${MODULE_ID} | Hook fired: combatRound`, { turn: combat.current?.turn, round: combat.current?.round });
-  
-  const lastCombatant = combat.turns[combat.turns.length - 1];
+
+  // v2.7: guard against transient undefined combat.turns.
+  const turns = combat?.turns;
+  if (!Array.isArray(turns) || !turns.length) return;
+
+  const lastCombatant = turns[turns.length - 1];
   const priorId = lastCombatant?.id ?? null;
   _handleAutoDecrement(combat, priorId, 'combatRound');
 });
