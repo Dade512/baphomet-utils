@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.9.1
+**Current Version:** 2.9.2
 
 ---
 
@@ -77,6 +77,10 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.9.2 — "Stop Telling Me About the Weather Every Six Seconds"
+- **Bug fix:** Weather card was posting to chat after every combat turn. PF1e's combat tracker advances the in-game clock by ~6 seconds per turn, and SCR fires `simple-calendar-date-time-change` on ANY time change — not just date changes. The hook handler now tracks `lastPostedDate` in module state and only posts when the calendar day actually changes. Removed the `force=true` from the hook's regenerate call so the engine's own date cache also short-circuits intra-day re-runs. Belt and suspenders.
+- No user-visible change to normal day-advance behavior. Just no more chat spam during combat.
 
 ### v2.9.1 — "The Reroll Stops Talking to Itself"
 - **Cleanup:** `weather-ui.js` `#onRerollToday` had a redundant `today()` call sandwiched between `reroll()` and `post()`. Since `post()` internally reads the same cache `reroll()` populates, the middle call was wasted work. Cleaner flow now: `reroll()` → `post()` → re-render.
@@ -153,7 +157,7 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 Pushing a version tag automatically builds and publishes a GitHub release:
 
 ```bash
-git tag v2.9.1
+git tag v2.9.2
 git push origin main --tags
 ```
 
@@ -161,7 +165,7 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 
 ---
 
-## Test Checklist (v2.9.1)
+## Test Checklist (v2.9.2)
 
 1. **Scene Controls button:** Log in as GM → Token Controls toolbar shows ☁ cloud icon → click opens Weather Config panel
 2. **Current weather display:** Panel shows today's temp/precip/wind/clouds (requires Simple Calendar active)

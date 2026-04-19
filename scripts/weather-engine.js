@@ -1,7 +1,18 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — WEATHER ENGINE v1.1
+   ECHOES OF BAPHOMET — WEATHER ENGINE v1.2
    Season-aware, climate-zone-based weather generation
    integrated with Simple Calendar.
+
+   v1.2 Changes:
+   - [BUG FIX] Day-change hook no longer fires on every time bump.
+     SCR's `simple-calendar-date-time-change` hook fires on ANY
+     time advance, including the 6-second turn ticks from the
+     PF1e combat tracker. Result: weather card posted to chat
+     after every combat turn. Now gated by a `lastPostedDate`
+     check in module state — we only post when the calendar day
+     actually changes. Removed the `force=true` from the hook's
+     generateTodayWeather call so the engine's own date cache
+     also short-circuits intra-day re-runs.
 
    v1.1 Changes:
    - [BUG FIX] Math.clamp → Math.clamped (Foundry API).
@@ -181,6 +192,7 @@ async function _getWeatherState() {
     climateZone: 'temperate',
     lastWeather: null,
     lastDate: null,
+    lastPostedDate: null,
     postToChat: true,
   };
 }
@@ -285,10 +297,11 @@ Hooks.once('init', () => {
       climateZone: 'temperate',
       lastWeather: null,
       lastDate: null,
+      lastPostedDate: null,
       postToChat: true,
     }
   });
-  console.log(`${WE_MODULE_ID} | Weather Engine v1.1: Settings registered`);
+  console.log(`${WE_MODULE_ID} | Weather Engine v1.2: Settings registered`);
 });
 
 Hooks.once('ready', async () => {
@@ -297,9 +310,9 @@ Hooks.once('ready', async () => {
   const weather = await generateTodayWeather();
   const state = await _getWeatherState();
   if (weather) {
-    console.log(`${WE_MODULE_ID} | Weather Engine v1.1 ready — ${weather.climateName}, ${weather.season}`);
+    console.log(`${WE_MODULE_ID} | Weather Engine v1.2 ready — ${weather.climateName}, ${weather.season}`);
   } else {
-    console.log(`${WE_MODULE_ID} | Weather Engine v1.1 ready — no Simple Calendar date available`);
+    console.log(`${WE_MODULE_ID} | Weather Engine v1.2 ready — no Simple Calendar date available`);
   }
 
   // Expose API
@@ -368,14 +381,39 @@ Hooks.once('ready', async () => {
 });
 
 /* ── Simple Calendar date change hook ────────────────────── */
+//
+// SCR fires this hook on ANY time change — not just date changes.
+// Combat tracker turn advances bump the clock by 6s each, which would
+// re-post weather every turn. We guard against that by:
+//   1. Calling generateTodayWeather() WITHOUT force, so its internal
+//      `lastDate === dateKey` cache check skips regeneration when
+//      the date hasn't changed.
+//   2. Tracking the last-posted date in module state and only posting
+//      to chat when that key actually changes. Even if generation
+//      somehow re-runs, the post is gated separately.
 Hooks.on('simple-calendar-date-time-change', async (data) => {
   if (!game.user.isGM) return;
 
-  const weather = await generateTodayWeather(true);
+  const date = _getCurrentDateFromSC();
+  if (!date) return;
+
+  const dateKey = `${date.year}-${date.monthIndex}-${date.day}`;
+  const state = await _getWeatherState();
+
+  // If the calendar day hasn't changed since the last post, do nothing.
+  // This catches every intra-day time bump (combat turns, manual
+  // minute/hour advances, etc.) without firing a redundant post.
+  if (state.lastPostedDate === dateKey) return;
+
+  const weather = await generateTodayWeather();
   if (!weather) return;
 
-  const state = await _getWeatherState();
   if (state.postToChat) {
     _postWeatherToChat(weather);
+    // Refresh state since generateTodayWeather may have updated it,
+    // then mark this date as posted so we don't post again today.
+    const updatedState = await _getWeatherState();
+    updatedState.lastPostedDate = dateKey;
+    await _setWeatherState(updatedState);
   }
 });
