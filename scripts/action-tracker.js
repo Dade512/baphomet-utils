@@ -1,88 +1,81 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.5
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.6
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
    LOCATION: Injected BELOW combatant name row in Combat Tracker sidebar
-   BEHAVIOR: Manual click-to-spend. Auto-reset on the combatant's next
-             turn start (NOT on round-advance — reactions spent during
-             other creatures' turns should persist until this combatant
-             acts again, per PF2-style reaction economy).
+   BEHAVIOR: Manual click-to-spend. Auto-reset on the START of the
+             combatant's OWN next turn (reactions spent during other
+             creatures' turns persist until this combatant acts again,
+             per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.6 Changes:
+   - [BUG FIX] The just-ended combatant's pips were resetting at end
+     of turn instead of the new active combatant's pips resetting at
+     start of turn. Root cause: the three turn-change hook handlers
+     (pf1PostTurnChange / combatTurn / combatRound) were trying to
+     compute "the new active combatant" by reading combat.current.turn
+     during the hook fire — but the value of combat.current.turn
+     during those hooks is unreliable across versions and across
+     interactions with other modules (monks-combat-details,
+     specifically). At least one combination resulted in the OLD
+     combatant being identified as the new active.
+   - [ARCHITECTURE] Switched from hook-based turn detection to a
+     render-based "self-correcting" approach. Each pipState entry
+     now carries a `_resetForRound` marker. Inside renderCombatTracker
+     (which Foundry guarantees to fire after combat state is fully
+     updated), we look at which combatant entry has the `.active`
+     CSS class — that's Foundry's own truth, the combatant whose
+     turn it currently is. If their `_resetForRound` doesn't match
+     `combat.round`, we reset their state and update the marker.
+     This is idempotent (multiple renders in the same round = no-op),
+     independent of hook firing order, and self-correcting (any
+     later render fixes a missed reset).
+   - [REMOVED] The three turn-change Hooks.on handlers
+     (pf1PostTurnChange, combatTurn, combatRound), the
+     _turnChangeProcessed dedupe Set, and the _handleTurnChange
+     function. Render-based detection replaces all of them.
+   - The combatStart, deleteCombat, deleteCombatant, and
+     createCombatant hooks are kept — they handle state lifecycle
+     (init / cleanup), not turn detection.
 
    v1.5 Changes:
    - [BUG FIX] _refreshPipRow was using querySelector (single-match),
      which meant that when the Encounter Tracker was popped out into
      its own window, only ONE of the two rendered pip rows would
-     update on click. The click reached the right state (state is
-     keyed on combatantId and shared between both rows), but the
-     DOM refresh only hit the first match in document order. Result:
-     the popout visibly desynced from the sidebar and from the truth.
-     Switched to querySelectorAll and now replaces ALL matching rows.
-   - [BUG FIX] Turn-change hooks (combatTurn, combatRound) could
-     throw "Cannot read properties of undefined (reading '0')" when
-     fired during a transient state where combat.turns is briefly
-     undefined or empty — observed specifically in combination with
-     monks-combat-details, which triggers initiative re-rolls on
-     round advance. Added Array.isArray + length guards before any
-     turns[] access, plus index clamping to valid range.
-   - [CLEANUP] Removed [DIAG] console.log calls from the manual-click
-     chain. v1.4's button conversion + isOwner re-derivation fixed
-     the click bug; the diagnostics served their purpose and can go.
+     update on click. Switched to querySelectorAll and now replaces
+     ALL matching rows.
+   - [BUG FIX] Turn-change hooks could throw "Cannot read properties
+     of undefined (reading '0')" during a transient state where
+     combat.turns is briefly undefined or empty. Added Array.isArray
+     + length guards. (v1.6 removes those hook handlers entirely;
+     guards no longer relevant in this file but kept the lesson.)
+   - [CLEANUP] Removed [DIAG] console.log calls.
 
    v1.4 Changes:
    - [CLICK FIX] Pips are now <button type="button"> elements
      instead of <div>. Native buttons handle click events more
-     reliably in sidebar UIs (Foundry's combat tracker, modules
-     like Token Action HUD that may register their own delegated
-     handlers, accessibility tooling, etc.). Divs with attached
-     click listeners are a known fragility point.
+     reliably in sidebar UIs.
    - [CLICK FIX] Row-level event suppression slimmed from five
-     events (mousedown/mouseup/click/pointerdown/pointerup) to
-     just mousedown + click. Mousedown is the actual trigger for
-     Foundry's _onCombatantMouseDown (which opens the actor sheet);
-     click is the secondary guard. The other three were over-broad
-     and could conflict with delegated handlers from other modules.
+     events to just mousedown + click.
    - [CLICK FIX] _refreshPipRow re-derives isOwner from the live
-     combatant rather than reading from the old DOM's stale
-     dataset attribute. Defends against the failure mode where
-     an early initial render captured isOwner=false (before
-     game.user or combatant ownership was fully resolved) and
-     every subsequent refresh perpetuated the broken state with
-     no click handlers attached.
-   - [DIAGNOSTIC] Three temporary console.log calls trace the
-     manual-click chain (click handler → _togglePip state mutation
-     → _refreshPipRow DOM update). These help identify where the
-     reported click regression originates. Logs prefix [DIAG] and
-     will be removed in v1.5 once the root cause is confirmed.
+     combatant rather than reading from the old DOM's stale dataset.
 
    v1.3 Changes:
-   - [HARDENING] Turn-change handling refactored to match the
-     condition-overlay v2.5 pattern. Previously, the combatTurn
-     fallback was gated by `Hooks.events['pf1PostTurnChange']?.length > 1`
-     — a brittle check that counts ANY listeners on that hook,
-     including ones from unrelated modules. Could fail open
-     (no reset fires) or fail closed (double reset) depending on
-     module load order.
-     New approach: all three hooks (pf1PostTurnChange, combatTurn,
-     combatRound) fire unconditionally. A dedupe Set keyed on
-     (combatId, round, turn, activeCombatantId) ensures only the
-     first hook to arrive does the work; the rest no-op cleanly.
-   - [HARDENING] DOM normalization for the renderCombatTracker
-     hook now uses the shared _baphNormalizeHtml helper
-     (scripts/dom-utils.js) instead of an inline jQuery instanceof
-     check. Centralized + globalThis.jQuery guarded.
+   - [HARDENING] Turn-change handling refactored to use a dedupe-Set
+     pattern to handle multiple redundant hooks firing for the same
+     turn change. (REMOVED in v1.6 — render-based approach makes
+     dedupe unnecessary.)
+   - [HARDENING] DOM normalization uses the shared _baphNormalizeHtml
+     helper from scripts/dom-utils.js.
 
    v1.2 Changes:
    - [UI BUG FIX] Pip row injected as full-width block BELOW the
      combatant name row, not appended inline with HP/Initiative.
-     Uses insertAdjacentElement('afterend') on the name/stats
-     wrapper, ensuring it never crowds the initiative display.
    - [LOGIC BUG FIX] _readConditionActionLoss() rewritten to use
-     boolean tracking (isStaggered, isNauseated) + integer accumulators
-     (stunnedTotal, slowedTotal) inside the loop. Final calculation
-     happens AFTER the loop — no order-dependent Math.max() calls.
+     boolean tracking + integer accumulators with post-loop math.
 
    For Foundry VTT v13 + PF1e System
    Requires: baphomet-utils condition-overlay.js (for condition reading)
@@ -93,9 +86,22 @@ const AT_MODULE_ID = 'baphomet-utils';
 /* ----------------------------------------------------------
    STATE MANAGEMENT
    In-memory only. Resets on page reload. No DB writes.
+
+   v1.6: pipState entries gained a `_resetForRound` field.
+   It tracks the round number we last auto-reset this combatant
+   for. If `_resetForRound !== combat.round` AND this combatant
+   is the current active, the renderCombatTracker hook resets
+   them and updates the marker. Idempotent across renders.
    ---------------------------------------------------------- */
 
-// Map<combatantId, { actions: [bool,bool,bool], reaction: [bool], combatReflex: bool, reflexPip: [bool], conditionLocked: number }>
+// Map<combatantId, {
+//   actions: [bool,bool,bool],
+//   reaction: [bool],
+//   combatReflex: bool,
+//   reflexPip: [bool],
+//   conditionLocked: number,
+//   _resetForRound: number | null   // v1.6
+// }>
 // true = available, false = spent
 const pipState = new Map();
 
@@ -105,7 +111,8 @@ function _initState(combatantId, hasCombatReflex) {
     reaction: [true],
     combatReflex: hasCombatReflex,
     reflexPip: hasCombatReflex ? [true] : [],
-    conditionLocked: 0
+    conditionLocked: 0,
+    _resetForRound: null
   });
 }
 
@@ -120,6 +127,8 @@ function _resetState(combatantId) {
   state.reaction = [true];
   if (state.combatReflex) state.reflexPip = [true];
   state.conditionLocked = 0;
+  // _resetForRound is metadata, not pip state — DO NOT touch it here.
+  // It's owned by the render-based reset logic.
 }
 
 /* ----------------------------------------------------------
@@ -139,11 +148,6 @@ function _resetState(combatantId) {
    3. AFTER the loop: calculate final actionsLost from all
       tracked values in one deterministic pass.
 
-   Formula:
-     baseBlock    = isStaggered || isNauseated ? 2 : 0
-     additive     = stunnedTotal + slowedTotal
-     actionsLost  = max(baseBlock, additive if not blocked) ...
-     
    Actual rule: Staggered/Nauseated block to 2 actions lost
    (1 action remaining). Stunned/Slowed add on top of that.
    Combined: actionsLost = max(baseBlock, additive), capped at 3.
@@ -152,14 +156,12 @@ function _resetState(combatantId) {
 function _readConditionActionLoss(actor) {
   if (!actor) return { actionsLost: 0, fullyIncapacitated: false };
 
-  /* ── Declare all trackers before the loop ────────────── */
-  let isStaggered       = false;   // boolean: move-or-standard only
-  let isNauseated       = false;   // boolean: move only (same action loss as staggered)
-  let stunnedTotal      = 0;       // integer: sum of all Stunned tiers
-  let slowedTotal       = 0;       // integer: sum of all Slowed tiers
+  let isStaggered       = false;
+  let isNauseated       = false;
+  let stunnedTotal      = 0;
+  let slowedTotal       = 0;
   let fullyIncapacitated = false;
 
-  /* ── Loop: ONLY set/accumulate, no calculations ──────── */
   for (const item of actor.items) {
     if (item.type !== 'buff') continue;
     const flags = item.flags?.[AT_MODULE_ID];
@@ -169,39 +171,20 @@ function _readConditionActionLoss(actor) {
     const tier = flags.tier ?? 1;
 
     switch (flags.conditionKey) {
-      case 'stunned':
-        stunnedTotal += tier;    // accumulate; do NOT clamp here
-        break;
-      case 'slowed':
-        slowedTotal += tier;     // accumulate; do NOT clamp here
-        break;
-      case 'staggered':
-        isStaggered = true;      // boolean flag only
-        break;
-      case 'nauseated':
-        isNauseated = true;      // boolean flag only
-        break;
-      case 'paralyzed':
-        fullyIncapacitated = true;
-        break;
+      case 'stunned':    stunnedTotal += tier; break;
+      case 'slowed':     slowedTotal  += tier; break;
+      case 'staggered':  isStaggered = true;   break;
+      case 'nauseated':  isNauseated = true;   break;
+      case 'paralyzed':  fullyIncapacitated = true; break;
     }
   }
 
-  /* ── Post-loop calculation ────────────────────────────── */
   if (fullyIncapacitated) {
     return { actionsLost: 3, fullyIncapacitated: true };
   }
 
-  // Base block: Staggered or Nauseated each lock 2 action pips (1 remains)
   const baseBlock = (isStaggered || isNauseated) ? 2 : 0;
-
-  // Additive: Stunned and Slowed stack together
-  const additive = stunnedTotal + slowedTotal;
-
-  // Final: take the greater of the two (they don't simply add —
-  // Staggered doesn't add 2 on top of Stunned 2, it competes).
-  // Combined conditions: if Stunned 3 + Staggered, Stunned wins (3 > 2).
-  // If Staggered + Stunned 1, Staggered wins (2 > 1).
+  const additive  = stunnedTotal + slowedTotal;
   const actionsLost = Math.min(Math.max(baseBlock, additive), 3);
 
   return { actionsLost, fullyIncapacitated: false };
@@ -234,7 +217,6 @@ function _applyConditionLocks(combatantId, actor) {
     return;
   }
 
-  // Lock leftmost pips (index 0 first)
   const toLock = Math.min(actionsLost, 3);
   for (let i = 0; i < toLock; i++) {
     state.actions[i] = false;
@@ -243,15 +225,53 @@ function _applyConditionLocks(combatantId, actor) {
 }
 
 /* ----------------------------------------------------------
+   RENDER-BASED TURN-START RESET — v1.6
+
+   Called from inside the renderCombatTracker hook for the
+   combatant whose row has the `.active` CSS class. Foundry
+   sets `.active` on the current combatant's <li> AFTER all
+   combat state has been updated, so it's the most reliable
+   signal of "who is the active combatant right now."
+
+   The dedupe is per-round, stored on the state itself as
+   `_resetForRound`. So this function is safely idempotent —
+   call it on every render of the active combatant; it'll
+   only do work the first time we see them as active in a
+   given round.
+   ---------------------------------------------------------- */
+
+function _maybeResetForNewTurn(combat, combatantId, combatant) {
+  if (!combat || !combatantId) return;
+
+  const state = _getState(combatantId);
+  if (!state) return;
+
+  const round = combat.round ?? 0;
+  if (state._resetForRound === round) return; // already reset this round
+
+  // Mark first to prevent any chance of re-entry (defensive).
+  state._resetForRound = round;
+
+  // Reset pip availability + apply fresh condition locks.
+  state.actions = [true, true, true];
+  state.reaction = [true];
+  if (state.combatReflex) state.reflexPip = [true];
+  state.conditionLocked = 0;
+
+  if (combatant?.actor) {
+    _applyConditionLocks(combatantId, combatant.actor);
+  }
+
+  console.log(`${AT_MODULE_ID} | Reset pips for ${combatant?.name ?? combatantId} (round ${round})`);
+}
+
+/* ----------------------------------------------------------
    UI: BUILD PIP ROW
 
    v1.4: pips are <button type="button"> instead of <div>.
-   Buttons are the semantically correct element for clickable
-   controls and are handled more reliably by Foundry's combat
-   tracker, sidebar modules, and accessibility tooling. The
-   action-tracker.css gets an `appearance: none; padding: 0;
-   font: inherit;` reset so button defaults don't override the
-   coin-on-parchment styling.
+   The action-tracker.css carries an `appearance: none;
+   padding: 0; font: inherit;` reset so button defaults
+   don't override the coin-on-parchment styling.
    ---------------------------------------------------------- */
 
 function _buildPipRow(combatantId, isOwner) {
@@ -285,7 +305,6 @@ function _buildPipRow(combatantId, isOwner) {
         _togglePip(combatantId, 'action', idx);
       });
     } else {
-      // Non-owner: visually present but explicitly inert.
       pip.disabled = true;
     }
 
@@ -347,11 +366,9 @@ function _buildPipRow(combatantId, isOwner) {
     });
   }
 
-  // v1.4: only block what's strictly needed.
+  // Only block what's strictly needed.
   // - mousedown: triggers Foundry's _onCombatantMouseDown (opens actor sheet)
-  // - click:     belt-and-suspenders for any other delegated combat-tracker handlers
-  // The previous over-broad list (mouseup/pointerdown/pointerup) could conflict
-  // with delegated handlers from other modules (Token Action HUD, etc.).
+  // - click:     belt-and-suspenders for any other delegated handlers
   ['mousedown', 'click'].forEach(evt => {
     row.addEventListener(evt, (e) => e.stopPropagation());
   });
@@ -390,11 +407,8 @@ function _togglePip(combatantId, type, index) {
    combatantId — so the fix is purely in the DOM write step.
 
    Re-derives isOwner from the live combatant each time, not from
-   the old DOM's stale dataset. Defends against a perpetuation
-   failure mode where an early render captured isOwner=false
-   before game.user or ownership fully resolved, which would
-   otherwise carry forward forever with no click handlers.
-   Falls back to the dataset only if no combat context is available.
+   the old DOM's stale dataset (defends against an early-render
+   isOwner=false perpetuation bug).
    ---------------------------------------------------------- */
 
 function _refreshPipRow(combatantId) {
@@ -421,28 +435,25 @@ function _refreshPipRow(combatantId) {
 }
 
 /* ----------------------------------------------------------
-   COMBAT TRACKER INJECTION — v1.2 LAYOUT FIX
-   [DIRECTIVE: UI BUG FIX]
+   COMBAT TRACKER INJECTION + RENDER-BASED TURN RESET — v1.6
 
-   Previous behavior: pip row was appended to the combatant
-   entry with nameBlock.after(pipRow), which inserted it as a
-   sibling of .token-name. In PF1e's flexbox combat tracker,
-   this caused the row to sit inline with HP and Initiative,
-   pushing the initiative score off-screen.
+   This hook now does double duty:
+   1. (Original v1.2 layout fix) Inject the pip row as a full-width
+      block below the combatant's stats row.
+   2. (NEW in v1.6) Detect the active combatant via the `.active`
+      CSS class Foundry sets on the active combatant's <li>, and
+      reset their pips if we haven't already this round.
 
-   New behavior:
-   1. Find the combatant's "stats wrapper" — the element that
-      contains the name, HP, and initiative together in a row.
-   2. Insert the pip row AFTER that entire wrapper as a new
-      block-level element, so it sits beneath the stats row.
-   3. CSS (.baph-action-tracker) uses width:100% to fill the
-      full combatant width without overlapping anything.
+   The active-class detection is the truth source. We do NOT trust
+   combat.current.turn during volatile hook events — only the DOM
+   that Foundry has finished rendering after all updates apply.
 
-   Insertion priority:
-     a) .combatant-controls wrapper (PF1e v13 structure)
-     b) .token-image (insert after the avatar block)
-     c) First child of the combatant entry (safe fallback)
-     d) append() as last resort
+   Insertion priority (unchanged from v1.2):
+     a) .token-initiative (insert after — best, sits below stats)
+     b) .combatant-controls wrapper (insert before — also below stats)
+     c) .token-resource (insert after HP)
+     d) .token-name / .combatant-name (insert after name)
+     e) append() as last resort
    ---------------------------------------------------------- */
 
 Hooks.on('renderCombatTracker', (app, html, data) => {
@@ -477,6 +488,15 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
       state.reflexPip = currentHasCR ? [true] : [];
     }
 
+    // v1.6: render-based turn-start reset.
+    // If THIS entry is the active one (Foundry's own .active class)
+    // and we haven't reset them for the current round yet, do so.
+    // Must happen BEFORE the pip row is built so the new row reflects
+    // the freshly-reset state.
+    if (entry.classList.contains('active')) {
+      _maybeResetForNewTurn(combat, combatantId, combatant);
+    }
+
     // Remove stale pip row before re-render
     const oldRow = entry.querySelector('.baph-action-tracker');
     if (oldRow) oldRow.remove();
@@ -487,125 +507,34 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 
     pipRow.dataset.isOwner = String(isOwner);
 
-    /* ── INJECTION POINT (Layout Fix) ──────────────────────
-       We want the pip row to appear as a NEW ROW below the
-       existing combatant stats row (name + HP + initiative).
-
-       Strategy: find the stats wrapper and insert AFTER it.
-       The stats wrapper is whatever contains .token-name,
-       .token-resource, and .token-initiative together.
-
-       In PF1e v13's combat tracker, the structure is typically:
-         <li.combatant>
-           <img.token-image />
-           <div.token-name>...</div>         ← name
-           <div.token-resource>HP</div>      ← hp
-           <div.token-initiative>...</div>   ← initiative
-           <div.combatant-controls>...</div> ← buttons
-         </li>
-
-       We insert our pip row after .token-initiative (or before
-       .combatant-controls). This puts it below all stat items
-       but above the control buttons, keeping it visually
-       associated with the combatant without crowding the row.
-    ─────────────────────────────────────────────────────── */
-
     // Find the best anchor: insert pip row AFTER this element
-    const initiativeEl   = entry.querySelector('.token-initiative');
-    const resourceEl     = entry.querySelector('.token-resource');
-    const nameEl         = entry.querySelector('.token-name, .combatant-name');
-    const controlsEl     = entry.querySelector('.combatant-controls');
+    const initiativeEl = entry.querySelector('.token-initiative');
+    const resourceEl   = entry.querySelector('.token-resource');
+    const nameEl       = entry.querySelector('.token-name, .combatant-name');
+    const controlsEl   = entry.querySelector('.combatant-controls');
 
     if (initiativeEl) {
-      // Best case: insert after initiative (below full stats row)
       initiativeEl.insertAdjacentElement('afterend', pipRow);
     } else if (controlsEl) {
-      // Insert before controls (still below stats)
       entry.insertBefore(pipRow, controlsEl);
     } else if (resourceEl) {
-      // Insert after HP display
       resourceEl.insertAdjacentElement('afterend', pipRow);
     } else if (nameEl) {
-      // Fallback: insert after name only
       nameEl.insertAdjacentElement('afterend', pipRow);
     } else {
-      // Last resort: append to end of combatant entry
       entry.appendChild(pipRow);
     }
   });
 });
 
 /* ----------------------------------------------------------
-   TURN ADVANCE: AUTO-RESET + CONDITION APPLICATION
-   v1.3: dedupe-Set pattern (mirrors condition-overlay).
-   ---------------------------------------------------------- */
+   COMBAT LIFECYCLE: STATE INIT + CLEANUP
 
-const _turnChangeProcessed = new Set();
-
-Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
-  if (!game.user.isGM) return;
-  _handleTurnChange(combat, current?.combatantId, 'pf1PostTurnChange');
-});
-
-Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
-  if (!game.user.isGM) return;
-
-  // v1.5: guard against transient undefined combat.turns. Seen with
-  // monks-combat-details triggering initiative re-rolls on new rounds,
-  // which briefly leaves combat.turns undefined while the hook fires.
-  const turns = combat?.turns;
-  if (!Array.isArray(turns) || !turns.length) return;
-
-  const currentTurn = combat.current?.turn ?? updateData?.turn;
-  if (currentTurn == null || currentTurn < 0 || currentTurn >= turns.length) return;
-
-  const currentCombatant = turns[currentTurn];
-  if (currentCombatant) _handleTurnChange(combat, currentCombatant.id, 'combatTurn');
-});
-
-Hooks.on('combatRound', (combat, updateData, updateOptions) => {
-  if (!game.user.isGM) return;
-
-  // v1.5: guard against transient undefined combat.turns.
-  const turns = combat?.turns;
-  if (!Array.isArray(turns) || !turns.length) return;
-
-  const currentTurn = combat.current?.turn ?? 0;
-  const safeTurn = Math.max(0, Math.min(currentTurn, turns.length - 1));
-  const currentCombatant = turns[safeTurn];
-  if (currentCombatant) _handleTurnChange(combat, currentCombatant.id, 'combatRound');
-});
-
-function _handleTurnChange(combat, activeCombatantId, source) {
-  if (!activeCombatantId) return;
-
-  // Dedupe: all three hooks may fire for the same turn change.
-  // Whichever arrives first wins; the rest no-op.
-  const dedupeKey = `${combat.id}-${combat.round}-${combat.turn}-${activeCombatantId}`;
-  if (_turnChangeProcessed.has(dedupeKey)) return;
-  _turnChangeProcessed.add(dedupeKey);
-
-  // Trim the Set so it doesn't grow unbounded across long campaigns.
-  if (_turnChangeProcessed.size > 50) {
-    const entries = [..._turnChangeProcessed];
-    entries.slice(0, entries.length - 20).forEach(k => _turnChangeProcessed.delete(k));
-  }
-
-  const combatant = combat.combatants.get(activeCombatantId);
-  if (!combatant?.actor) return;
-
-  if (!_getState(activeCombatantId)) {
-    _initState(activeCombatantId, _hasCombatReflexes(combatant.actor));
-  }
-
-  _resetState(activeCombatantId);
-  _applyConditionLocks(activeCombatantId, combatant.actor);
-
-  setTimeout(() => _refreshPipRow(activeCombatantId), 50);
-}
-
-/* ----------------------------------------------------------
-   COMBAT LIFECYCLE: CLEANUP
+   v1.6: turn-detection hooks (pf1PostTurnChange, combatTurn,
+   combatRound) and _handleTurnChange / _turnChangeProcessed
+   all REMOVED. Render-based detection in renderCombatTracker
+   replaces them. These lifecycle hooks remain — they manage
+   pipState entries (init / cleanup), not turn detection.
    ---------------------------------------------------------- */
 
 Hooks.on('deleteCombat', (combat) => {
@@ -621,19 +550,21 @@ Hooks.on('createCombatant', (combatant) => {
   _initState(combatant.id, _hasCombatReflexes(combatant.actor));
 });
 
-/* ----------------------------------------------------------
-   COMBAT START: INITIALIZE ALL COMBATANTS
-   ---------------------------------------------------------- */
-
 Hooks.on('combatStart', (combat) => {
   for (const combatant of combat.combatants) {
     if (!combatant.actor) continue;
     _initState(combatant.id, _hasCombatReflexes(combatant.actor));
   }
 
-  const firstCombatant = combat.turns[0];
+  // The first active combatant gets their condition locks applied
+  // immediately. The render-based reset will pick them up too on
+  // first render, but applying here means the first render shows
+  // correct state without waiting for a second render pass.
+  const firstCombatant = combat.turns?.[0];
   if (firstCombatant?.actor) {
     _applyConditionLocks(firstCombatant.id, firstCombatant.actor);
+    const state = _getState(firstCombatant.id);
+    if (state) state._resetForRound = combat.round ?? 1;
   }
 });
 
@@ -677,5 +608,5 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${AT_MODULE_ID} | Action Tracker v1.5 ready`);
+  console.log(`${AT_MODULE_ID} | Action Tracker v1.6 ready`);
 });
