@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.7
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.8
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,28 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.8 Changes (AUTOMATION PREP — SCAFFOLD ONLY):
+   - Added _debugLog(msg, ...args): conditional debug output
+     gated on the 'debugLogging' module setting. Fails safely
+     if settings are not yet registered.
+   - Added _getActiveCombatant(): returns game.combat.combatant
+     or null. Intended lookup point for attack-roll automation.
+   - Added _getActiveCombatantForActor(actor): maps an actor
+     reference to its combatant in the current combat. Intended
+     entry point for pf1ActorRollSkill automation in v2.10.0.
+   - Added _canUserControlCombatant(combatant): mirrors the
+     ownership check in _refreshPipRow so automation uses the
+     same gate as manual interaction.
+   - Added _spendActionForCombatant(combatantId, count, reason):
+     spends N pips; DELEGATES to game.baphometActions.spendAction
+     to avoid duplicating spend logic. Returns boolean.
+   - Added _spendActionForActor(actor, count, reason): convenience
+     wrapper combining lookup + ownership + spend in one call.
+   - Added SKILL_ACTION_COSTS constant: provisional skill→cost
+     map (INERT — key names unverified, no hook calls it yet).
+   - NO PF1 hooks added. NO behavior change to manual pip flow.
+     All helpers are unreachable from live code in this version.
 
    v1.7 Changes (OWNERSHIP HARDENING):
    - Broadened the isOwner computation in both _refreshPipRow()
@@ -627,5 +649,234 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${AT_MODULE_ID} | Action Tracker v1.7 ready`);
+  console.log(`${AT_MODULE_ID} | Action Tracker v1.8 ready`);
 });
+
+/* ============================================================
+   AUTOMATION PREP SCAFFOLD — v1.8
+   ══════════════════════════════════════════════════════════
+
+   INERT. Nothing below this line is called by any live hook.
+   These helpers are declared for future wiring in v2.10.0.
+
+   Do NOT add pf1AttackRoll or pf1ActorRollSkill calls here
+   until v2.10.0. The helpers are available for manual testing
+   via browser console or macros if needed.
+
+   Guiding constraints for v2.10.0 (do not violate):
+   - No token drag / movement auto-spending
+   - No inference of standard/move/swift/full-round PF1 actions
+   - Disable Device, UMD, and Knowledge/* excluded from first pass
+   - A deduplication guard is required before live hooks go in
+   - Debug logging should trace every spend decision
+   ============================================================ */
+
+/* ----------------------------------------------------------
+   DEBUG LOGGING HELPER
+   ---------------------------------------------------------- */
+
+/**
+ * Emit a debug log line when the 'debugLogging' module setting
+ * is enabled. Fails silently if settings are not yet registered
+ * (safe to call at any lifecycle stage).
+ *
+ * @param {string} msg
+ * @param {...*} args
+ */
+function _debugLog(msg, ...args) {
+  try {
+    if (!game.settings.get(AT_MODULE_ID, 'debugLogging')) return;
+  } catch {
+    return; // settings not yet registered — noop
+  }
+  console.log(`${AT_MODULE_ID} | [DEBUG] ${msg}`, ...args);
+}
+
+/* ----------------------------------------------------------
+   AUTOMATION HELPER FUNCTIONS
+   
+   These wrap existing state and render logic for clean use
+   from automation hooks. They do not introduce new state.
+   ---------------------------------------------------------- */
+
+/**
+ * Return the currently active combatant in the live combat,
+ * or null if no combat is active or no turn is current.
+ *
+ * This is the lookup entry point for attack-roll automation
+ * (pf1AttackRoll → who is acting → spend their pip).
+ *
+ * @returns {Combatant|null}
+ */
+function _getActiveCombatant() {
+  return game.combat?.combatant ?? null;
+}
+
+/**
+ * Find the combatant in the current combat whose linked actor
+ * matches the provided actor. Returns the first match or null.
+ *
+ * Used when a PF1 hook supplies an actor reference and we need
+ * to map it back to a combatant for pip spending.
+ * Returns null if combat is inactive, actor is absent, or no
+ * matching combatant is found.
+ *
+ * NOTE: This matches on actor.id. Unlinked tokens whose actor
+ * is a synthetic actor (not in game.actors) may not match.
+ * Verify behavior with unlinked tokens before enabling in v2.10.0.
+ *
+ * @param {Actor} actor
+ * @returns {Combatant|null}
+ */
+function _getActiveCombatantForActor(actor) {
+  if (!actor || !game.combat) return null;
+  return game.combat.combatants.find(c => c.actor?.id === actor.id) ?? null;
+}
+
+/**
+ * Check whether the current user is permitted to control the
+ * given combatant's action pips.
+ *
+ * Mirrors the isOwner computation in _refreshPipRow and the
+ * renderCombatTracker injection exactly, so automation gates
+ * on the same ownership logic as manual interaction. If the
+ * user can't click a pip, automation won't spend it either.
+ *
+ * @param {Combatant} combatant
+ * @returns {boolean}
+ */
+function _canUserControlCombatant(combatant) {
+  if (!combatant) return false;
+  return (
+    game.user.isGM           ||
+    combatant.isOwner         ||
+    combatant.actor?.isOwner  ||
+    combatant.token?.isOwner
+  );
+}
+
+/**
+ * Spend N action pips for a combatant identified by ID.
+ *
+ * DELEGATES to game.baphometActions.spendAction() to avoid
+ * duplicating the spend loop. game.baphometActions is set up
+ * in the ready hook — guards defensively in case this is
+ * somehow called before ready fires.
+ *
+ * Returns true if the spend call was dispatched, false if
+ * state was absent, the API wasn't ready, or all pips were
+ * already spent or condition-locked.
+ *
+ * `reason` is a short string for debug output only; it is
+ * never shown to the user. Suggested values: 'attack-roll',
+ * 'skill-acrobatics', 'skill-bluff', etc.
+ *
+ * @param {string} combatantId
+ * @param {number} [count=1]  Number of action pips to spend (1–3)
+ * @param {string} [reason]   Debug label
+ * @returns {boolean}
+ */
+function _spendActionForCombatant(combatantId, count = 1, reason = '') {
+  const state = _getState(combatantId);
+  if (!state) {
+    _debugLog(`_spendActionForCombatant: no state for ${combatantId} [${reason}]`);
+    return false;
+  }
+
+  // Check availability before delegating — lets us return a
+  // meaningful boolean without re-implementing the loop.
+  const spendable = state.actions.filter((a, i) => a && i >= state.conditionLocked).length;
+  if (spendable === 0) {
+    _debugLog(`_spendActionForCombatant: no spendable actions for ${combatantId} [${reason}]`);
+    return false;
+  }
+
+  // Delegate to the existing macro API. This is the single spend
+  // implementation — do not duplicate the loop here.
+  if (!game.baphometActions?.spendAction) {
+    _debugLog(`_spendActionForCombatant: baphometActions API not ready [${reason}]`);
+    return false;
+  }
+
+  game.baphometActions.spendAction(combatantId, count);
+  _debugLog(`_spendActionForCombatant: spent up to ${count} action(s) for ${combatantId} [${reason}]`);
+  return true;
+}
+
+/**
+ * Spend N action pips for the combatant whose actor matches the
+ * provided actor reference.
+ *
+ * Convenience wrapper combining:
+ *   _getActiveCombatantForActor → _canUserControlCombatant
+ *   → _spendActionForCombatant
+ *
+ * This is the intended entry point for pf1AttackRoll and
+ * pf1ActorRollSkill hooks in v2.10.0. Call with the actor
+ * from the hook payload and an appropriate reason string.
+ *
+ * Returns false without throwing if: no combat is active,
+ * no combatant matches the actor, the current user doesn't
+ * control the combatant, or no pips are available.
+ *
+ * @param {Actor} actor
+ * @param {number} [count=1]  Number of action pips to spend
+ * @param {string} [reason]   Debug label
+ * @returns {boolean}
+ */
+function _spendActionForActor(actor, count = 1, reason = '') {
+  const combatant = _getActiveCombatantForActor(actor);
+  if (!combatant) {
+    _debugLog(`_spendActionForActor: no combatant for actor "${actor?.name}" [${reason}]`);
+    return false;
+  }
+
+  if (!_canUserControlCombatant(combatant)) {
+    _debugLog(`_spendActionForActor: user cannot control combatant ${combatant.id} [${reason}]`);
+    return false;
+  }
+
+  return _spendActionForCombatant(combatant.id, count, reason);
+}
+
+/* ----------------------------------------------------------
+   SKILL ACTION COST SCAFFOLD
+   
+   INERT. Not referenced by any live hook. Future use only.
+   
+   ══ VERIFICATION REQUIRED before enabling in v2.10.0 ══
+   
+   The keys below are PROVISIONAL. PF1 skill key strings
+   must be verified against the actual pf1ActorRollSkill hook
+   payload at runtime. The payload shape (which field carries
+   the skill key, how multi-word skills are formatted, whether
+   sub-skills like knowledgePlanes use a dot-path or flat key)
+   is not confirmed — do not assume.
+   
+   Excluded from first automation pass (do not enable these
+   in v2.10.0 without explicit GM review):
+   - disableDevice: full-round equivalent in many contexts,
+     high risk of wrong spend if action cost is miscounted
+   - useMagicDevice: edge cases around untrained use and
+     item-activation action economy are unclear
+   - knowledge/*: need a unified approach for all knowledges
+   - sleightOfHand: action economy unclear in some contexts
+   ---------------------------------------------------------- */
+
+const SKILL_ACTION_COSTS = {
+  // PF1 skill key (MUST VERIFY against pf1ActorRollSkill payload)
+  // → action pip cost
+  acrobatics:   1,
+  bluff:        1,
+  intimidate:   1,
+  stealth:      1,
+  perception:   1,
+  heal:         1,
+
+  // ── EXCLUDED FROM v2.10.0 FIRST PASS ─────────────────────
+  // Uncomment only after verifying key names AND action economy:
+  // sleightOfHand: 1,   // key name unverified; action economy unclear
+  // useMagicDevice: 1,  // edge cases with untrained use
+  // knowledge:      1,  // needs unified handling across knowledge/* keys
+  // disableDevice:  3,  // 3-action cost unverified; do not enable early
+};
