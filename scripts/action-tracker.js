@@ -27,6 +27,7 @@
    - Added _spendActionForCombatant(combatantId, count, reason):
      spends N pips; DELEGATES to game.baphometActions.spendAction
      to avoid duplicating spend logic. Returns boolean.
+     Spend is all-or-nothing — partial spending is never allowed.
    - Added _spendActionForActor(actor, count, reason): convenience
      wrapper combining lookup + ownership + spend in one call.
    - Added SKILL_ACTION_COSTS constant: provisional skill→cost
@@ -771,9 +772,9 @@ function _canUserControlCombatant(combatant) {
  * in the ready hook — guards defensively in case this is
  * somehow called before ready fires.
  *
- * Returns true if the spend call was dispatched, false if
- * state was absent, the API wasn't ready, or all pips were
- * already spent or condition-locked.
+ * Returns true if the full spend was dispatched, false if
+ * state was absent, the API wasn't ready, or fewer than
+ * count actions are available. Spend is all-or-nothing.
  *
  * `reason` is a short string for debug output only; it is
  * never shown to the user. Suggested values: 'attack-roll',
@@ -791,11 +792,13 @@ function _spendActionForCombatant(combatantId, count = 1, reason = '') {
     return false;
   }
 
-  // Check availability before delegating — lets us return a
-  // meaningful boolean without re-implementing the loop.
+  // Require enough spendable actions to satisfy the full requested count.
+  // Spend is all-or-nothing: a 3-action cost (e.g. Disable Device) must
+  // have exactly 3 available pips or nothing is spent and false is returned.
+  // Partial spending is never permitted.
   const spendable = state.actions.filter((a, i) => a && i >= state.conditionLocked).length;
-  if (spendable === 0) {
-    _debugLog(`_spendActionForCombatant: no spendable actions for ${combatantId} [${reason}]`);
+  if (spendable < count) {
+    _debugLog(`_spendActionForCombatant: insufficient actions (${spendable} available, ${count} needed) for ${combatantId} [${reason}]`);
     return false;
   }
 
@@ -807,7 +810,7 @@ function _spendActionForCombatant(combatantId, count = 1, reason = '') {
   }
 
   game.baphometActions.spendAction(combatantId, count);
-  _debugLog(`_spendActionForCombatant: spent up to ${count} action(s) for ${combatantId} [${reason}]`);
+  _debugLog(`_spendActionForCombatant: spent ${count} action(s) for ${combatantId} [${reason}]`);
   return true;
 }
 
