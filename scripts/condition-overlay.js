@@ -11,6 +11,12 @@
      Array.isArray + length guards in _getPriorCombatantId and
      in the combatRound handler before any turns[] access.
 
+   v2.7.1 Changes:
+   - [SECURITY] _postConditionChat: actor.name is now escaped with
+     foundry.utils.escapeHTML() before interpolation into chat HTML.
+     Previously raw, allowing a maliciously-named actor to inject
+     arbitrary HTML into condition notification messages.
+
    v2.6 Changes:
    - [LEAK FIX] Token HUD condition panel's MutationObserver was
      created on each open as a closure-local variable. Manual
@@ -461,9 +467,14 @@ function _postConditionChat(actor, cond, tier, action) {
       ? `${cond.name}`
       : `${cond.name} ${tier}`;
 
+  // v2.7.1: escape actor.name before interpolating into HTML.
+  // cond.name, label, and cond.description are internal constants
+  // and do not require escaping.
+  const safeActorName = foundry.utils.escapeHTML(actor.name);
+
   ChatMessage.create({
     content: `<div style="font-family: var(--baph-font-heading, 'Courier Prime', monospace); text-transform: uppercase; letter-spacing: 0.05em; color: ${color}; font-size: 13px;">
-      ${actor.name} — ${label}
+      ${safeActorName} — ${label}
     </div>
     ${!isRemove ? `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); color: var(--baph-text-secondary, #8a919d); font-size: 12px; margin-top: 2px;">
       ${cond.description.replace(/–X/g, `–${tier}`).replace(/\bX\b/g, String(tier))}

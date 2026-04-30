@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.9.7
+**Current Version:** 2.9.8
 
 ---
 
@@ -78,6 +78,21 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 
 ## Changelog
 
+### v2.9.8 — "The Seams Hold"
+Conservative v13 + PF1 compatibility patch. No user-facing behavior changes.
+
+**`scripts/roll-cards.js` — hook rename (v1.2):**
+Replaced `Hooks.on('renderChatMessage', ...)` with `Hooks.on('renderChatMessageHTML', ...)`. `renderChatMessage` is the v12 hook name; v13 renamed it to `renderChatMessageHTML` to signal the html argument is always a native `HTMLElement`. The old hook fires for backward compat in some v13 builds but is not guaranteed. Also replaced the inline `HTMLElement/jQuery` normalization with the shared `_baphNormalizeHtml()` helper, consistent with every other hook in the module. All nat 20 / nat 1 detection methods, result bar logic, and label injection are completely unchanged.
+
+**`scripts/xp-progression.js` — lifecycle hook (v1.2):**
+Replaced `Hooks.once('init', ...)` with `Hooks.once('pf1PostInit', ...)`. `init` fires during Foundry's own initialization, before PF1e has bootstrapped `CONFIG.PF1` — writing the XP table at that point is a race that PF1e can win by overwriting values immediately after. `pf1PostInit` fires after PF1e has fully populated its config, which is the correct point to override PF1-owned data. Added a guard that checks `CONFIG?.PF1?.CHARACTER_EXP_LEVELS?.fast` exists before writing; logs a clear warning and returns safely if the path is absent rather than throwing. Campaign XP values are byte-for-byte identical.
+
+**`scripts/action-tracker.js` — ownership hardening (v1.7):**
+Broadened the `isOwner` computation in `_refreshPipRow()` and the `renderCombatTracker` injection from `game.user.isGM || combatant.isOwner` to additionally include `combatant.actor?.isOwner || combatant.token?.isOwner`. The original check is correct for fully-linked tokens; the fallbacks cover unlinked tokens and edge cases where the actor or token ownership chain resolves before `combatant.isOwner` does (e.g., during combatant setup or when another module manipulates the combatant object). No change to turn reset, pip state management, condition reading, or any other behavior.
+
+**`DEV_NOTES.md` — new file:**
+Documents the deferred ESM migration task (`"scripts"` → `"esmodules"`) with rationale, recommended approach (`scripts/main.mjs` entry point), and an explicit "do not do mid-campaign" caution.
+
 ### v2.9.7 — "Render Is the Truth"
 - **Bug fix (action tracker reset timing):** the combatant whose turn was just ENDED was getting their pips reset, instead of the new active combatant having theirs reset at turn START. This was misleading — reactions and unspent actions appeared to refresh prematurely. Root cause: the three turn-change hook handlers (`pf1PostTurnChange` / `combatTurn` / `combatRound`) were trying to compute "the new active combatant" by reading `combat.current.turn` during the hook fire, but that value's freshness during those hooks is unreliable across versions and across module interactions (notably `monks-combat-details`, which triggers initiative re-rolls on round advance).
 - **Architecture:** switched the action tracker from hook-based turn detection to a **render-based self-correcting** approach. Each pipState entry now carries a `_resetForRound` marker. Inside `renderCombatTracker` (which Foundry guarantees fires after combat state is fully updated), we look at which combatant entry has the `.active` CSS class — that's Foundry's own truth. If their `_resetForRound` doesn't match `combat.round`, we reset their state and update the marker. Idempotent across multiple renders, independent of hook firing order, self-correcting on any later render. Removed the three turn-change hook handlers, the dedupe Set, and `_handleTurnChange`.
@@ -105,53 +120,37 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 - No user-facing behavior changes other than the weather state-marker fix. All other changes are internal hardening that should make future Foundry updates and module-interaction edge cases less prone to regression.
 
 ### v2.9.3 — "The Reroll Actually Rerolls"
-- **Bug fix:** the Reroll button (and `game.baphometWeather.reroll()`) was producing the same weather every time. The weather seed was deterministic on `(year, dayOfYear, climateName)` — calling `generateTodayWeather(true)` correctly skipped the cache, but then re-derived the same seed and ran the same RNG stream, so output was identical. Added a per-day `rerollSalt` to the weather state, included in the seed string. Salt increments on each forced reroll within a day, resets to 0 when the calendar day changes.
-- Same-day cache reads after a reroll still return the rerolled weather — closing and reopening the Weather Config UI no longer drifts back to the canonical (salt 0) variant.
-- `setClimate` intentionally does NOT bump the salt. Switching climate should land on that climate's canonical weather for today, not on "reroll #N of the previous climate's history."
-- Console log now appends `[reroll #N]` to the daily weather line when salt > 0, for debugging.
+- **Bug fix:** the Reroll button (and `game.baphometWeather.reroll()`) was producing the same weather every time. Added a per-day `rerollSalt` to the weather state, included in the seed string.
 
 ### v2.9.2 — "Stop Telling Me About the Weather Every Six Seconds"
-- **Bug fix:** Weather card was posting to chat after every combat turn. PF1e's combat tracker advances the in-game clock by ~6 seconds per turn, and SCR fires `simple-calendar-date-time-change` on ANY time change — not just date changes. The hook handler now tracks `lastPostedDate` in module state and only posts when the calendar day actually changes. Removed the `force=true` from the hook's regenerate call so the engine's own date cache also short-circuits intra-day re-runs. Belt and suspenders.
-- No user-visible change to normal day-advance behavior. Just no more chat spam during combat.
+- **Bug fix:** Weather card was posting to chat after every combat turn. Hook handler now tracks `lastPostedDate` and only posts when the calendar day actually changes.
 
 ### v2.9.1 — "The Reroll Stops Talking to Itself"
-- **Cleanup:** `weather-ui.js` `#onRerollToday` had a redundant `today()` call sandwiched between `reroll()` and `post()`. Since `post()` internally reads the same cache `reroll()` populates, the middle call was wasted work. Cleaner flow now: `reroll()` → `post()` → re-render.
-- **Fix:** The `post()` call in `#onRerollToday` was unawaited, which could let the panel re-render before the chat write completed. Now properly `await`-ed.
-- No user-visible behavior change — reroll still posts exactly one chat message. Internal only.
+- **Cleanup:** `weather-ui.js` `#onRerollToday` redundant `today()` call removed. Unawaited `post()` call fixed.
 
 ### v2.9.0 — "The Ledger Opens Its Desk"
-- **New:** `scripts/weather-ui.js` + `styles/weather-ui.css` — GM-facing weather configuration panel built on ApplicationV2. Access from Scene Controls → Token Tools → cloud icon. Change climate zones, toggle auto-post, reroll weather, post to chat — all without touching the console.
-- **Critical Fix:** `Math.clamp` → `Math.clamped` in condition tier clamping (`condition-overlay.js`) and cloud cover calculation (`weather-engine.js`). `Math.clamp` is not standard JS; Foundry provides `Math.clamped`. Could hard-fail condition application and weather generation.
-- **Critical Fix:** `getWeatherFor` API was mixing sync + async — `_getWeatherState().then(...)` without `await` made the climate key a Promise object, silently defaulting to `'temperate'` regardless of active zone. Now properly `async`/`await`.
-- **Cleanup:** Trimmed verbose debug logging in weather-engine.js for production use.
-- **Manifest:** Minimum compatibility raised from v12 to v13. Code depends on v13 hooks, CSS structure, and ApplicationV2.
+- **New:** Weather Config UI (ApplicationV2). Access from Scene Controls → cloud icon.
+- **Critical Fix:** `Math.clamp` → `Math.clamped` in condition overlay and weather engine.
+- **Critical Fix:** `getWeatherFor` async/await race fixed.
+- **Manifest:** Minimum compatibility raised to v13.
 
 ### v2.8.0 — "The Ledger Reads the Sky"
-- **New:** `data/climate-zones.js` — 8 Golarion climate zones with per-season temperature, precipitation, and wind parameters. Each zone includes descriptive text generators for immersive chat output.
-- **New:** `scripts/weather-engine.js` — Seeded RNG weather generation integrated with Simple Calendar Reborn. Deterministic daily weather (temperature high/low, precipitation type and intensity, wind speed and gusts, cloud cover). GM climate zone switching via `game.baphometWeather` API. Auto-posts to chat on day advance as a GM whisper in Croaker's Ledger style.
+- **New:** `data/climate-zones.js` and `scripts/weather-engine.js` — seeded RNG weather with Simple Calendar Reborn integration.
 
 ### v2.7.0 — "The Ledger Counts Slower"
-- **Updated:** `scripts/xp-progression.js` — Revised early-game XP ramp for smoother acceleration into mid-levels. New values: 2k/5k/10k/18k/28k/42k (was 1k/3k/6k/10k/15k/21k). Session pacing updated for ~120 session campaign. Levels 8–20 unchanged.
-- **New:** GitHub Actions release workflow — automatic zip build and release asset attachment on tag push.
+- **Updated:** Early-game XP ramp revised. Levels 8–20 unchanged.
 
 ### v2.6.0 — "The Ledger Counts the Cost"
-- **New:** `scripts/xp-progression.js` — Custom XP progression system. Overwrites PF1e's "Fast" XP track with the campaign's modified slow track table.
+- **New:** `scripts/xp-progression.js` — custom XP table overriding PF1e "Fast" track.
 
 ### v2.5.1 — "The Ink Holds"
 - **Critical Fix:** Roll card result bar no longer wraps `h3.dice-total` in a `<div>`. Zero DOM reparenting.
-- **Fix:** Brass accent color deepened to `#846528` for text-on-parchment links. WCAG AA compliant.
 
 ### v2.5.0 — "The Ledger Notes the Result"
 - **New:** `scripts/roll-cards.js` — Roll Card Styler. Dark leather result bar, nat 20 gold bar, nat 1 blood bar.
-- **Fix:** Auto-decrement for Frightened/Stunned conditions rewritten with debounced multi-hook system.
 
 ### v2.4.0 — "Croaker's Ledger"
-- Full theme pivot to battered mercenary ledger aesthetic
-
-### v2.3.0–v2.3.2 — Accessibility and contrast fixes
-
-### v2.2.0 — "The Ledger Rebound"
-- Gaslamp Gothic palette overhaul, layout/logic bug fixes
+- Full theme pivot to battered mercenary ledger aesthetic.
 
 ---
 
@@ -189,7 +188,7 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 Pushing a version tag automatically builds and publishes a GitHub release:
 
 ```bash
-git tag v2.9.2
+git tag v2.9.8
 git push origin main --tags
 ```
 
@@ -197,15 +196,17 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 
 ---
 
-## Test Checklist (v2.9.2)
+## Test Checklist (v2.9.8)
 
-1. **Scene Controls button:** Log in as GM → Token Controls toolbar shows ☁ cloud icon → click opens Weather Config panel
-2. **Current weather display:** Panel shows today's temp/precip/wind/clouds (requires Simple Calendar active)
-3. **Zone switch:** Select a different climate zone → click Apply Zone → weather regenerates → chat message posts
-4. **Auto-post toggle:** Toggle OFF → advance day in Simple Calendar → no chat post. Toggle ON → advance → chat posts.
-5. **Post Today:** Click → current weather posted to GM chat
-6. **Reroll:** Click → weather regenerates with new values → panel updates
-7. **getWeatherFor without key:** In console, `await game.baphometWeather.getWeatherFor(4712, 7, 15)` → uses stored zone, NOT hardcoded temperate
-8. **No Math.clamp errors:** Apply a condition (e.g., `game.baphometConditions.apply(actor, 'frightened', 3)`) → no console error
-9. **Non-GM guard:** Log in as player → no cloud icon in scene controls → `game.baphometWeather` API returns null for generation calls
-10. **No Simple Calendar:** Disable SCR → open weather panel → shows graceful "Simple Calendar not detected" message
+1. **Roll cards — hook fires:** Make a d20 roll in chat. Confirm the dark leather result bar appears on the roll card.
+2. **Roll cards — nat 20:** Roll a nat 20 (or adjust dice). Confirm gold bar styling and "⚔ Critical Success" label appear.
+3. **Roll cards — nat 1:** Roll a nat 1. Confirm blood-red bar styling and "✖ Critical Failure" label appear.
+4. **Roll cards — no double-apply:** Scroll up through old roll cards on re-render. Confirm no duplicate styling or labels.
+5. **XP progression — applies:** Open any PC's character sheet → Level tab. Confirm XP thresholds match the campaign table (e.g., Level 2 = 2,000 XP). If PF1e system is active and `pf1PostInit` fires correctly, this will match.
+6. **XP progression — console check:** Open F12 → Console. After world load, confirm the success log: `Custom XP Progression v1.2: Overwrote "fast" track with campaign table`. If the warning fires instead, `CONFIG.PF1.CHARACTER_EXP_LEVELS` was not found — check PF1e system is active.
+7. **Action tracker — pip clicks:** Start combat. Confirm pip rows appear below combatant names. Click an action pip — confirm it toggles spent/available.
+8. **Action tracker — player owns token:** Log in as a player who owns a combatant. Confirm their pips are clickable. Confirm another player's pips are disabled (grayed out / not clickable).
+9. **Action tracker — unlinked token ownership:** If applicable, test with an unlinked token the player owns via actor permission. Pips should be clickable (v1.7 fallback).
+10. **Action tracker — turn reset:** Advance turns in combat. Confirm the previously active combatant's pips do NOT reset. Confirm the newly active combatant's pips DO reset at turn start. Check F12 for `Reset pips for {name} (round N)` log line.
+11. **Scene Controls button:** Log in as GM → Token Controls toolbar shows ☁ cloud icon → click opens Weather Config panel.
+12. **No Math.clamp errors:** Apply a condition → confirm no console error. (Regression check from v2.9.0.)

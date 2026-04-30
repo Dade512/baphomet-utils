@@ -1,6 +1,21 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — ROLL CARD STYLER v1.1
+   ECHOES OF BAPHOMET — ROLL CARD STYLER v1.2
    Chat message post-processing for Gaslamp Gothic roll cards.
+
+   v1.2 Changes (V13 HOOK PATCH):
+   - Replaced deprecated 'renderChatMessage' hook with the v13
+     canonical hook: 'renderChatMessageHTML'.
+     'renderChatMessage' was the v12 hook name; v13 renamed it
+     to 'renderChatMessageHTML' to signal the html argument is
+     always a native HTMLElement (not jQuery). The old hook still
+     fires in some v13 builds for backward compat but is not
+     guaranteed and should not be relied on.
+   - Replaced inline HTMLElement/jQuery normalization with the
+     shared _baphNormalizeHtml() helper (scripts/dom-utils.js).
+     Behavior is identical; centralizes the guard so one fix
+     covers all hooks if Foundry changes things again.
+   - Added 'if (!el) return;' guard (already implied by the old
+     inline path returning null, now explicit and documented).
 
    v1.1 Changes (LAYOUT FIX):
    - [CRITICAL BUG FIX] _injectResultBar() no longer wraps the
@@ -30,8 +45,9 @@
    (.dice-roll present). Ignores chat, whisper-only messages.
 
    HOOKS:
-   - renderChatMessage — fires after each message renders.
-     V13 compatible: html param handled as HTMLElement or jQuery.
+   - renderChatMessageHTML — fires after each message renders.
+     V13: html param is always a native HTMLElement.
+     Normalized via _baphNormalizeHtml() for defensive compat.
 
    For Foundry VTT v13 + PF1e System
    ============================================================ */
@@ -132,14 +148,21 @@ function _injectNatLabel(messageEl, natType) {
 }
 
 /* ----------------------------------------------------------
-   MAIN HOOK — renderChatMessage
-   V13: html may be HTMLElement or jQuery — handle both.
+   MAIN HOOK — renderChatMessageHTML (v1.2)
+
+   v13 canonical hook. html is always a native HTMLElement in v13.
+   _baphNormalizeHtml() applied defensively for any edge case
+   where a compat shim wraps it in jQuery, and to keep this
+   consistent with the pattern used across all other hooks in
+   this module.
+
+   Upstream from v1.1: was 'renderChatMessage' with inline
+   normalization. Renamed hook; swapped to shared helper.
+   All nat detection and styling logic unchanged.
    ---------------------------------------------------------- */
-Hooks.on('renderChatMessage', (message, html, data) => {
-  // Normalize to HTMLElement
-  const el = html instanceof HTMLElement ? html
-    : html instanceof jQuery        ? html[0]
-    : null;
+Hooks.on('renderChatMessageHTML', (message, html, data) => {
+  // Normalize to native HTMLElement via shared helper.
+  const el = _baphNormalizeHtml(html);
   if (!el) return;
 
   // Only process roll messages
@@ -163,5 +186,5 @@ Hooks.on('renderChatMessage', (message, html, data) => {
    READY
    ---------------------------------------------------------- */
 Hooks.once('ready', () => {
-  console.log(`${RC_MODULE_ID} | Roll Card Styler v1.1 ready`);
+  console.log(`${RC_MODULE_ID} | Roll Card Styler v1.2 ready`);
 });

@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.6
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.7
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,23 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.7 Changes (OWNERSHIP HARDENING):
+   - Broadened the isOwner computation in both _refreshPipRow()
+     and the renderCombatTracker injection. Previously:
+       game.user.isGM || combatant.isOwner
+     Now:
+       game.user.isGM || combatant.isOwner
+         || combatant.actor?.isOwner || combatant.token?.isOwner
+     combatant.isOwner is the primary PF1e path. The actor and
+     token fallbacks cover edge cases: unlinked tokens where
+     actor ownership propagates differently, and timing windows
+     during combatant setup where one chain resolves before the
+     other. The broader check ensures pips are clickable for
+     all ownership paths Foundry recognizes.
+   - No behavior change for fully-linked tokens where
+     combatant.isOwner resolves correctly (common case). No
+     change to turn reset, state management, or any other logic.
 
    v1.6 Changes:
    - [BUG FIX] The just-ended combatant's pips were resetting at end
@@ -397,7 +414,7 @@ function _togglePip(combatantId, type, index) {
 }
 
 /* ----------------------------------------------------------
-   _refreshPipRow — v1.5
+   _refreshPipRow — v1.5 + v1.7 ownership hardening
 
    Rebuilds every pip row currently rendered for this combatant.
    Important when the Encounter Tracker is popped out: the same
@@ -406,9 +423,8 @@ function _togglePip(combatantId, type, index) {
    already shared between the two — pipState is keyed on
    combatantId — so the fix is purely in the DOM write step.
 
-   Re-derives isOwner from the live combatant each time, not from
-   the old DOM's stale dataset (defends against an early-render
-   isOwner=false perpetuation bug).
+   v1.7: isOwner computation broadened to cover unlinked tokens
+   and edge-case ownership chains. See header comment for rationale.
    ---------------------------------------------------------- */
 
 function _refreshPipRow(combatantId) {
@@ -422,8 +438,10 @@ function _refreshPipRow(combatantId) {
     const parent = existing.parentElement;
     if (!parent) return;
 
+    // v1.7: broadened ownership check — combatant.isOwner is primary;
+    // actor and token fallbacks cover unlinked token edge cases.
     const isOwner = combatant
-      ? (game.user.isGM || combatant.isOwner)
+      ? (game.user.isGM || combatant.isOwner || combatant.actor?.isOwner || combatant.token?.isOwner)
       : (existing.dataset.isOwner === 'true');
 
     const newRow = _buildPipRow(combatantId, isOwner);
@@ -501,7 +519,8 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
     const oldRow = entry.querySelector('.baph-action-tracker');
     if (oldRow) oldRow.remove();
 
-    const isOwner = game.user.isGM || combatant.isOwner;
+    // v1.7: broadened ownership check — same as _refreshPipRow.
+    const isOwner = game.user.isGM || combatant.isOwner || combatant.actor?.isOwner || combatant.token?.isOwner;
     const pipRow = _buildPipRow(combatantId, isOwner);
     if (!pipRow) return;
 
@@ -608,5 +627,5 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${AT_MODULE_ID} | Action Tracker v1.6 ready`);
+  console.log(`${AT_MODULE_ID} | Action Tracker v1.7 ready`);
 });
