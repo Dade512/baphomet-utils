@@ -60,17 +60,19 @@ Hooks.once('init', () => {
 
   // Skill allowlist ────────────────────────────────────────────
   // Comma-separated PF1 skill keys eligible for auto-spend.
-  // Keys must be verified against pf1ActorRollSkill payload
-  // at runtime before v2.10.0 automation is enabled.
-  // Excluded from default: disableDevice (3-action equivalent),
-  // useMagicDevice, knowledge/* (need unified handling).
+  // IMPORTANT: Actual PF1 skill key strings must be verified
+  // against the pf1ActorRollSkill hook payload at runtime before
+  // v2.10.0 automation is enabled. The keys below are provisional
+  // and may not match PF1's internal key names exactly.
+  // Excluded from default: perception (passive/reactive sense,
+  // incompatible with active action-spend intent).
   game.settings.register(SETTINGS_MODULE_ID, 'skillAutoAllowlist', {
     name: 'Skill Auto-Spend Allowlist [v2.10.0]',
-    hint: 'FUTURE — not active yet. Comma-separated PF1 skill keys eligible for automatic action spending. Requires Auto-Spend on Skill Roll to be enabled. Example: acrobatics,bluff,intimidate,stealth.',
+    hint: 'FUTURE — not active yet. Comma-separated PF1 skill keys for automatic action spending. Key names must be verified at runtime. Requires Auto-Spend on Skill Roll to be enabled.',
     scope: 'world',
     config: true,
     type: String,
-    default: 'acrobatics,bluff,intimidate,stealth,perception,heal'
+    default: 'acrobatics,bluff,intimidate,stealth,heal,useMagicDevice,disableDevice,sleightOfHand,knowledge'
   });
 
   // Floating Move / Stride button position ─────────────────────

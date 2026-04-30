@@ -35,12 +35,33 @@ Hooks.on('pf1ActorRollSkill', (actor, skillKey, rollData) => {
 });
 ```
 
+### Approved first-pass skill list (v2.10.0)
+
+These skills are included in the default allowlist and `SKILL_ACTION_COSTS`. All key names are **provisional** and must be verified against the actual `pf1ActorRollSkill` hook payload at runtime before automation is enabled.
+
+| Skill | Action cost | Notes |
+|---|---|---|
+| Acrobatics | 1 | |
+| Bluff | 1 | |
+| Intimidate | 1 | |
+| Stealth | 1 | |
+| Heal | 1 | |
+| Use Magic Device | 1 | Verify untrained-use edge cases |
+| Disable Device | 3 | Verify cost is correct and not context-dependent |
+| Sleight of Hand | 1 | |
+| Knowledge (all) | 1 | Placeholder key — verify whether PF1 uses a flat key or dot-paths (e.g. `knowledge.arcana`) |
+
+**Excluded from the default allowlist:**
+- **Perception** — passive/reactive sense; spending an action on a Perception check conflicts with PF1.5 action economy intent. Remove from allowlist if a player adds it manually.
+
 ### Required verification before enabling hooks
 
 - **Confirm pf1AttackRoll payload:** verify which field carries the actor, whether it fires for AoOs, whether it fires for iterative attacks separately (if so, a dedup guard is needed keyed on roll ID or timestamp).
-- **Confirm pf1ActorRollSkill payload:** verify the exact skill key string format (flat key vs dot-path for sub-skills, casing), confirm which field to read.
-- **Verify SKILL_ACTION_COSTS keys:** open a game session, add temporary logging to pf1ActorRollSkill, perform each skill check, compare logged key against the SKILL_ACTION_COSTS entries.
-- **Unlinked tokens:** verify `_getActiveCombatantForActor` matches synthetic actors correctly. May need a token-ID fallback.
+- **Confirm pf1ActorRollSkill payload:** verify the exact skill key string format (flat key vs dot-path for sub-skills, casing). Perform test rolls for each skill in the approved list and log the raw key received.
+- **Verify SKILL_ACTION_COSTS keys:** log pf1ActorRollSkill for each skill, compare output against the scaffold keys. Update any mismatches before enabling.
+- **Verify Disable Device cost:** confirm 3 actions is correct for all contexts in PF1.5 before enabling.
+- **Verify Knowledge key format:** confirm whether sub-skills arrive as `knowledge`, `knowledge.arcana`, or some other shape.
+- **Unlinked tokens:** `_getActiveCombatantForActor` matches on `actor.id`. Verify that unlinked token synthetic actors resolve correctly, or add a token-ID fallback.
 
 ### Dedupe guard (required)
 
@@ -64,11 +85,9 @@ function _dedupeSpend(key, fn) {
 - Do NOT use token drag movement as the implementation — too unreliable and fires from GM scene panning
 - The button should appear only when combat is active AND the current user has a combatant with actions remaining
 
-### Exclusions (do not add in v2.10.0 first pass)
+### Exclusions (never add without explicit GM review)
 
-- **Disable Device** (listed as 3-action cost) — verify action economy before including
-- **Use Magic Device** — edge cases around untrained use and item-activation interaction
-- **Knowledge/\*** — need a unified approach for all knowledge sub-skills
+- **Perception** — excluded from default allowlist; do not include in first pass
 - **Token drag movement** — too noisy, wrong abstraction
 - **Standard/move/swift/full-round inference** — PF1.5 uses 3-action economy; never map back to PF1 action types
 
@@ -78,6 +97,7 @@ function _dedupeSpend(key, fn) {
 - Enable `debugLogging` during development — every spend decision should appear in F12
 - Test with automation ON and OFF to confirm pips stay unchanged when disabled
 - Test with no active combat — helpers must return false/null gracefully
+- `_getActiveCombatantForActor` only returns the current active combatant — off-turn actors must not trigger pip spends
 
 ---
 

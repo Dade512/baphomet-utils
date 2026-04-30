@@ -17,9 +17,10 @@
      if settings are not yet registered.
    - Added _getActiveCombatant(): returns game.combat.combatant
      or null. Intended lookup point for attack-roll automation.
-   - Added _getActiveCombatantForActor(actor): maps an actor
-     reference to its combatant in the current combat. Intended
-     entry point for pf1ActorRollSkill automation in v2.10.0.
+   - Added _getActiveCombatantForActor(actor): returns the current
+     active combatant only if its actor matches the provided actor.
+     Does NOT search all combatants — only the active one is
+     eligible for automation spending. Corrected in v2.9.9 patch.
    - Added _canUserControlCombatant(combatant): mirrors the
      ownership check in _refreshPipRow so automation uses the
      same gate as manual interaction.
@@ -666,7 +667,8 @@ Hooks.once('ready', () => {
    Guiding constraints for v2.10.0 (do not violate):
    - No token drag / movement auto-spending
    - No inference of standard/move/swift/full-round PF1 actions
-   - Disable Device, UMD, and Knowledge/* excluded from first pass
+   - Verify all SKILL_ACTION_COSTS key names at runtime via
+     pf1ActorRollSkill before wiring any skill automation
    - A deduplication guard is required before live hooks go in
    - Debug logging should trace every spend decision
    ============================================================ */
@@ -713,24 +715,30 @@ function _getActiveCombatant() {
 }
 
 /**
- * Find the combatant in the current combat whose linked actor
- * matches the provided actor. Returns the first match or null.
+ * Return the current active combatant if and only if its linked
+ * actor matches the provided actor. Returns null otherwise.
  *
- * Used when a PF1 hook supplies an actor reference and we need
- * to map it back to a combatant for pip spending.
- * Returns null if combat is inactive, actor is absent, or no
- * matching combatant is found.
+ * SAFETY RULE: Only the current active combatant is eligible for
+ * automation spending. Searching all combatants was intentionally
+ * removed — it would allow a PF1 hook firing for a non-active
+ * actor (e.g. an AoO, an off-turn triggered ability) to incorrectly
+ * spend pips for a combatant who hasn't taken their turn yet.
  *
- * NOTE: This matches on actor.id. Unlinked tokens whose actor
- * is a synthetic actor (not in game.actors) may not match.
- * Verify behavior with unlinked tokens before enabling in v2.10.0.
+ * Returns null if: combat is inactive, no actor provided,
+ * the active combatant has no actor, or the actor IDs do not match.
+ *
+ * NOTE: Matches on actor.id. Unlinked tokens use synthetic actors
+ * not in game.actors — verify behavior with unlinked tokens before
+ * enabling automation in v2.10.0. A token-ID fallback may be needed.
  *
  * @param {Actor} actor
  * @returns {Combatant|null}
  */
 function _getActiveCombatantForActor(actor) {
   if (!actor || !game.combat) return null;
-  return game.combat.combatants.find(c => c.actor?.id === actor.id) ?? null;
+  const active = game.combat.combatant;
+  if (!active?.actor) return null;
+  return active.actor.id === actor.id ? active : null;
 }
 
 /**
@@ -827,7 +835,7 @@ function _spendActionForCombatant(combatantId, count = 1, reason = '') {
 function _spendActionForActor(actor, count = 1, reason = '') {
   const combatant = _getActiveCombatantForActor(actor);
   if (!combatant) {
-    _debugLog(`_spendActionForActor: no combatant for actor "${actor?.name}" [${reason}]`);
+    _debugLog(`_spendActionForActor: no active combatant for actor "${actor?.name}" [${reason}]`);
     return false;
   }
 
@@ -850,33 +858,35 @@ function _spendActionForActor(actor, count = 1, reason = '') {
    must be verified against the actual pf1ActorRollSkill hook
    payload at runtime. The payload shape (which field carries
    the skill key, how multi-word skills are formatted, whether
-   sub-skills like knowledgePlanes use a dot-path or flat key)
+   sub-skills like knowledge use a dot-path or a flat key)
    is not confirmed — do not assume.
    
-   Excluded from first automation pass (do not enable these
-   in v2.10.0 without explicit GM review):
-   - disableDevice: full-round equivalent in many contexts,
-     high risk of wrong spend if action cost is miscounted
-   - useMagicDevice: edge cases around untrained use and
-     item-activation action economy are unclear
-   - knowledge/*: need a unified approach for all knowledges
-   - sleightOfHand: action economy unclear in some contexts
+   Note on 'knowledge': PF1 has multiple sub-skills (arcana,
+   dungeoneering, engineering, geography, history, local, nature,
+   nobility, planes, religion). The key 'knowledge' here is a
+   placeholder. Verify whether pf1ActorRollSkill emits a flat
+   key or a dot-path (e.g. 'knowledge.arcana') and update the
+   map accordingly before enabling automation.
+   
+   Note on 'disableDevice': cost is 3 actions. Verify whether
+   PF1.5 treats Disable Device as a full-round equivalent or
+   whether the action count differs by context before enabling.
+   
+   Excluded from the default allowlist:
+   - perception: passive/reactive sense; spending an action on
+     a Perception check conflicts with PF1.5 action economy intent.
    ---------------------------------------------------------- */
 
 const SKILL_ACTION_COSTS = {
   // PF1 skill key (MUST VERIFY against pf1ActorRollSkill payload)
   // → action pip cost
-  acrobatics:   1,
-  bluff:        1,
-  intimidate:   1,
-  stealth:      1,
-  perception:   1,
-  heal:         1,
-
-  // ── EXCLUDED FROM v2.10.0 FIRST PASS ─────────────────────
-  // Uncomment only after verifying key names AND action economy:
-  // sleightOfHand: 1,   // key name unverified; action economy unclear
-  // useMagicDevice: 1,  // edge cases with untrained use
-  // knowledge:      1,  // needs unified handling across knowledge/* keys
-  // disableDevice:  3,  // 3-action cost unverified; do not enable early
+  acrobatics:     1,
+  bluff:          1,
+  intimidate:     1,
+  stealth:        1,
+  heal:           1,
+  useMagicDevice: 1,
+  disableDevice:  3,  // verify cost — may be context-dependent
+  sleightOfHand:  1,
+  knowledge:      1,  // placeholder key — verify sub-skill format
 };
