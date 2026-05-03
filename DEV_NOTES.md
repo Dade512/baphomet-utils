@@ -4,6 +4,44 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.11.0 — Skill Auto-Spend
+
+Skill auto-spend is now live behind the `autoSkillSpend` world setting (default OFF).
+
+**Confirmed hook signature:**
+```
+pf1ActorRollSkill(actor, chatMessage, skillKey)
+```
+Confirmed via v2.10.x diagnostic testing.
+
+**Confirmed skill keys and action costs:**
+
+| Key | Skill | Cost |
+|-----|-------|------|
+| acr | Acrobatics | 1 |
+| blf | Bluff | 1 |
+| int | Intimidate | 1 |
+| ste | Stealth | 1 |
+| hea | Heal | 1 |
+| umd | Use Magic Device | 1 |
+| dev | Disable Device | 3 (all-or-nothing) |
+| slt | Sleight of Hand | 1 |
+| kar | Knowledge (Arcana) | 1 |
+| kre | Knowledge (Religion) | 1 |
+| kna | Knowledge (Nature) | 1 |
+
+**Excluded:** `per` (Perception) — passive/reactive sense, excluded intentionally.
+
+**Disable Device / dev:** Costs 3 actions. If fewer than 3 pips are available, nothing is spent. All-or-nothing is enforced by `_spendActionForCombatant`.
+
+**Dedupe guard:** `_isSkillSpendDuped` keys on `actor.id:skillKey:chatMessage.id` with a 500ms window. If the hook fires multiple times for the same roll, only the first event spends pips.
+
+**Attack auto-spend deferred:** `pf1AttackRoll` confirmed as `(ItemAction, D20RollPF, Object)`. Dedupe behavior not yet designed — unclear whether it fires once per attack action, per iterative roll, or per damage/card event. Will be addressed after observing behavior in live play.
+
+**Move / Stride button deferred** to a future release.
+
+---
+
 ## v2.10.1 — Diagnostic Cleanup
 
 Cleaned up `_summarizeHookArg` in `scripts/action-tracker.js` to remove all `arg?.data` probing.

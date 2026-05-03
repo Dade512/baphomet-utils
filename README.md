@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.10.1
+**Current Version:** 2.11.0
 
 ---
 
@@ -77,6 +77,17 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.11.0 — "The Ledger Spends"
+Skill auto-spend is now live. Attack auto-spend and Move/Stride remain deferred.
+
+**`scripts/action-tracker.js` — live skill auto-spend (v1.11):**
+Adds a live `pf1ActorRollSkill` handler that automatically spends action pips when an active combatant makes a skill check. Gated behind `Auto-Spend on Skill Roll` in Module Settings (default OFF — you must enable it deliberately). Eleven skills supported with confirmed PF1 key strings from v2.10.x diagnostic testing: Acrobatics, Bluff, Intimidate, Stealth, Heal, Use Magic Device, Disable Device (3 pips, all-or-nothing), Sleight of Hand, Knowledge Arcana, Knowledge Religion, Knowledge Nature. Perception excluded intentionally. A 500ms dedupe guard prevents double-spending if the hook fires multiple times for the same roll. Nine decision gates with debug logging at each — enable `Action Tracker Debug Logging` to trace every spend decision in F12.
+
+`pf1AttackRoll` remains diagnostic-only. Attack auto-spend deferred pending dedupe design.
+
+**`scripts/settings.js` v1.1:**
+`autoSkillSpend` and `skillAutoAllowlist` updated to reflect live status and confirmed PF1 key strings. `autoAttackSpend` and `moveButtonPosition` remain FUTURE.
 
 ### v2.10.1 — "The Ledger Stops Shouting"
 Diagnostic cleanup only. No auto-spending active.

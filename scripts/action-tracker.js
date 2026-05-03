@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.10
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.11
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,28 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.11 Changes (LIVE SKILL AUTO-SPEND):
+   - SKILL_ACTION_COSTS updated to confirmed PF1 key strings
+     from v2.10.x diagnostic testing. Provisional language removed.
+     Keys: acr, blf, int, ste, hea, umd, dev (3), slt, kar, kre, kna.
+   - Live pf1ActorRollSkill hook wired. Spends action pips when:
+     autoSkillSpend setting is ON, combat is active, actor is the
+     current active combatant, user controls the combatant, skill
+     is in the allowlist, and enough pips are available for the
+     full cost (all-or-nothing).
+   - Disable Device (dev) costs 3. If fewer than 3 pips remain,
+     nothing is spent.
+   - Perception (per) excluded from all costs and allowlist.
+   - Dedupe guard added (_skillSpendDedupeSet). Key is
+     actor.id:skillKey:chatMessage.id. 500ms window.
+   - pf1ActorRollSkill removed from diagnostic block to prevent
+     duplicate/noisy logs. Live handler carries its own debug
+     logging at every decision gate.
+   - pf1AttackRoll remains diagnostic-only — dedupe behavior
+     not yet designed.
+   - No token movement automation. No Move/Stride button.
+   - Manual pip behavior unchanged.
 
    v1.10 Changes (DIAGNOSTIC CLEANUP):
    - Removed all arg?.data probing from _summarizeHookArg.
@@ -890,59 +912,59 @@ function _spendActionForActor(actor, count = 1, reason = '') {
 }
 
 /* ----------------------------------------------------------
-   SKILL ACTION COST SCAFFOLD
+   SKILL ACTION COSTS
    
-   INERT. Not referenced by any live hook. Future use only.
+   Confirmed PF1 key strings from v2.10.x diagnostic testing.
+   Signature: pf1ActorRollSkill(actor, chatMessage, skillKey)
    
-   ══ VERIFICATION REQUIRED before enabling in v2.10.0 ══
+   Key  →  Skill Name            →  Action cost
+   acr  →  Acrobatics            →  1
+   blf  →  Bluff                 →  1
+   int  →  Intimidate            →  1
+   ste  →  Stealth               →  1
+   hea  →  Heal                  →  1
+   umd  →  Use Magic Device      →  1
+   dev  →  Disable Device        →  3  (all-or-nothing)
+   slt  →  Sleight of Hand       →  1
+   kar  →  Knowledge (Arcana)    →  1
+   kre  →  Knowledge (Religion)  →  1
+   kna  →  Knowledge (Nature)    →  1
    
-   The keys below are PROVISIONAL. PF1 skill key strings
-   must be verified against the actual pf1ActorRollSkill hook
-   payload at runtime. The payload shape (which field carries
-   the skill key, how multi-word skills are formatted, whether
-   sub-skills like knowledge use a dot-path or a flat key)
-   is not confirmed — do not assume.
+   Excluded:
+   per  →  Perception — passive/reactive sense; excluded
+           intentionally from action economy tracking.
    
-   Note on 'knowledge': PF1 has multiple sub-skills (arcana,
-   dungeoneering, engineering, geography, history, local, nature,
-   nobility, planes, religion). The key 'knowledge' here is a
-   placeholder. Verify whether pf1ActorRollSkill emits a flat
-   key or a dot-path (e.g. 'knowledge.arcana') and update the
-   map accordingly before enabling automation.
-   
-   Note on 'disableDevice': cost is 3 actions. Verify whether
-   PF1.5 treats Disable Device as a full-round equivalent or
-   whether the action count differs by context before enabling.
-   
-   Excluded from the default allowlist:
-   - perception: passive/reactive sense; spending an action on
-     a Perception check conflicts with PF1.5 action economy intent.
+   Any skills added in future must be verified against the
+   pf1ActorRollSkill payload before adding here.
    ---------------------------------------------------------- */
 
 const SKILL_ACTION_COSTS = {
-  // PF1 skill key (MUST VERIFY against pf1ActorRollSkill payload)
-  // → action pip cost
-  acrobatics:     1,
-  bluff:          1,
-  intimidate:     1,
-  stealth:        1,
-  heal:           1,
-  useMagicDevice: 1,
-  disableDevice:  3,  // verify cost — may be context-dependent
-  sleightOfHand:  1,
-  knowledge:      1,  // placeholder key — verify sub-skill format
+  acr: 1,
+  blf: 1,
+  int: 1,
+  ste: 1,
+  hea: 1,
+  umd: 1,
+  dev: 3,  // 3-action cost — all-or-nothing enforced by _spendActionForCombatant
+  slt: 1,
+  kar: 1,
+  kre: 1,
+  kna: 1
 };
 
 /* ============================================================
-   ACTION AUTOMATION DIAGNOSTICS — v1.10
+   ACTION AUTOMATION DIAGNOSTICS — v1.11
    ══════════════════════════════════════════════════════════
 
-   Debug-gated hook listeners for pf1AttackRoll and
-   pf1ActorRollSkill. These log raw hook arguments so the
-   actual PF1 runtime payload shape can be confirmed before
-   any spend wiring is added in a subsequent pass.
+   pf1AttackRoll: diagnostic-only. Not yet wired to spend
+   pips — dedupe behavior not yet designed.
 
-   NOTHING HERE SPENDS PIPS. These are observer-only hooks.
+   pf1ActorRollSkill: removed from this block in v1.11.
+   The live skill automation hook below carries its own
+   debug logging at every decision gate. Having both would
+   produce duplicate/noisy output on every skill roll.
+
+   NOTHING HERE SPENDS PIPS.
 
    .data paths are intentionally not probed — PF1 ItemAction.data
    is deprecated and emits compatibility warnings on access.
@@ -1072,17 +1094,18 @@ function _registerActionAutomationDiagnostics() {
   if (_baphActionDiagnosticsRegistered) return;
   _baphActionDiagnosticsRegistered = true;
 
+  // pf1AttackRoll: diagnostic-only. Logs raw args and shallow summary.
+  // Does not spend pips. Dedupe behavior not yet designed.
   Hooks.on('pf1AttackRoll', (...args) => {
     _debugLog('[DIAG] pf1AttackRoll raw args:', ...args);
     _debugLog('[DIAG] pf1AttackRoll arg summary:', _summarizeHookArgs(args));
   });
 
-  Hooks.on('pf1ActorRollSkill', (...args) => {
-    _debugLog('[DIAG] pf1ActorRollSkill raw args:', ...args);
-    _debugLog('[DIAG] pf1ActorRollSkill arg summary:', _summarizeHookArgs(args));
-  });
+  // pf1ActorRollSkill intentionally not registered here.
+  // The live skill automation hook (below) handles this event
+  // and carries its own debug logging.
 
-  _debugLog('Action automation diagnostics registered (pf1AttackRoll, pf1ActorRollSkill)');
+  _debugLog('Action automation diagnostics registered (pf1AttackRoll only — pf1ActorRollSkill handled by live hook)');
 }
 
 // Separate ready hook for diagnostics registration.
@@ -1090,4 +1113,137 @@ function _registerActionAutomationDiagnostics() {
 // two concerns, two hooks.
 Hooks.once('ready', () => {
   _registerActionAutomationDiagnostics();
+});
+
+/* ============================================================
+   LIVE SKILL AUTO-SPEND — v1.11
+   ══════════════════════════════════════════════════════════
+
+   Confirmed hook signature:
+     pf1ActorRollSkill(actor, chatMessage, skillKey)
+
+   All-or-nothing: a skill with cost 3 (Disable Device) will
+   spend nothing if fewer than 3 pips are available.
+
+   Gated behind 'autoSkillSpend' world setting (default OFF).
+   Only fires for the current active combatant on the user's
+   controlled token. Non-active actors are silently ignored.
+
+   Dedupe: keyed on actor.id + skillKey + chatMessage.id.
+   500ms window. Client-local in-memory Set — does NOT protect
+   across multiple connected clients. This is acceptable because
+   pipState is also client-local and not synchronized across
+   clients. Each client maintains its own pip view independently.
+   ============================================================ */
+
+// In-memory dedupe set. Not persisted. Cleared by 500ms timeouts.
+const _skillSpendDedupeSet = new Set();
+
+/**
+ * Check whether a skill spend event is a duplicate.
+ * Adds the key to the set and schedules its removal.
+ * Returns true if this is a duplicate (do not spend).
+ *
+ * @param {Actor}       actor
+ * @param {string}      skillKey
+ * @param {ChatMessage} chatMessage
+ * @returns {boolean}
+ */
+function _isSkillSpendDuped(actor, skillKey, chatMessage) {
+  // Prefer chatMessage.id as the most stable unique identifier.
+  // Fall back to uuid, then to a bare actor+skill key (accepts the
+  // theoretical risk of two legitimate rolls in 500ms being deduped
+  // — that's an edge case well within acceptable bounds).
+  const msgId = chatMessage?.id ?? chatMessage?.uuid ?? null;
+  if (!msgId) {
+    _debugLog(`skill auto-spend dedupe: chatMessage.id and uuid both absent for ${actor?.id}:${skillKey} — using fallback key, increased double-spend risk on this client`);
+  }
+  const key = msgId
+    ? `${actor.id}:${skillKey}:${msgId}`
+    : `${actor.id}:${skillKey}`;
+
+  if (_skillSpendDedupeSet.has(key)) return true;
+
+  _skillSpendDedupeSet.add(key);
+  setTimeout(() => _skillSpendDedupeSet.delete(key), 500);
+  return false;
+}
+
+/**
+ * Live pf1ActorRollSkill handler.
+ * Spends action pips for the active combatant when all gates pass.
+ * Every decision path emits a _debugLog line.
+ */
+Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
+  // Gate 1: setting enabled
+  if (!game.settings.get(AT_MODULE_ID, 'autoSkillSpend')) {
+    _debugLog(`skill auto-spend: setting disabled — no spend for ${skillKey}`);
+    return;
+  }
+
+  // Gate 2: active combat
+  if (!game.combat?.active) {
+    _debugLog(`skill auto-spend: no active combat — no spend for ${skillKey}`);
+    return;
+  }
+
+  // Gate 3: actor present
+  if (!actor) {
+    _debugLog('skill auto-spend: actor missing from hook args');
+    return;
+  }
+
+  // Gate 4: skillKey present
+  if (!skillKey) {
+    _debugLog('skill auto-spend: skillKey missing from hook args');
+    return;
+  }
+
+  // Gate 5: skill in allowlist
+  const allowlistRaw = game.settings.get(AT_MODULE_ID, 'skillAutoAllowlist') ?? '';
+  const allowlist = allowlistRaw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!allowlist.includes(skillKey)) {
+    _debugLog(`skill auto-spend: "${skillKey}" not in allowlist — no spend`);
+    return;
+  }
+
+  // Gate 6: skill has a known cost
+  const cost = SKILL_ACTION_COSTS[skillKey];
+  if (cost === undefined) {
+    _debugLog(`skill auto-spend: "${skillKey}" has no cost mapping — no spend`);
+    return;
+  }
+
+  // Gate 7: actor is the current active combatant
+  const combatant = _getActiveCombatantForActor(actor);
+  if (!combatant) {
+    _debugLog(`skill auto-spend: "${actor.name}" is not the active combatant — no spend`);
+    return;
+  }
+
+  // Gate 8: current user controls this combatant
+  if (!_canUserControlCombatant(combatant)) {
+    _debugLog(`skill auto-spend: user cannot control combatant for "${actor.name}" — no spend`);
+    return;
+  }
+
+  // Gate 9: dedupe check
+  if (_isSkillSpendDuped(actor, skillKey, chatMessage)) {
+    _debugLog(`skill auto-spend: duplicate event for ${actor.name}:${skillKey} — skipping`);
+    return;
+  }
+
+  // All gates passed. _spendActionForCombatant enforces all-or-nothing:
+  // if cost is 3 (Disable Device) and fewer than 3 pips are available,
+  // it returns false without spending anything.
+  _debugLog(`skill auto-spend: attempting spend — ${actor.name} / ${skillKey} / cost ${cost}`);
+  const spent = _spendActionForCombatant(combatant.id, cost, `skill-${skillKey}`);
+
+  if (!spent) {
+    // _spendActionForCombatant already logged the reason (insufficient actions
+    // or API not ready).
+    return;
+  }
+
+  _debugLog(`skill auto-spend: success — spent ${cost} action(s) for ${actor.name} [${skillKey}]`);
 });
