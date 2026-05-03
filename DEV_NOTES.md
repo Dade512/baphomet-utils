@@ -4,7 +4,28 @@ Internal development notes. Not user-facing.
 
 ---
 
-## v2.10.0 — Action Automation (Future Release)
+## v2.10.0 — Action Automation Diagnostics
+
+This version begins action automation work with diagnostic-only PF1 hook logging.
+
+Added debug-gated logging for:
+- `pf1AttackRoll`
+- `pf1ActorRollSkill`
+
+These hooks do not spend action pips. They exist only to verify the actual PF1 runtime payload shape before final automation logic is wired.
+
+**Testing goals:**
+- Confirm actor path for attack rolls.
+- Confirm actor path for skill rolls.
+- Confirm skill key path and format.
+- Confirm whether `pf1AttackRoll` fires once per attack action, once per iterative attack, for AoOs, or during damage/card display flow.
+- Look for any stable roll/message/action identifier usable for dedupe.
+
+Automation remains disabled until payload extraction and dedupe rules are confirmed.
+
+---
+
+## v2.10.0 — Action Automation (Future Release — Planning Notes)
 
 **Status:** Planned. Scaffold registered in v2.9.9. Do NOT implement mid-campaign.
 

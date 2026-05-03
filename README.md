@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.9.9
+**Current Version:** 2.10.0
 
 ---
 
@@ -77,6 +77,14 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.10.0 — "The Ledger Listens"
+Diagnostic-only pass. No action auto-spending is active in this version.
+
+**`scripts/action-tracker.js` — diagnostic hooks (v1.9):**
+Added debug-gated `Hooks.on` listeners for `pf1AttackRoll` and `pf1ActorRollSkill`. When **Action Tracker Debug Logging** is enabled in Module Settings, every firing of these hooks logs the full raw argument list plus a shallow structured summary to the browser console (F12). The summary checks common actor paths, constructor names, top-level keys, and possible skill key fields without deep-traversing any Foundry document. No pips are spent. No state is mutated. Three new helpers support the summarizer: `_summarizePossibleActor`, `_summarizeHookArg`, `_summarizeHookArgs`. A duplicate-registration guard (`_baphActionDiagnosticsRegistered`) prevents double-registration if the ready hook fires unexpectedly more than once. A second `Hooks.once('ready')` block registers the diagnostics, kept separate from the macro API block for clarity.
+
+All other module behavior is unchanged from v2.9.9. Manual pip clicking, turn reset, condition locking, weather, XP progression, and roll cards are untouched.
 
 ### v2.9.9 — "Automation Prep"
 Scaffold-only patch. No user-facing behavior changes with default settings.
