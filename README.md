@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.9.8
+**Current Version:** 2.9.9
 
 ---
 
@@ -77,6 +77,21 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.9.9 — "Automation Prep"
+Scaffold-only patch. No user-facing behavior changes with default settings.
+
+**`module.json`:**
+Compatibility `minimum` tightened to `13.350` (matching `verified`). Added `relationships.requires` declaring the PF1e system dependency formally. No manifest or download changes.
+
+**`scripts/settings.js` — new file:**
+Centralised settings registration. Five new automation settings added, all inert and defaulting OFF: `autoAttackSpend`, `autoSkillSpend`, `skillAutoAllowlist`, `moveButtonPosition`, `debugLogging`. These register the Module Settings UI entries for future v2.10.0 automation but wire no behavior. Enabling them has no effect in this version.
+
+**`scripts/action-tracker.js` — automation scaffold (v1.8):**
+Added `_debugLog()` helper (gated on `debugLogging` setting), five inert automation helpers (`_getActiveCombatant`, `_getActiveCombatantForActor`, `_canUserControlCombatant`, `_spendActionForCombatant`, `_spendActionForActor`), and the `SKILL_ACTION_COSTS` scaffold constant (provisional key names, unverified). No hooks call any of these yet. `spendAction` and `spendReaction` on the macro API now return booleans (`true` if a pip was actually spent, `false` otherwise) — callers that ignored the return value are unaffected. `_spendActionForCombatant` enforces all-or-nothing spending: a 3-action cost requires 3 available pips or nothing is spent. Routine `console.log` calls gated behind `_debugLog` so they only appear in F12 when debug logging is enabled.
+
+**`DEV_NOTES.md`:**
+v2.10.0 automation plan updated: removed unverified pseudocode claiming specific hook argument signatures. Replaced with a diagnostic-first plan — v2.10.0's first step is to log raw `pf1AttackRoll` and `pf1ActorRollSkill` payloads with `debugLogging` enabled to confirm argument positions and skill key format before any spend wiring is added.
 
 ### v2.9.8 — "The Seams Hold"
 Conservative v13 + PF1 compatibility patch. No user-facing behavior changes.
@@ -188,7 +203,7 @@ Documents the deferred ESM migration task (`"scripts"` → `"esmodules"`) with r
 Pushing a version tag automatically builds and publishes a GitHub release:
 
 ```bash
-git tag v2.9.8
+git tag v2.9.9
 git push origin main --tags
 ```
 
@@ -196,7 +211,7 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 
 ---
 
-## Test Checklist (v2.9.8)
+## Test Checklist (v2.9.9)
 
 1. **Roll cards — hook fires:** Make a d20 roll in chat. Confirm the dark leather result bar appears on the roll card.
 2. **Roll cards — nat 20:** Roll a nat 20 (or adjust dice). Confirm gold bar styling and "⚔ Critical Success" label appear.
@@ -207,6 +222,6 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 7. **Action tracker — pip clicks:** Start combat. Confirm pip rows appear below combatant names. Click an action pip — confirm it toggles spent/available.
 8. **Action tracker — player owns token:** Log in as a player who owns a combatant. Confirm their pips are clickable. Confirm another player's pips are disabled (grayed out / not clickable).
 9. **Action tracker — unlinked token ownership:** If applicable, test with an unlinked token the player owns via actor permission. Pips should be clickable (v1.7 fallback).
-10. **Action tracker — turn reset:** Advance turns in combat. Confirm the previously active combatant's pips do NOT reset. Confirm the newly active combatant's pips DO reset at turn start. Check F12 for `Reset pips for {name} (round N)` log line.
+10. **Action tracker — turn reset:** Advance turns in combat. Confirm the previously active combatant's pips do NOT reset. Confirm the newly active combatant's pips DO reset at turn start. With `debugLogging` ON, check F12 for `[DEBUG] Reset pips for {name} (round N)`. With it OFF, confirm the line does not appear.
 11. **Scene Controls button:** Log in as GM → Token Controls toolbar shows ☁ cloud icon → click opens Weather Config panel.
 12. **No Math.clamp errors:** Apply a condition → confirm no console error. (Regression check from v2.9.0.)
