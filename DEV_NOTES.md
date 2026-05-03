@@ -15,25 +15,32 @@ Internal development notes. Not user-facing.
 
 **What v2.10.0 must add:**
 
-### Planned hooks
+### First step: diagnostic payload logging (v2.10.0 — do this before wiring)
+
+The argument signatures for `pf1AttackRoll` and `pf1ActorRollSkill` are **not verified yet**. Do not assume argument positions, field names, or payload shape. The first thing v2.10.0 must do is add temporary diagnostic hooks that log all raw arguments with `debugLogging` enabled.
+
+With `debugLogging` ON in Module Settings, add temporary hooks like these to identify the actual payload shape:
 
 ```javascript
-// Attack roll → spend 1 action
-Hooks.on('pf1AttackRoll', (actor, rollData) => {
-  if (!game.settings.get('baphomet-utils', 'autoAttackSpend')) return;
-  _spendActionForActor(actor, 1, 'attack-roll');
+// DIAGNOSTIC ONLY — do not ship. Log full argument list.
+// Run a few attacks and check F12 for the output.
+Hooks.on('pf1AttackRoll', (...args) => {
+  _debugLog('pf1AttackRoll raw args:', ...args);
 });
 
-// Skill roll → allowlist-gated spend
-Hooks.on('pf1ActorRollSkill', (actor, skillKey, rollData) => {
-  if (!game.settings.get('baphomet-utils', 'autoSkillSpend')) return;
-  const allowlist = game.settings.get('baphomet-utils', 'skillAutoAllowlist')
-    .split(',').map(s => s.trim()).filter(Boolean);
-  if (!allowlist.includes(skillKey)) return;
-  const cost = SKILL_ACTION_COSTS[skillKey] ?? 1;
-  _spendActionForActor(actor, cost, `skill-${skillKey}`);
+// DIAGNOSTIC ONLY — do not ship. Run each skill in the approved list.
+Hooks.on('pf1ActorRollSkill', (...args) => {
+  _debugLog('pf1ActorRollSkill raw args:', ...args);
 });
 ```
+
+**What to verify from the diagnostic output before wiring any automation:**
+
+- `pf1AttackRoll`: Which argument position (or property) carries the actor? Does it fire once per attack action, once per individual attack roll (iteratives), or once per damage/card event? Does it fire for AoOs? The dedup guard design depends on this.
+- `pf1ActorRollSkill`: Which argument position carries the actor? Which argument carries the skill key? Is the skill key a flat string (`acrobatics`), camelCase (`useMagicDevice`), a dot-path (`knowledge.arcana`), or something else? Log all sub-skill knowledge rolls to confirm the format.
+- Verify all keys in `SKILL_ACTION_COSTS` against logged output before enabling any skill automation.
+
+Only after logging and confirming the payload shape should spend wiring be added — using the verified argument positions and field names.
 
 ### Approved first-pass skill list (v2.10.0)
 

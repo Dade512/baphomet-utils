@@ -303,7 +303,7 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
     _applyConditionLocks(combatantId, combatant.actor);
   }
 
-  console.log(`${AT_MODULE_ID} | Reset pips for ${combatant?.name ?? combatantId} (round ${round})`);
+  _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${round})`);
 }
 
 /* ----------------------------------------------------------
@@ -634,24 +634,28 @@ Hooks.once('ready', () => {
     },
     spendAction: (combatantId, count = 1) => {
       const state = _getState(combatantId);
-      if (!state) return;
+      if (!state) return false;
+      let spent = 0;
       for (let i = 0; i < 3 && count > 0; i++) {
         if (state.actions[i] && i >= state.conditionLocked) {
           state.actions[i] = false;
           count--;
+          spent++;
         }
       }
       _refreshPipRow(combatantId);
+      return spent > 0;
     },
     spendReaction: (combatantId) => {
       const state = _getState(combatantId);
-      if (!state) return;
+      if (!state || !state.reaction[0]) return false;
       state.reaction[0] = false;
       _refreshPipRow(combatantId);
+      return true;
     }
   };
 
-  console.log(`${AT_MODULE_ID} | Action Tracker v1.8 ready`);
+  _debugLog('Action Tracker v1.8 ready');
 });
 
 /* ============================================================
