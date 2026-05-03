@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.11.0
+**Current Version:** 2.11.1
 
 ---
 
@@ -77,6 +77,15 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.11.1 — "The Ledger Remembers"
+Migration fix. No new automation features.
+
+**Root cause of v2.11.0 skill-spend failure:** Foundry world settings persist stored values across module updates — updating the `default` field in `game.settings.register` does not overwrite what's already saved in the world database. The world still held the old provisional allowlist from v2.9.9 (`acrobatics,bluff,...`), so every confirmed key was rejected as "not in allowlist."
+
+**Fix:** One-time migration in `scripts/settings.js` detects the exact old provisional string on first GM load and replaces it with confirmed PF1 keys. Custom allowlists are untouched. Migration flag `skillAllowlistMigrated211` ensures it runs exactly once. `klo` (Knowledge Local, confirmed from live v2.11.0 debug output) added to `SKILL_ACTION_COSTS` and the default allowlist.
+
+**On first load after update:** Check F12 for the migration log line (styled in Croaker red if a replacement ran, plain text if the setting was already up-to-date or customized).
 
 ### v2.11.0 — "The Ledger Spends"
 Skill auto-spend is now live. Attack auto-spend and Move/Stride remain deferred.

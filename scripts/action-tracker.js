@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.11
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.12
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,12 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.12 Changes (SKILL ALLOWLIST MIGRATION — klo ADDED):
+   - Added klo (Knowledge Local) to SKILL_ACTION_COSTS (cost 1).
+     Confirmed from live v2.11.0 testing — key fired in debug output.
+   - klo added to allowlist default in settings.js.
+   - No other behavior changes. All gates and spend logic unchanged.
 
    v1.11 Changes (LIVE SKILL AUTO-SPEND):
    - SKILL_ACTION_COSTS updated to confirmed PF1 key strings
@@ -929,6 +935,7 @@ function _spendActionForActor(actor, count = 1, reason = '') {
    kar  →  Knowledge (Arcana)    →  1
    kre  →  Knowledge (Religion)  →  1
    kna  →  Knowledge (Nature)    →  1
+   klo  →  Knowledge (Local)     →  1
    
    Excluded:
    per  →  Perception — passive/reactive sense; excluded
@@ -949,7 +956,8 @@ const SKILL_ACTION_COSTS = {
   slt: 1,
   kar: 1,
   kre: 1,
-  kna: 1
+  kna: 1,
+  klo: 1   // Knowledge Local — confirmed live v2.11.0
 };
 
 /* ============================================================

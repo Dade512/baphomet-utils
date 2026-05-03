@@ -1,17 +1,19 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.1
+   BAPHOMET UTILS — SETTINGS v1.2
    Central module settings registration.
 
+   v1.2 (module v2.11.1 — "Migrate Confirmed Skill Allowlist"):
+   - skillAutoAllowlist default updated to include klo
+     (Knowledge Local), confirmed from live v2.11.0 testing.
+   - Migration registered: on first GM ready after this update,
+     detects the old provisional v2.9.9 allowlist string and
+     replaces it with confirmed PF1 keys. Custom allowlists
+     are never touched.
+   - skillAllowlistMigrated211 world flag registered to ensure
+     migration runs exactly once.
+
    v1.1 (module v2.11.0 — "Skill Auto-Spend"):
-   - autoSkillSpend is now live. PF1 skill key payload confirmed
-     via v2.10.x diagnostics. Skill auto-spend wired in
-     action-tracker.js behind this setting.
-   - skillAutoAllowlist updated to confirmed PF1 key strings.
-     Provisional language removed for confirmed keys.
-   - autoAttackSpend remains FUTURE — pf1AttackRoll dedupe
-     behavior not yet designed.
-   - moveButtonPosition remains FUTURE — Move/Stride button
-     not yet implemented.
+   - autoSkillSpend live. skillAutoAllowlist updated to confirmed keys.
 
    v1.0 (module v2.9.9 — "Automation Prep"):
    Introduced settings.js. All settings registered but inert.
@@ -63,22 +65,23 @@ Hooks.once('init', () => {
      SKILL ALLOWLIST
      
      Comma-separated PF1 skill key strings. Keys below are
-     confirmed via v2.10.x diagnostic testing. Any additional
+     confirmed via v2.10.x–v2.11.0 live testing. Any additional
      skills added manually must also be verified against the
      actual pf1ActorRollSkill hook payload before they will work.
      
      Confirmed keys and costs:
-       acr = Acrobatics        (1 action)
-       blf = Bluff             (1 action)
-       int = Intimidate        (1 action)
-       ste = Stealth           (1 action)
-       hea = Heal              (1 action)
-       umd = Use Magic Device  (1 action)
-       dev = Disable Device    (3 actions — all-or-nothing)
-       slt = Sleight of Hand   (1 action)
-       kar = Knowledge Arcana  (1 action)
-       kre = Knowledge Religion (1 action)
-       kna = Knowledge Nature  (1 action)
+       acr = Acrobatics          (1 action)
+       blf = Bluff               (1 action)
+       int = Intimidate          (1 action)
+       ste = Stealth             (1 action)
+       hea = Heal                (1 action)
+       umd = Use Magic Device    (1 action)
+       dev = Disable Device      (3 actions — all-or-nothing)
+       slt = Sleight of Hand     (1 action)
+       kar = Knowledge Arcana    (1 action)
+       kre = Knowledge Religion  (1 action)
+       kna = Knowledge Nature    (1 action)
+       klo = Knowledge Local     (1 action)
      
      Excluded:
        per = Perception — excluded intentionally. Perception is
@@ -87,11 +90,25 @@ Hooks.once('init', () => {
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'skillAutoAllowlist', {
     name: 'Skill Auto-Spend Allowlist',
-    hint: 'Comma-separated PF1 skill keys eligible for automatic action spending. Confirmed keys: acr, blf, int, ste, hea, umd, dev, slt, kar, kre, kna. Any keys added manually must be verified against the pf1ActorRollSkill hook payload.',
+    hint: 'Comma-separated PF1 skill keys eligible for automatic action spending. Confirmed keys: acr, blf, int, ste, hea, umd, dev, slt, kar, kre, kna, klo. Any keys added manually must be verified against the pf1ActorRollSkill hook payload.',
     scope: 'world',
     config: true,
     type: String,
-    default: 'acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna'
+    default: 'acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna,klo'
+  });
+
+  /* ----------------------------------------------------------
+     SKILL ALLOWLIST MIGRATION FLAG
+     
+     Hidden world flag. Set to true after the one-time migration
+     in the ready hook below runs. Prevents re-running on every
+     world load.
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'skillAllowlistMigrated211', {
+    scope: 'world',
+    config: false,
+    type: Boolean,
+    default: false
   });
 
   /* ----------------------------------------------------------
@@ -130,5 +147,44 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.1 registered`);
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.2 registered`);
+});
+
+/* ----------------------------------------------------------
+   v2.11.1 MIGRATION — Skill Allowlist
+   
+   Runs once on the first GM ready after updating to v2.11.1.
+   Detects the old provisional v2.9.9 allowlist string and
+   replaces it with the confirmed PF1 keys including klo.
+   
+   Safety: only replaces the exact old provisional value.
+   Any GM-customized allowlist is left completely untouched.
+   The migration flag (skillAllowlistMigrated211) is written
+   regardless so this block never runs a second time.
+   ---------------------------------------------------------- */
+
+const _OLD_PROVISIONAL_ALLOWLIST = 'acrobatics,bluff,intimidate,stealth,heal,useMagicDevice,disableDevice,sleightOfHand,knowledge';
+const _NEW_CONFIRMED_ALLOWLIST   = 'acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna,klo';
+
+Hooks.once('ready', async () => {
+  if (!game.user.isGM) return;
+
+  // Check and set the migration flag atomically.
+  if (game.settings.get(SETTINGS_MODULE_ID, 'skillAllowlistMigrated211')) return;
+
+  const current = game.settings.get(SETTINGS_MODULE_ID, 'skillAutoAllowlist');
+
+  if (current === _OLD_PROVISIONAL_ALLOWLIST) {
+    await game.settings.set(SETTINGS_MODULE_ID, 'skillAutoAllowlist', _NEW_CONFIRMED_ALLOWLIST);
+    console.log(
+      `%c ${SETTINGS_MODULE_ID} | v2.11.1 migration: skillAutoAllowlist updated to confirmed PF1 keys `,
+      'background: #6e2a22; color: #e8dfd0; font-weight: bold; padding: 2px 6px;'
+    );
+  } else {
+    console.log(
+      `${SETTINGS_MODULE_ID} | v2.11.1 migration: skillAutoAllowlist already customized or up-to-date — no change ("${current}")`
+    );
+  }
+
+  await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated211', true);
 });

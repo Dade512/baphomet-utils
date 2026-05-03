@@ -4,6 +4,31 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.11.1 — Migrate Confirmed Skill Allowlist
+
+Fixed the root cause of all skills being rejected in v2.11.0: Foundry preserves existing world setting values, so updating the `default` in `game.settings.register` does not overwrite a value already stored in the world database. The world still held the old provisional v2.9.9 string (`acrobatics,bluff,...`).
+
+**Changes:**
+
+- `klo` (Knowledge Local) added to `SKILL_ACTION_COSTS` (cost 1) and the default allowlist. Confirmed from v2.11.0 live debug output.
+- `skillAutoAllowlist` default updated to `acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna,klo`.
+- One-time migration registered in `scripts/settings.js`. On the first GM `ready` after this update, if the world setting still holds the exact old provisional string, it is replaced with the confirmed string. If the GM has customized the allowlist to anything else, it is left untouched.
+- Migration flag `skillAllowlistMigrated211` registered as a hidden world setting (`config: false`). Written to `true` after migration runs (whether or not a replacement was needed). Ensures migration runs exactly once per world.
+
+**Migration detection string (exact match required):**
+```
+acrobatics,bluff,intimidate,stealth,heal,useMagicDevice,disableDevice,sleightOfHand,knowledge
+```
+
+**Replacement string:**
+```
+acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna,klo
+```
+
+Perception (`per`) remains excluded. Attack auto-spend remains deferred. No other behavior changes.
+
+---
+
 ## v2.11.0 — Skill Auto-Spend
 
 Skill auto-spend is now live behind the `autoSkillSpend` world setting (default OFF).
