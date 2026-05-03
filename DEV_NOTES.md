@@ -4,6 +4,20 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.10.1 — Diagnostic Cleanup
+
+Cleaned up `_summarizeHookArg` in `scripts/action-tracker.js` to remove all `arg?.data` probing.
+
+**Root cause:** PF1 emits `ItemAction.data has been deprecated. Use the data directly on the action instead.` compatibility warnings whenever `.data` is accessed on an ItemAction object. The v2.10.0 diagnostic summarizer accessed `arg?.data?.actor`, `arg?.data?.skill`, `arg?.data?.skillId`, and `arg?.data?.skillKey`, triggering these warnings on every `pf1AttackRoll` fire.
+
+**Fix:** All `.data` paths removed from the summarizer. No replacement `.data` access was added. The summarizer now probes non-deprecated paths only:
+- Actor paths: `arg?.actor`, `arg?.item?.actor`, `arg?.action?.actor`, `arg?.subject?.actor`, `arg?.parent?.actor`, `arg?.parent`
+- Skill key paths: direct (`skill`, `skillId`, `skillKey`, `key`, `id`, `name`), via `arg?.action.*`, via `arg?.subject.*`
+
+Diagnostics remain debug-gated behind the `debugLogging` setting and observer-only. No live action automation is enabled.
+
+---
+
 ## v2.10.0 — Action Automation Diagnostics
 
 This version begins action automation work with diagnostic-only PF1 hook logging.

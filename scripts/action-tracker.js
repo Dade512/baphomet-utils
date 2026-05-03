@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.9
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.10
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,22 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.10 Changes (DIAGNOSTIC CLEANUP):
+   - Removed all arg?.data probing from _summarizeHookArg.
+     PF1 ItemAction.data is deprecated and emits compatibility
+     warnings when accessed. Affected paths removed:
+       summary.actorFromData (arg?.data?.actor)
+       possibleSkillKeys.dataSkill (arg?.data?.skill)
+       possibleSkillKeys.dataSkillId (arg?.data?.skillId)
+       possibleSkillKeys.dataSkillKey (arg?.data?.skillKey)
+   - Expanded non-.data actor probing to cover additional paths:
+     arg?.action?.actor, arg?.parent?.actor, arg?.parent.
+   - Expanded non-.data skill key probing to cover additional paths:
+     arg?.action?.skill/skillId/skillKey,
+     arg?.subject?.skill/skillId/skillKey, arg?.name.
+   - Diagnostic hooks remain observer-only. No pip spending.
+     No automation enabled.
 
    v1.9 Changes (ACTION AUTOMATION DIAGNOSTICS):
    - Added _summarizePossibleActor(actor): shallow defensive summary
@@ -918,7 +934,7 @@ const SKILL_ACTION_COSTS = {
 };
 
 /* ============================================================
-   ACTION AUTOMATION DIAGNOSTICS — v1.9
+   ACTION AUTOMATION DIAGNOSTICS — v1.10
    ══════════════════════════════════════════════════════════
 
    Debug-gated hook listeners for pf1AttackRoll and
@@ -927,6 +943,9 @@ const SKILL_ACTION_COSTS = {
    any spend wiring is added in a subsequent pass.
 
    NOTHING HERE SPENDS PIPS. These are observer-only hooks.
+
+   .data paths are intentionally not probed — PF1 ItemAction.data
+   is deprecated and emits compatibility warnings on access.
 
    To use: enable Action Tracker Debug Logging in
    Configure Settings → Baphomet Utils, then open F12.
@@ -1001,24 +1020,30 @@ function _summarizeHookArg(arg, index) {
   }
 
   try {
-    summary.actorDirect      = _summarizePossibleActor(arg?.actor);
-    summary.actorFromData    = _summarizePossibleActor(arg?.data?.actor);
-    summary.actorFromSubject = _summarizePossibleActor(arg?.subject?.actor);
-    summary.actorFromItem    = _summarizePossibleActor(arg?.item?.actor);
+    summary.actorDirect         = _summarizePossibleActor(arg?.actor);
+    summary.actorFromItem       = _summarizePossibleActor(arg?.item?.actor);
+    summary.actorFromAction     = _summarizePossibleActor(arg?.action?.actor);
+    summary.actorFromSubject    = _summarizePossibleActor(arg?.subject?.actor);
+    summary.actorFromParentActor = _summarizePossibleActor(arg?.parent?.actor);
+    summary.parentAsActor       = _summarizePossibleActor(arg?.parent);
   } catch {
     // Diagnostic-only. Ignore safely.
   }
 
   try {
     summary.possibleSkillKeys = {
-      skill:        arg?.skill        ?? null,
-      skillId:      arg?.skillId      ?? null,
-      skillKey:     arg?.skillKey     ?? null,
-      key:          arg?.key          ?? null,
-      id:           arg?.id           ?? null,
-      dataSkill:    arg?.data?.skill    ?? null,
-      dataSkillId:  arg?.data?.skillId  ?? null,
-      dataSkillKey: arg?.data?.skillKey ?? null
+      skill:          arg?.skill          ?? null,
+      skillId:        arg?.skillId        ?? null,
+      skillKey:       arg?.skillKey       ?? null,
+      key:            arg?.key            ?? null,
+      id:             arg?.id             ?? null,
+      name:           arg?.name           ?? null,
+      actionSkill:    arg?.action?.skill    ?? null,
+      actionSkillId:  arg?.action?.skillId  ?? null,
+      actionSkillKey: arg?.action?.skillKey ?? null,
+      subjectSkill:    arg?.subject?.skill    ?? null,
+      subjectSkillId:  arg?.subject?.skillId  ?? null,
+      subjectSkillKey: arg?.subject?.skillKey ?? null
     };
   } catch {
     // Diagnostic-only. Ignore safely.

@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.10.0
+**Current Version:** 2.10.1
 
 ---
 
@@ -77,6 +77,12 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.10.1 — "The Ledger Stops Shouting"
+Diagnostic cleanup only. No auto-spending active.
+
+**`scripts/action-tracker.js` — diagnostic summarizer cleanup (v1.10):**
+Removed all `arg?.data` probing from `_summarizeHookArg`. PF1 emits `ItemAction.data has been deprecated` compatibility warnings on every access to `.data` on an ItemAction object, and the v2.10.0 summarizer was triggering those on every `pf1AttackRoll` fire. All four `.data` paths (`arg?.data?.actor`, `arg?.data?.skill`, `arg?.data?.skillId`, `arg?.data?.skillKey`) are gone. Replaced with equivalent-or-broader non-deprecated paths via `arg?.action.*`, `arg?.subject.*`, `arg?.parent.*`. No `.data` access anywhere in the diagnostics block. Hooks remain observer-only; no pips are spent.
 
 ### v2.10.0 — "The Ledger Listens"
 Diagnostic-only pass. No action auto-spending is active in this version.
