@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.8
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.9
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,25 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.9 Changes (ACTION AUTOMATION DIAGNOSTICS):
+   - Added _summarizePossibleActor(actor): shallow defensive summary
+     of a potential actor reference for diagnostic output.
+   - Added _summarizeHookArg(arg, index): shallow defensive summary
+     of a single hook argument. Checks common actor paths, possible
+     skill key paths, constructor name, and top-level keys (capped
+     at 30). Never deep-traverses Foundry/PF1 objects.
+   - Added _summarizeHookArgs(args): maps _summarizeHookArg over
+     a hook argument array.
+   - Added _baphActionDiagnosticsRegistered guard and
+     _registerActionAutomationDiagnostics(): registers
+     debug-gated Hooks.on listeners for pf1AttackRoll and
+     pf1ActorRollSkill. Guard prevents duplicate registration
+     if ready fires more than once or is called manually.
+   - Added second Hooks.once('ready') that calls
+     _registerActionAutomationDiagnostics().
+   - NO pip spending. NO automation wired. Diagnostic hooks log
+     only. All output gated behind the debugLogging setting.
 
    v1.8 Changes (AUTOMATION PREP — SCAFFOLD ONLY):
    - Added _debugLog(msg, ...args): conditional debug output
@@ -897,3 +916,153 @@ const SKILL_ACTION_COSTS = {
   sleightOfHand:  1,
   knowledge:      1,  // placeholder key — verify sub-skill format
 };
+
+/* ============================================================
+   ACTION AUTOMATION DIAGNOSTICS — v1.9
+   ══════════════════════════════════════════════════════════
+
+   Debug-gated hook listeners for pf1AttackRoll and
+   pf1ActorRollSkill. These log raw hook arguments so the
+   actual PF1 runtime payload shape can be confirmed before
+   any spend wiring is added in a subsequent pass.
+
+   NOTHING HERE SPENDS PIPS. These are observer-only hooks.
+
+   To use: enable Action Tracker Debug Logging in
+   Configure Settings → Baphomet Utils, then open F12.
+   All output is prefixed:
+     baphomet-utils | [DEBUG] [DIAG] ...
+   ============================================================ */
+
+// Guard: prevent duplicate hook registration if ready fires
+// more than once or _registerActionAutomationDiagnostics is
+// called manually from a macro during testing.
+let _baphActionDiagnosticsRegistered = false;
+
+/**
+ * Produce a shallow summary of a possible actor reference.
+ * Defensive: never throws, never deep-traverses.
+ *
+ * @param {*} actor
+ * @returns {object|null}
+ */
+function _summarizePossibleActor(actor) {
+  if (!actor) return null;
+  return {
+    constructorName: actor?.constructor?.name ?? null,
+    id:      actor?.id ?? actor?._id ?? null,
+    uuid:    actor?.uuid ?? null,
+    name:    actor?.name ?? null,
+    type:    actor?.type ?? null,
+    isOwner: actor?.isOwner ?? null
+  };
+}
+
+/**
+ * Produce a shallow summary of a single hook argument.
+ * Checks common actor paths and skill key paths without
+ * deep-traversing any Foundry or PF1 document object.
+ *
+ * @param {*}      arg
+ * @param {number} index  Position in the hook args array
+ * @returns {object}
+ */
+function _summarizeHookArg(arg, index) {
+  const summary = {
+    index,
+    type:    typeof arg,
+    isNull:  arg === null,
+    isArray: Array.isArray(arg)
+  };
+
+  if (arg === null || arg === undefined) return summary;
+
+  try {
+    summary.constructorName = arg?.constructor?.name ?? null;
+  } catch {
+    summary.constructorName = '[unavailable]';
+  }
+
+  try {
+    summary.keys = typeof arg === 'object'
+      ? Object.keys(arg).slice(0, 30)
+      : [];
+  } catch {
+    summary.keys = ['[keys unavailable]'];
+  }
+
+  try {
+    summary.id        = arg?.id ?? arg?._id ?? null;
+    summary.uuid      = arg?.uuid ?? null;
+    summary.name      = arg?.name ?? null;
+    summary.typeValue = arg?.type ?? null;
+  } catch {
+    // Diagnostic-only. Ignore safely.
+  }
+
+  try {
+    summary.actorDirect      = _summarizePossibleActor(arg?.actor);
+    summary.actorFromData    = _summarizePossibleActor(arg?.data?.actor);
+    summary.actorFromSubject = _summarizePossibleActor(arg?.subject?.actor);
+    summary.actorFromItem    = _summarizePossibleActor(arg?.item?.actor);
+  } catch {
+    // Diagnostic-only. Ignore safely.
+  }
+
+  try {
+    summary.possibleSkillKeys = {
+      skill:        arg?.skill        ?? null,
+      skillId:      arg?.skillId      ?? null,
+      skillKey:     arg?.skillKey     ?? null,
+      key:          arg?.key          ?? null,
+      id:           arg?.id           ?? null,
+      dataSkill:    arg?.data?.skill    ?? null,
+      dataSkillId:  arg?.data?.skillId  ?? null,
+      dataSkillKey: arg?.data?.skillKey ?? null
+    };
+  } catch {
+    // Diagnostic-only. Ignore safely.
+  }
+
+  return summary;
+}
+
+/**
+ * Map _summarizeHookArg over a full hook argument array.
+ *
+ * @param {Array} args
+ * @returns {Array}
+ */
+function _summarizeHookArgs(args) {
+  return args.map((arg, index) => _summarizeHookArg(arg, index));
+}
+
+/**
+ * Register debug-gated diagnostic listeners for pf1AttackRoll
+ * and pf1ActorRollSkill. Idempotent via _baphActionDiagnosticsRegistered.
+ *
+ * Called once from the diagnostics ready hook below.
+ */
+function _registerActionAutomationDiagnostics() {
+  if (_baphActionDiagnosticsRegistered) return;
+  _baphActionDiagnosticsRegistered = true;
+
+  Hooks.on('pf1AttackRoll', (...args) => {
+    _debugLog('[DIAG] pf1AttackRoll raw args:', ...args);
+    _debugLog('[DIAG] pf1AttackRoll arg summary:', _summarizeHookArgs(args));
+  });
+
+  Hooks.on('pf1ActorRollSkill', (...args) => {
+    _debugLog('[DIAG] pf1ActorRollSkill raw args:', ...args);
+    _debugLog('[DIAG] pf1ActorRollSkill arg summary:', _summarizeHookArgs(args));
+  });
+
+  _debugLog('Action automation diagnostics registered (pf1AttackRoll, pf1ActorRollSkill)');
+}
+
+// Separate ready hook for diagnostics registration.
+// Kept distinct from the macro API ready hook above for clarity —
+// two concerns, two hooks.
+Hooks.once('ready', () => {
+  _registerActionAutomationDiagnostics();
+});
