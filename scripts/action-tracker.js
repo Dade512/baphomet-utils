@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.17
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.18
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,32 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.18 Changes (FIX STRIKE GUARD DIAGNOSTICS):
+   - Added _diagNormalizeRoot(input): accepts HTMLElement,
+     DocumentFragment, jQuery wrapper, or array-like wrapper.
+     Guards globalThis.jQuery before instanceof check. Falls
+     through gracefully if none match.
+   - Added _diagStringify(value): safe JSON.stringify wrapper
+     with try/catch. Logs compact, copy-friendly JSON strings
+     alongside every diagnostic object.
+   - Diagnostic 1 (renderActorSheetPFCharacter): replaced bare
+     `element instanceof HTMLElement` guard with _diagNormalizeRoot.
+     Live PF1 hook was passing a non-HTMLElement wrapper, causing
+     the scan to bail with 'element is not HTMLElement'. Now also
+     logs the raw constructor name and normalized constructor name
+     for future reference. JSON log added.
+   - Diagnostic 2 (pf1RenderQuickActions): updated root resolution
+     to use _diagNormalizeRoot for consistency. JSON log added.
+   - Diagnostic 3 (AttackDialog): updated _diagHandleAttackDialogRender
+     to use _diagNormalizeRoot instead of _baphNormalizeHtml so the
+     same coercion logic applies everywhere. Added targeted
+     renderAttackDialog hook (fires only if AttackDialog uses the
+     expected class name). JSON log added.
+   - Diagnostic 4 (pf1PreActionUse): JSON log added.
+   - pf1AttackRoll diagnostic: JSON log added for attack summary.
+   - No gameplay behavior changes. No suppression. No cancellation.
+   - All output remains debug-gated.
 
    v1.17 Changes (PF1.5 STRIKE GUARD DIAGNOSTICS):
    - Added four observer-only diagnostic hooks to identify PF1
@@ -1387,7 +1413,9 @@ function _registerActionAutomationDiagnostics() {
   Hooks.on('pf1AttackRoll', (...args) => {
     _debugLog('[DIAG] pf1AttackRoll raw args:', ...args);
     _debugLog('[DIAG] pf1AttackRoll arg summary:', _summarizeHookArgs(args));
-    _debugLog('[DIAG] pf1AttackRoll attack summary:', _summarizeAttackRoll(args[0], args[1], args[2]));
+    const attackSummary = _summarizeAttackRoll(args[0], args[1], args[2]);
+    _debugLog('[DIAG] pf1AttackRoll attack summary:', attackSummary);
+    _debugLog('[DIAG] pf1AttackRoll attack summary JSON:', _diagStringify(attackSummary));
   });
 
   // pf1ActorRollSkill intentionally not registered here.
@@ -1836,11 +1864,58 @@ function _diagScanElements(root) {
   return { all, candidates };
 }
 
+/**
+ * Normalise a diagnostic hook's root argument to HTMLElement or
+ * DocumentFragment. Accepts: HTMLElement, DocumentFragment, jQuery
+ * wrapper, or an array-like wrapper whose [0] is one of those.
+ *
+ * jQuery is guarded with globalThis.jQuery before instanceof so
+ * the code does not throw in environments without jQuery.
+ *
+ * Returns null if none of the known shapes match.
+ *
+ * @param {*} input
+ * @returns {HTMLElement|DocumentFragment|null}
+ */
+function _diagNormalizeRoot(input) {
+  if (!input) return null;
+  // Direct HTMLElement or DocumentFragment
+  if (input instanceof HTMLElement || input instanceof DocumentFragment) return input;
+  // jQuery wrapper
+  if (globalThis.jQuery && input instanceof globalThis.jQuery) {
+    const el = input[0];
+    return (el instanceof HTMLElement || el instanceof DocumentFragment) ? el : null;
+  }
+  // Generic array-like wrapper (e.g. V1 compat shims)
+  const first = input?.[0];
+  if (first instanceof HTMLElement || first instanceof DocumentFragment) return first;
+  return null;
+}
+
+/**
+ * Safely stringify a diagnostic summary to a compact, copy-friendly
+ * JSON string. Since all diagnostic summaries are already plain
+ * objects with no circular refs, JSON.stringify is sufficient, but
+ * the try/catch ensures nothing throws if that assumption is wrong.
+ *
+ * @param {*} value
+ * @returns {string}
+ */
+function _diagStringify(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (err) {
+    return `[unstringifiable diagnostic summary: ${err?.message ?? String(err)}]`;
+  }
+}
+
 /* ----------------------------------------------------------
    DIAGNOSTIC 1 — renderActorSheetPFCharacter
 
-   PF1 actor sheets are ApplicationV2. element is HTMLElement.
-   Logs all interactive controls; highlights attack candidates.
+   PF1 actor sheets are ApplicationV2. element is documented as
+   HTMLElement but live testing showed a wrapper being passed.
+   _diagNormalizeRoot handles HTMLElement, DocumentFragment,
+   jQuery wrapper, and generic array-like wrappers.
 
    Goal: identify which button/element represents the full-attack
    control on a weapon row, so v2.14.0 can hide it safely.
@@ -1851,25 +1926,32 @@ function _diagScanElements(root) {
 Hooks.on('renderActorSheetPFCharacter', (sheet, element, context) => {
   if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
 
-  const root = element instanceof HTMLElement ? element : null;
+  const rawConstructor = element?.constructor?.name ?? 'unknown';
+  const root = _diagNormalizeRoot(element);
   if (!root) {
-    _debugLog('[DIAG] renderActorSheetPFCharacter: element is not HTMLElement',
-      element?.constructor?.name);
+    _debugLog(
+      '[DIAG] renderActorSheetPFCharacter: could not normalize element to HTMLElement/DocumentFragment',
+      { rawConstructor, element }
+    );
     return;
   }
 
   const actor = sheet?.actor;
   const { all, candidates } = _diagScanElements(root);
 
-  _debugLog('[DIAG] renderActorSheetPFCharacter controls:', {
-    actorName:        actor?.name ?? null,
-    actorType:        actor?.type ?? null,
-    sheetConstructor: sheet?.constructor?.name ?? null,
-    elementIsHTMLElement: root instanceof HTMLElement,
+  const summary = {
+    actorName:           actor?.name ?? null,
+    actorType:           actor?.type ?? null,
+    sheetConstructor:    sheet?.constructor?.name ?? null,
+    rawElementConstructor: rawConstructor,
+    normalizedConstructor: root?.constructor?.name ?? null,
     totalInteractiveElements: all.length,
-    attackCandidates: candidates,
-    allElements: all   // full list — collapse in DevTools if noisy
-  });
+    attackCandidates:    candidates,
+    allElements:         all
+  };
+
+  _debugLog('[DIAG] renderActorSheetPFCharacter controls:', summary);
+  _debugLog('[DIAG] renderActorSheetPFCharacter controls JSON:', _diagStringify(summary));
 });
 
 /* ----------------------------------------------------------
@@ -1888,41 +1970,42 @@ Hooks.on('renderActorSheetPFCharacter', (sheet, element, context) => {
 Hooks.on('pf1RenderQuickActions', (hud, token, template) => {
   if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
 
-  // DocumentFragment is not an HTMLElement but does support querySelectorAll
-  const root = (template instanceof HTMLElement || template instanceof DocumentFragment)
-    ? template : null;
+  const rawConstructor = template?.constructor?.name ?? 'unknown';
+  const root = _diagNormalizeRoot(template);
   if (!root) {
-    _debugLog('[DIAG] pf1RenderQuickActions: template is not HTMLElement or DocumentFragment',
-      template?.constructor?.name);
+    _debugLog('[DIAG] pf1RenderQuickActions: could not normalize template',
+      { rawConstructor });
     return;
   }
 
   const { all, candidates } = _diagScanElements(root);
 
-  _debugLog('[DIAG] pf1RenderQuickActions controls:', {
-    tokenName:          token?.name ?? token?.document?.name ?? null,
-    actorName:          token?.actor?.name ?? null,
-    templateConstructor: template?.constructor?.name ?? null,
-    totalElements:      all.length,
-    attackCandidates:   candidates,
-    allElements:        all
-  });
+  const summary = {
+    tokenName:            token?.name ?? token?.document?.name ?? null,
+    actorName:            token?.actor?.name ?? null,
+    rawTemplateConstructor: rawConstructor,
+    normalizedConstructor:  root?.constructor?.name ?? null,
+    totalElements:        all.length,
+    attackCandidates:     candidates,
+    allElements:          all
+  };
+
+  _debugLog('[DIAG] pf1RenderQuickActions controls:', summary);
+  _debugLog('[DIAG] pf1RenderQuickActions controls JSON:', _diagStringify(summary));
 });
 
 /* ----------------------------------------------------------
    DIAGNOSTIC 3 — AttackDialog render
 
-   AttackDialog's V1 vs. V2 status is unconfirmed. Register both
-   the generic V1-era 'renderApplication' and the V2-era
-   'renderApplicationV2' hooks, filtered by constructor name.
-   Whichever fires (or both) will appear in the console.
+   AttackDialog's V1 vs. V2 status is unconfirmed. Three hooks
+   registered to maximise capture chance:
+     - renderApplicationV1 (generic V1 catch, filtered by name)
+     - renderApplicationV2 (generic V2 catch, filtered by name)
+     - renderAttackDialog  (targeted — fires if PF1 uses this
+                           exact class name for the dialog)
 
-   If neither fires when the AttackDialog opens, the class name
-   may differ — the log from _summarizeAttackRoll.constructorName
-   in the pf1AttackRoll diagnostic can help confirm the real name.
-
-   Goal: log all interactive elements in the dialog to identify
-   any full-attack / iterative-attack controls.
+   All three call _diagHandleAttackDialogRender which uses
+   _diagNormalizeRoot (same coercion as other diagnostics).
 
    Does NOT modify the dialog.
    ---------------------------------------------------------- */
@@ -1930,31 +2013,32 @@ Hooks.on('pf1RenderQuickActions', (hud, token, template) => {
 function _diagHandleAttackDialogRender(app, element) {
   const name = app?.constructor?.name ?? '';
   // Filter to only AttackDialog or anything 'Attack' in the name.
-  // This cast is intentionally broad since the exact class name is
-  // unconfirmed — refine to exact match once confirmed.
+  // Intentionally broad since the exact class name is unconfirmed.
   if (!name.toLowerCase().includes('attack')) return;
 
   if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
 
-  // Normalise element: V2 passes HTMLElement; V1 passes jQuery.
-  // Use existing module helper for coercion.
-  const root = _baphNormalizeHtml(element);
+  const rawConstructor = element?.constructor?.name ?? 'unknown';
+  const root = _diagNormalizeRoot(element);
   if (!root) {
-    _debugLog('[DIAG] AttackDialog controls: could not normalise element',
-      element?.constructor?.name);
+    _debugLog('[DIAG] AttackDialog controls: could not normalize element',
+      { appConstructor: name, rawElementConstructor: rawConstructor });
     return;
   }
 
   const { all, candidates } = _diagScanElements(root);
 
-  _debugLog('[DIAG] AttackDialog controls:', {
-    appConstructor:    name,
-    hookSource:        'see prefix in DevTools stack',
-    elementConstructor: root?.constructor?.name ?? null,
-    totalElements:     all.length,
-    attackCandidates:  candidates,
-    allElements:       all
-  });
+  const summary = {
+    appConstructor:         name,
+    rawElementConstructor:  rawConstructor,
+    normalizedConstructor:  root?.constructor?.name ?? null,
+    totalElements:          all.length,
+    attackCandidates:       candidates,
+    allElements:            all
+  };
+
+  _debugLog('[DIAG] AttackDialog controls:', summary);
+  _debugLog('[DIAG] AttackDialog controls JSON:', _diagStringify(summary));
 }
 
 // V1-era application render hook (confirmed Foundry v13 hook name)
@@ -1964,6 +2048,14 @@ Hooks.on('renderApplicationV1', (app, html, data) => {
 
 // V2-era application render hook (confirmed Foundry v13 hook name)
 Hooks.on('renderApplicationV2', (app, element, context) => {
+  _diagHandleAttackDialogRender(app, element);
+});
+
+// Targeted hook — fires only if PF1 names the dialog 'AttackDialog'.
+// The constructor-name filter inside _diagHandleAttackDialogRender
+// still applies as a belt-and-suspenders guard.
+// If this hook name is wrong it registers silently and never fires.
+Hooks.on('renderAttackDialog', (app, element, context) => {
   _diagHandleAttackDialogRender(app, element);
 });
 
@@ -2069,6 +2161,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
   } catch { /* noop */ }
 
   _debugLog('[DIAG] pf1PreActionUse summary:', summary);
+  _debugLog('[DIAG] pf1PreActionUse summary JSON:', _diagStringify(summary));
 
   // IMPORTANT: do NOT return false here.
   // Returning false would cancel the action use.

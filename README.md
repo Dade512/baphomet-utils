@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.13.4
+**Current Version:** 2.13.5
 
 ---
 
@@ -77,6 +77,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.13.5 — "The Ledger Reads More Carefully"
+Fixes two broken diagnostic surfaces from v2.13.4 and adds copy-friendly JSON output. Diagnostic-only; no gameplay changes.
+
+`_diagNormalizeRoot` replaces bare `instanceof HTMLElement` checks — live testing showed PF1 passing a non-HTMLElement wrapper to `renderActorSheetPFCharacter`, causing the scan to bail silently. New helper accepts HTMLElement, DocumentFragment, jQuery wrapper, and generic array-like wrappers. Added targeted `renderAttackDialog` hook alongside the existing generic render hooks. All diagnostic log points now emit both the object (for DevTools inspection) and a JSON string (for copy/paste).
 
 ### v2.13.4 — "The Ledger Looks Before It Cuts"
 Observer-only diagnostic pass. No gameplay behavior changes.

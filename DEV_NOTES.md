@@ -4,6 +4,23 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.13.5 — Fix Strike Guard Diagnostics
+
+Fixes two broken diagnostic surfaces from v2.13.4 and adds copy-friendly JSON output to all diagnostic log lines.
+
+**Root normalization fix (`_diagNormalizeRoot`):**
+Live testing showed `renderActorSheetPFCharacter` passing a non-HTMLElement argument despite V2 documentation, causing the scan to bail with "element is not HTMLElement". Added `_diagNormalizeRoot(input)` which accepts HTMLElement, DocumentFragment, jQuery wrapper, and generic array-like wrappers (guarding `globalThis.jQuery` before instanceof). All three DOM-scanning diagnostics now use this helper instead of bare `instanceof HTMLElement` checks. On normalization failure, the constructor name of the raw argument is logged so we can identify the actual type.
+
+**AttackDialog hook added (`renderAttackDialog`):**
+Generic `renderApplicationV1`/`renderApplicationV2` hooks were not capturing the AttackDialog. Added a targeted `renderAttackDialog` hook as a third capture attempt. If PF1 uses this exact class name, the hook fires directly. The constructor-name filter in `_diagHandleAttackDialogRender` still applies as a guard. All three hooks call the same handler.
+
+**Safe stringify helper (`_diagStringify`):**
+Added `_diagStringify(value)` — a try/catch wrapper around `JSON.stringify(value, null, 2)`. All diagnostic log points now emit both an object (for DevTools expand/inspect) and a JSON string (for copy/paste). Affected prefixes: `renderActorSheetPFCharacter controls`, `pf1RenderQuickActions controls`, `AttackDialog controls`, `pf1PreActionUse summary`, `pf1AttackRoll attack summary`.
+
+No gameplay behavior changes. No suppression. No cancellation.
+
+---
+
 ## v2.13.4 — PF1.5 Strike Guard Diagnostics
 
 Observer-only diagnostic pass. No gameplay behavior changes.
