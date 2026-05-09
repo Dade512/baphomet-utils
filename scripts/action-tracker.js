@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.15
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.16
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,32 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.16 Changes (PF1ATTACKROLL DIAGNOSTIC ENRICHMENT):
+   - Added _summarizeAttackRoll(action, roll, extraData): builds a
+     focused per-fire summary tailored to characterizing the
+     pf1AttackRoll hook before any attack auto-spend is wired.
+     Captures:
+       timestamp        — Date.now() for firing-rate analysis
+       actorPath        — which property the actor was resolved from
+       actor            — shallow actor summary (constructor/id/uuid/name/type)
+       item             — parent item id/uuid/name/type
+       action           — ItemAction id/name/constructorName
+       roll             — D20RollPF constructor/formula/total/_evaluated
+       messageId        — first available chat-message ref, with source
+       extraDataKeys    — top-level keys of args[2] (capped at 30)
+       activeCombatantMatch / activeCombatant — comparison via
+         _getActiveCombatantForActor; reveals AoO / off-turn cases
+       dedupeCandidate  — composite key candidate for future dedupe
+         design (actor:item:action:messageId|timestamp). Observation
+         only — NOT used for any actual dedupe in this version.
+   - pf1AttackRoll diagnostic now emits a third [DIAG] line with
+     the focused summary. Existing raw-args and arg-summary lines
+     are preserved so prior log corpora remain comparable.
+   - NEVER reads arg?.data — keeps the v2.10.1 deprecation cleanup
+     intact.
+   - Still observer-only. No pip spending. No live behavior change.
+   - All output gated behind the debugLogging setting.
 
    v1.15 Changes (FLOATING ACTION SPEND PANEL):
    - Replaced single Stride button with a compact 3-button
@@ -1191,6 +1217,137 @@ function _summarizeHookArgs(args) {
 }
 
 /**
+ * Build a focused diagnostic summary of a single pf1AttackRoll fire.
+ *
+ * Confirmed hook signature (from v2.10.x diagnostic testing):
+ *   pf1AttackRoll(action, roll, extraData)
+ *     action    — ItemAction (the specific action of an item being used)
+ *     roll      — D20RollPF (the evaluated d20 roll)
+ *     extraData — Object (options / message data / chat hints)
+ *
+ * Captures the fields needed to characterize this hook before
+ * wiring attack auto-spend in a future release. Specifically:
+ *
+ *   - timestamp        : Date.now() so firing rate can be analyzed
+ *                        across iteratives, full attacks, and AoOs
+ *   - actorPath        : which property chain the actor was resolved
+ *                        from — useful for future automation gates
+ *   - actor            : shallow actor summary
+ *   - item             : parent item id / uuid / name / type
+ *   - action           : ItemAction id / name / constructorName
+ *   - roll             : D20RollPF shape (formula, total, _evaluated)
+ *   - messageId        : first available chat-message reference
+ *   - extraDataKeys    : top-level keys of args[2] (capped at 30)
+ *   - activeCombatantMatch / activeCombatant : whether the resolved
+ *                        actor is the current active combatant
+ *                        (reveals AoO / off-turn / GM-NPC cases)
+ *   - dedupeCandidate  : composite key candidate for future dedupe
+ *                        design. OBSERVATION ONLY — not used by any
+ *                        live spend logic in this version.
+ *
+ * Defensive: every property access is guarded; never throws.
+ * NEVER reads arg?.data — PF1 ItemAction.data is deprecated and
+ * emits compatibility warnings on access (cleaned up in v2.10.1).
+ *
+ * @param {*} action     args[0] — expected ItemAction
+ * @param {*} roll       args[1] — expected D20RollPF
+ * @param {*} extraData  args[2] — expected options / extraData object
+ * @returns {object}
+ */
+function _summarizeAttackRoll(action, roll, extraData) {
+  const timestamp = Date.now();
+  const item = action?.item ?? null;
+
+  // Resolve actor — prefer item.actor (canonical PF1 path), with
+  // fallbacks for less common shapes. NEVER probes arg?.data.
+  let actor     = null;
+  let actorPath = null;
+  if (item?.actor)                { actor = item.actor;            actorPath = 'action.item.actor'; }
+  else if (action?.actor)         { actor = action.actor;          actorPath = 'action.actor'; }
+  else if (action?.parent?.actor) { actor = action.parent.actor;   actorPath = 'action.parent.actor'; }
+  else if (extraData?.actor)      { actor = extraData.actor;       actorPath = 'extraData.actor'; }
+
+  // Active-combatant comparison. Reveals AoO / off-turn / mid-attack
+  // turn-advance cases that any future automation will need to gate on.
+  let activeMatchCombatant = null;
+  try {
+    activeMatchCombatant = _getActiveCombatantForActor(actor);
+  } catch {
+    // Diagnostic-only. Ignore safely.
+  }
+
+  // Roll / chat-message identifier. D20RollPF doesn't carry a stable
+  // own-id, but a chat message reference is often reachable via the
+  // roll itself or via extraData. Try several shapes; tolerate misses.
+  let messageId        = null;
+  let messageRefSource = null;
+  if (roll?.message?.id)               { messageId = roll.message.id;            messageRefSource = 'roll.message.id'; }
+  else if (extraData?.chatMessage?.id) { messageId = extraData.chatMessage.id;   messageRefSource = 'extraData.chatMessage.id'; }
+  else if (extraData?.message?.id)     { messageId = extraData.message.id;       messageRefSource = 'extraData.message.id'; }
+  else if (extraData?.messageId)       { messageId = extraData.messageId;        messageRefSource = 'extraData.messageId'; }
+
+  // Composite candidate dedupe key. Stable across iteratives if
+  // messageId is shared; distinct across separate attack actions.
+  // If no messageId is reachable, falls back to timestamp — in which
+  // case dedupe across rapid fires would be unreliable.
+  const dedupeCandidate = [
+    actor?.id  ?? '?',
+    item?.id   ?? '?',
+    action?.id ?? '?',
+    messageId ?? `t${timestamp}`
+  ].join(':');
+
+  let extraDataKeys = [];
+  try {
+    if (extraData && typeof extraData === 'object') {
+      extraDataKeys = Object.keys(extraData).slice(0, 30);
+    }
+  } catch {
+    extraDataKeys = ['[keys unavailable]'];
+  }
+
+  return {
+    timestamp,
+
+    actorPath,
+    actor: _summarizePossibleActor(actor),
+
+    item: item ? {
+      id:   item?.id   ?? item?._id ?? null,
+      uuid: item?.uuid ?? null,
+      name: item?.name ?? null,
+      type: item?.type ?? null
+    } : null,
+
+    action: {
+      id:              action?.id ?? action?._id ?? null,
+      name:            action?.name ?? null,
+      constructorName: action?.constructor?.name ?? null
+    },
+
+    roll: {
+      constructorName: roll?.constructor?.name ?? null,
+      formula:         roll?.formula ?? null,
+      total:           roll?.total ?? null,
+      _evaluated:      roll?._evaluated ?? null
+    },
+
+    messageId,
+    messageRefSource,
+
+    extraDataKeys,
+
+    activeCombatantMatch: !!activeMatchCombatant,
+    activeCombatant: activeMatchCombatant ? {
+      id:   activeMatchCombatant.id,
+      name: activeMatchCombatant.name
+    } : null,
+
+    dedupeCandidate
+  };
+}
+
+/**
  * Register debug-gated diagnostic listeners for pf1AttackRoll
  * and pf1ActorRollSkill. Idempotent via _baphActionDiagnosticsRegistered.
  *
@@ -1200,11 +1357,14 @@ function _registerActionAutomationDiagnostics() {
   if (_baphActionDiagnosticsRegistered) return;
   _baphActionDiagnosticsRegistered = true;
 
-  // pf1AttackRoll: diagnostic-only. Logs raw args and shallow summary.
-  // Does not spend pips. Dedupe behavior not yet designed.
+  // pf1AttackRoll: diagnostic-only. Logs raw args, generic shallow
+  // summary, AND a focused attack-roll summary (v1.16). Does not
+  // spend pips. Dedupe behavior not yet designed — the dedupeCandidate
+  // field in the focused summary is observation-only.
   Hooks.on('pf1AttackRoll', (...args) => {
     _debugLog('[DIAG] pf1AttackRoll raw args:', ...args);
     _debugLog('[DIAG] pf1AttackRoll arg summary:', _summarizeHookArgs(args));
+    _debugLog('[DIAG] pf1AttackRoll attack summary:', _summarizeAttackRoll(args[0], args[1], args[2]));
   });
 
   // pf1ActorRollSkill intentionally not registered here.
