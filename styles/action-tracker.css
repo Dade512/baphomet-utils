@@ -274,7 +274,7 @@
    bottom-right: above the Foundry hotbar, left of the sidebar.
    Adjust right/bottom offsets if overlap occurs on your layout. */
 .baph-stride-bottom-right {
-  right: 330px;
+  right: 380px;
   bottom: 5rem;
 }
 
@@ -284,7 +284,7 @@
 }
 
 .baph-stride-top-right {
-  right: 330px;
+  right: 380px;
   top: 5rem;
 }
 
