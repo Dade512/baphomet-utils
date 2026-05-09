@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.11.2
+**Current Version:** 2.12.0
 
 ---
 
@@ -77,6 +77,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.12.0 — "The Ledger Moves"
+Adds a floating Stride button for one-click action spending during combat.
+
+A fixed-position **Stride** button appears on screen during active combat. Clicking it spends 1 action from the current active combatant (`game.combat.combatant`) — not from any selected token. The button is visible only to users who can control the active combatant (or the GM). It disappears when combat ends and refreshes automatically on turn advance. Position is controlled by the per-client **Stride Button Position** setting (bottom-right by default, with three other corners available). The `bottom-right` variant sits to the left of the Foundry sidebar. On failure (no pips remaining, wrong user, combat ended mid-click), the button shows a notification and refreshes the pip row without spending anything. No token drag automation, no attack auto-spend, no MAP/Strike counter, no ESM migration.
 
 ### v2.11.2 — "The Ledger Knows More"
 Expands Knowledge skill auto-spend to the full standard PF1 set. No other behavior changes.

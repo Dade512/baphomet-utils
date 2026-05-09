@@ -1,7 +1,13 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.4
+   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.5
    Gaslamp Gothic | Croaker's Ledger edition.
    Burnt brass, cold iron, dried blood — on PARCHMENT.
+
+   v1.5 Changes:
+   - Added floating Stride button styles (.baph-stride-button,
+     .baph-stride-{position} variants).
+   - Croaker's Ledger aesthetic: parchment background, brass
+     border, iron-gall text. Compact, readable in combat.
 
    v1.4 Changes:
    - Added native <button> reset (padding/font/appearance) so
@@ -210,4 +216,79 @@
   border-color: rgba(35, 68, 95, 0.75);
   box-shadow: 0 1px 3px rgba(42, 35, 29, 0.3),
               inset 0 1px 2px rgba(255, 255, 255, 0.2);
+}
+
+/* ============================================================
+   FLOATING STRIDE BUTTON — v1.5
+   ============================================================ */
+
+/* --- Base button ---
+   Feels like a stamped brass marker pressed into the corner
+   of the table. Compact, readable, not glowing. */
+.baph-stride-button {
+  position: fixed;
+  z-index: 100;
+  min-width: 5.5rem;
+  padding: 0.35rem 0.7rem;
+  border: 1.5px solid #9e7d43;
+  border-radius: 3px;
+  background: #d1c6b4;
+  color: #2a231d;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  /* Button defaults reset */
+  appearance: none;
+  -webkit-appearance: none;
+  /* Inset relief — stamped into parchment */
+  box-shadow: 0 2px 5px rgba(42, 35, 29, 0.4),
+              inset 0 1px 2px rgba(255, 255, 255, 0.3),
+              inset 0 -1px 1px rgba(42, 35, 29, 0.15);
+  /* Crisp transitions only — no slow fades */
+  transition: background 0.08s ease,
+              border-color 0.08s ease,
+              box-shadow 0.08s ease;
+}
+
+.baph-stride-button:hover,
+.baph-stride-button:focus {
+  background: #beb09b;
+  border-color: #6e2a22;
+  box-shadow: 0 3px 6px rgba(42, 35, 29, 0.5),
+              inset 0 1px 2px rgba(255, 255, 255, 0.25),
+              inset 0 -1px 1px rgba(42, 35, 29, 0.2);
+  outline: none;
+}
+
+.baph-stride-button:active {
+  background: #beb09b;
+  border-color: #6e2a22;
+  box-shadow: inset 0 2px 4px rgba(42, 35, 29, 0.35);
+  transform: translateY(1px);
+}
+
+/* --- Position variants ---
+   bottom-right: above the Foundry hotbar, left of the sidebar.
+   Adjust right/bottom offsets if overlap occurs on your layout. */
+.baph-stride-bottom-right {
+  right: 330px;
+  bottom: 5rem;
+}
+
+.baph-stride-bottom-left {
+  left: 2rem;
+  bottom: 5rem;
+}
+
+.baph-stride-top-right {
+  right: 330px;
+  top: 5rem;
+}
+
+.baph-stride-top-left {
+  left: 2rem;
+  top: 5rem;
 }

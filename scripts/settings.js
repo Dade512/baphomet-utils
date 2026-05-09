@@ -1,6 +1,9 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.3
+   BAPHOMET UTILS — SETTINGS v1.4
    Central module settings registration.
+
+   v1.4 (module v2.12.0 — "Floating Stride Button"):
+   - moveButtonPosition setting now live. Label/hint updated.
 
    v1.3 (module v2.11.2 — "Expand Knowledge Skill Auto-Spend"):
    - skillAutoAllowlist default expanded to full standard PF1
@@ -124,14 +127,14 @@ Hooks.once('init', () => {
   });
 
   /* ----------------------------------------------------------
-     FLOATING MOVE / STRIDE BUTTON POSITION — FUTURE
+     FLOATING MOVE / STRIDE BUTTON POSITION — LIVE as of v2.12.0
      
-     The button itself is not implemented yet. This setting
-     is pre-registered for v2.12.0 or later.
+     Controls where the floating Stride button appears on screen.
+     Per-client setting (each user can choose their preferred corner).
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'moveButtonPosition', {
-    name: 'Move / Stride Button Position [FUTURE]',
-    hint: 'Not active yet. Controls the screen position of the floating Move / Stride action button when it is implemented.',
+    name: 'Stride Button Position',
+    hint: 'Controls the screen position of the floating Stride action button during combat.',
     scope: 'client',
     config: true,
     type: String,
@@ -159,7 +162,7 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.3 registered`);
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.4 registered`);
 });
 
 /* ----------------------------------------------------------

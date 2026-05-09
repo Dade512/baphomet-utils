@@ -4,6 +4,38 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.12.0 — Add Floating Stride Button
+
+Adds a fixed-position Stride button visible during active combat. Clicking it spends 1 action from the current active combatant.
+
+**Source of truth:** `game.combat.combatant`. Never reads from selected tokens.
+
+**Visibility rules:**
+- Only shown during active combat (`game.combat.active` and `game.combat.combatant` both truthy)
+- Only shown to the current user if they are GM or can control the active combatant (`_canUserControlCombatant`)
+- Hidden automatically when combat ends
+
+**Click behavior:**
+- Re-validates combatant and user permissions at click time
+- Calls `_spendActionForCombatant(combatant.id, 1, 'stride')` (synchronous, all-or-nothing)
+- On success: refreshes pip row, re-renders button
+- On failure (no pips, no permissions, combat ended): shows `ui.notifications.warn`, refreshes pip row, re-renders button. No partial spending.
+
+**Position:** Controlled by the existing `moveButtonPosition` client setting (now live). Values: `bottom-right` (default), `bottom-left`, `top-right`, `top-left`. The `bottom-right` variant uses `right: 330px` to avoid overlapping Foundry's sidebar.
+
+**Hooks registered:**
+- `renderCombatTracker` → `_renderStrideButton()` (re-renders on any tracker refresh)
+- `updateCombat` → `_renderStrideButton()` (belt-and-suspenders for turn advances)
+- `combatStart` → `_renderStrideButton()` (shows button when combat begins)
+- `deleteCombat` → `_removeStrideButton()` (removes button when combat ends)
+- `ready` once → `_renderStrideButton()` (handles reload into an active combat)
+
+**CSS:** Added to `styles/action-tracker.css` (v1.5). Parchment background, brass border, iron-gall text. No glow, no neon.
+
+**Deferred:** Attack auto-spend, MAP/Strike counter, token drag automation, ESM migration.
+
+---
+
 ## v2.11.2 — Expand Knowledge Skill Auto-Spend
 
 Expands Knowledge skill auto-spend to cover all standard PF1 Knowledge sub-skills.

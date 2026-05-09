@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.13
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.14
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,26 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.14 Changes (FLOATING STRIDE BUTTON):
+   - Added floating Stride button that spends 1 action from the
+     current active combatant (game.combat.combatant).
+   - Button visibility: active combat only; current user must be
+     GM or able to control the active combatant via
+     _canUserControlCombatant. Not based on selected tokens.
+   - Click re-validates combatant and ownership before spending.
+   - Uses _spendActionForCombatant(combatant.id, 1, 'stride').
+   - Failed spend: shows ui.notifications.warn and refreshes pip
+     row. No partial spending.
+   - Position controlled by existing moveButtonPosition setting
+     (bottom-right / bottom-left / top-right / top-left).
+   - Button removed when combat ends (deleteCombat).
+   - Button refreshes on renderCombatTracker, combatStart,
+     updateCombat to track turn changes correctly.
+   - Croaker's Ledger aesthetic: parchment background, brass
+     border, iron-gall text. CSS added to action-tracker.css.
+   - No token drag automation. No attack auto-spend.
+   - No MAP/Strike counter. No ESM migration.
 
    v1.13 Changes (EXPAND KNOWLEDGE SKILL AUTO-SPEND):
    - Added full standard PF1 Knowledge sub-skill keys to
@@ -1286,4 +1306,160 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
   }
 
   _debugLog(`skill auto-spend: success — spent ${cost} action(s) for ${actor.name} [${skillKey}]`);
+});
+
+/* ============================================================
+   FLOATING STRIDE BUTTON — v1.14
+   ══════════════════════════════════════════════════════════
+
+   A fixed-position button visible only during active combat.
+   Spends 1 action from game.combat.combatant when clicked.
+
+   Source of truth: game.combat.combatant (active combatant).
+   Never reads from selected tokens.
+
+   Visibility: only shown when the current user is GM or can
+   control the active combatant (_canUserControlCombatant).
+
+   Position: controlled by the existing 'moveButtonPosition'
+   client setting (bottom-right / bottom-left / top-right / top-left).
+
+   No token drag automation. No MAP/Strike counter.
+   ============================================================ */
+
+/**
+ * Return the DOM id used for the Stride button.
+ * @returns {string}
+ */
+function _getStrideButtonId() {
+  return 'baph-stride-button';
+}
+
+/**
+ * Remove the Stride button from the DOM if it exists.
+ */
+function _removeStrideButton() {
+  document.getElementById(_getStrideButtonId())?.remove();
+}
+
+/**
+ * Return true if the Stride button should be shown to the
+ * current user right now.
+ *
+ * Requires:
+ *   - Active combat with a current combatant
+ *   - Current user is GM or can control the active combatant
+ *
+ * @returns {boolean}
+ */
+function _shouldShowStrideButton() {
+  const combat = game.combat;
+  if (!combat?.active || !combat.combatant) return false;
+  return _canUserControlCombatant(combat.combatant);
+}
+
+/**
+ * Remove any existing Stride button and, if the user should see
+ * one, inject a fresh button into document.body.
+ *
+ * Always calls _removeStrideButton() first to prevent duplicates.
+ */
+function _renderStrideButton() {
+  _removeStrideButton();
+
+  if (!_shouldShowStrideButton()) return;
+
+  const combatant = game.combat.combatant;
+  const position  = game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right';
+
+  const button = document.createElement('button');
+  button.id    = _getStrideButtonId();
+  button.type  = 'button';
+  button.classList.add('baph-stride-button', `baph-stride-${position}`);
+  button.textContent = 'Stride';
+  button.title = `Stride: spend 1 action for ${combatant.name}`;
+
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Re-validate at click time — the active combatant or
+    // user permissions may have changed since the button was
+    // rendered (turn advance, combat end, etc.).
+    const active = game.combat?.combatant;
+
+    if (!active) {
+      _debugLog('Stride: failed — no active combatant at click time');
+      ui.notifications?.warn?.('No active combatant available to Stride.');
+      _renderStrideButton();
+      return;
+    }
+
+    if (!_canUserControlCombatant(active)) {
+      _debugLog(`Stride: failed — user cannot control ${active.name}`);
+      ui.notifications?.warn?.(`You cannot control ${active.name}.`);
+      _renderStrideButton();
+      return;
+    }
+
+    // _spendActionForCombatant is synchronous and all-or-nothing.
+    // If it returns false, no pips were spent.
+    const spent = _spendActionForCombatant(active.id, 1, 'stride');
+
+    if (!spent) {
+      _debugLog(`Stride: failed — not enough actions for ${active.name}`);
+      ui.notifications?.warn?.(`${active.name} does not have enough actions to Stride.`);
+      _refreshPipRow(active.id);
+      return;
+    }
+
+    _debugLog(`Stride: spent 1 action for ${active.name}`);
+    _refreshPipRow(active.id);
+    _renderStrideButton();
+  });
+
+  document.body.appendChild(button);
+}
+
+/* ----------------------------------------------------------
+   STRIDE BUTTON HOOK REGISTRATIONS
+
+   Separate from the existing combat lifecycle hooks above
+   (which manage pipState). These hooks manage only the
+   Stride button DOM element.
+
+   renderCombatTracker: covers turn advance, combatant changes,
+   and any re-render of the tracker. Most state changes that
+   matter for the button fire this hook.
+
+   updateCombat: belt-and-suspenders for turn advances that may
+   not always trigger a full renderCombatTracker re-render.
+
+   combatStart: ensures the button appears when combat begins.
+
+   deleteCombat: removes the button when combat ends.
+   (The existing deleteCombat hook cleans up pipState separately;
+   this listener only removes the DOM button.)
+   ---------------------------------------------------------- */
+
+Hooks.on('renderCombatTracker', () => {
+  _renderStrideButton();
+});
+
+Hooks.on('updateCombat', () => {
+  _renderStrideButton();
+});
+
+Hooks.on('combatStart', () => {
+  _renderStrideButton();
+});
+
+Hooks.on('deleteCombat', () => {
+  _removeStrideButton();
+});
+
+// Initial render on world ready — shows the button if a combat
+// is already active when the page loads (e.g. after a reload).
+Hooks.once('ready', () => {
+  _renderStrideButton();
 });
