@@ -4,6 +4,24 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.13.1 — Action Panel Label Polish
+
+One label change and one behavioral note. No spend logic changes.
+
+**Spend 3 label:** `Disable / Full` → `D.Dev / F. Cast`. Rendered as `D.DEV / F. CAST` by CSS `text-transform: uppercase`. Aligns better visually with `SWING / MOVE` and `CAST / READY`. Cost, reason key, and spend behavior are unchanged.
+
+**Off-turn skill behavior (documented, not changed):**
+
+Skill auto-spend correctly blocks off-turn spending. Console confirms:
+```
+"Goblin - Echoes Fodder" is not the active combatant — no spend
+```
+However, PF1 skill rolls still appear in the chat log because `pf1ActorRollSkill(actor, chatMessage, skillKey)` fires *after* the roll and chat message already exist. This is by design in PF1e — the hook is a post-roll notification, not a pre-roll gate.
+
+Preventing off-turn skill chat cards entirely would require a pre-skill-roll hook that can cancel the roll. No such hook has been identified in the current PF1e v13 API. Do not implement pre-roll blocking without a confirmed cancellable hook. The current behavior (block pip spend, allow chat card) is correct and expected.
+
+---
+
 ## v2.13.0 — Floating Action Spend Panel
 
 Replaces the single Stride button (v2.12.0) with a compact three-button Action Spend Panel.

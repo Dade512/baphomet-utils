@@ -1515,7 +1515,7 @@ function _renderActionPanel() {
   // Spend buttons — labels are examples only, not rules.
   panel.appendChild(_buildActionSpendButton(1, 'Swing / Move',   'Spend 1 action',  'manual-1'));
   panel.appendChild(_buildActionSpendButton(2, 'Cast / Ready',   'Spend 2 actions', 'manual-2'));
-  panel.appendChild(_buildActionSpendButton(3, 'Disable / Full', 'Spend 3 actions', 'manual-3'));
+  panel.appendChild(_buildActionSpendButton(3, 'D.Dev / F. Cast', 'Spend 3 actions', 'manual-3'));
 
   document.body.appendChild(panel);
 }

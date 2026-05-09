@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.13.0
+**Current Version:** 2.13.1
 
 ---
 
@@ -77,6 +77,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.13.1 — "The Ledger Abbreviates"
+Label polish and behavioral documentation only. No spend logic changes.
+
+Spend 3 row label changed from `DISABLE / FULL` to `D.DEV / F. CAST` for better visual alignment with the other rows. Cost remains 3 actions; spend behavior, reason key, and all-or-nothing enforcement are unchanged. Off-turn skill auto-spend block confirmed working and documented in DEV_NOTES.
 
 ### v2.13.0 — "The Ledger Decides"
 Replaces the single Stride button with a compact floating Action Spend Panel.
