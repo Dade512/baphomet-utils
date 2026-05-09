@@ -1,6 +1,11 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.5
+   BAPHOMET UTILS — SETTINGS v1.6
    Central module settings registration.
+
+   v1.6 (module v2.14.0 — "Hide PF1 Full Attack Button"):
+   - pf15ModeEnabled registered. World scope, default true.
+     Enables PF1.5 action economy enforcement, starting with
+     hiding the Full Attack button from AttackDialog.
 
    v1.5 (module v2.13.0 — "Floating Action Spend Panel"):
    - moveButtonPosition label/hint updated from Stride/Button
@@ -31,6 +36,28 @@
 const SETTINGS_MODULE_ID = 'baphomet-utils';
 
 Hooks.once('init', () => {
+
+  /* ----------------------------------------------------------
+     PF1.5 MODE — LIVE as of v2.14.0
+     
+     Master toggle for PF1.5 action economy enforcement.
+     Default ON for this campaign world (all actors are PF1.5).
+     
+     Currently controls:
+     - Hiding the Full Attack button from AttackDialog
+     
+     Future enforcement (v2.15.0+):
+     - Strike auto-spend via pf1PreActionUse
+     - Swing tracking and MAP injection
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'pf15ModeEnabled', {
+    name: 'PF1.5 Mode',
+    hint: 'Enables PF1.5 action economy enforcement, including hiding PF1 full-attack controls.',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: true
+  });
 
   /* ----------------------------------------------------------
      ATTACK ROLL AUTO-SPEND — FUTURE
@@ -166,7 +193,7 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.5 registered`);
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.6 registered`);
 });
 
 /* ----------------------------------------------------------

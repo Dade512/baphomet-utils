@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.13.5
+**Current Version:** 2.14.0
 
 ---
 
@@ -77,6 +77,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.14.0 — "The Ledger Closes the Wrong Door"
+First live PF1.5 action economy enforcement. There is no Full Attack in PF1.5.
+
+Adds a **PF1.5 Mode** world setting (default ON). When enabled, the PF1 Full Attack button (`button[name="attack_full"]`) is removed from AttackDialog on render. The Single Attack button is untouched and rolls normally. Selector confirmed via v2.13.5 live diagnostics. No attack auto-spend, no swing tracking, no MAP injection, no pf1PreActionUse cancellation — those come later.
 
 ### v2.13.5 — "The Ledger Reads More Carefully"
 Fixes two broken diagnostic surfaces from v2.13.4 and adds copy-friendly JSON output. Diagnostic-only; no gameplay changes.

@@ -4,6 +4,34 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.14.0 — Hide PF1 Full Attack Button
+
+Implements the first live PF1.5 action economy enforcement: hiding the Full Attack button from AttackDialog when PF1.5 Mode is enabled.
+
+**New setting: `pf15ModeEnabled` ("PF1.5 Mode")**
+- World scope, default **true** (all actors in this campaign are PF1.5)
+- Master toggle for PF1.5 action economy enforcement
+- Currently controls: Full Attack button suppression
+- Future scope (v2.15.0+): Strike auto-spend, swing tracking, MAP injection
+
+**Implementation:**
+`_diagHandleAttackDialogRender` (called by `renderApplicationV1`, `renderApplicationV2`, and `renderAttackDialog` hooks) restructured so root normalization always runs unconditionally. When `pf15ModeEnabled` is true:
+```javascript
+root.querySelector('button[name="attack_full"]')?.remove();
+```
+Confirmed selector from v2.13.5 live diagnostics: `button[name="attack_full"]` is the Full Attack button; `button[name="attack_single"]` is the Single Attack button and is untouched.
+
+Diagnostic scan runs after suppression (if `debugLogging` is ON) so the log reflects what the player actually sees. `pf15ModeEnabled` value included in the diagnostic summary.
+
+**Not added in this release:**
+- No attack auto-spend (pf1AttackRoll still diagnostic-only)
+- No pf1PreActionUse cancellation
+- No swing tracking or MAP injection
+- No reaction/AoO automation
+- No ESM migration
+
+---
+
 ## v2.13.5 — Fix Strike Guard Diagnostics
 
 Fixes two broken diagnostic surfaces from v2.13.4 and adds copy-friendly JSON output to all diagnostic log lines.

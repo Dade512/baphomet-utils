@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.18
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.19
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,20 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.19 Changes (HIDE PF1 FULL ATTACK BUTTON):
+   - _diagHandleAttackDialogRender restructured: normalization
+     now always runs (not just when debugLogging is ON), so the
+     suppression pass can act on the root regardless of debug state.
+   - When pf15ModeEnabled is true, removes button[name="attack_full"]
+     from AttackDialog using root.querySelector + .remove().
+     Confirmed selector from v2.13.5 live diagnostics.
+     button[name="attack_single"] is untouched.
+   - Debug log emitted on successful suppression:
+     "PF1.5 mode: removed Full Attack button from AttackDialog"
+   - All existing diagnostics retained and still debug-gated.
+   - No attack auto-spend. No swing tracking. No MAP.
+     No pf1PreActionUse cancellation. No ESM migration.
 
    v1.18 Changes (FIX STRIKE GUARD DIAGNOSTICS):
    - Added _diagNormalizeRoot(input): accepts HTMLElement,
@@ -2016,22 +2030,51 @@ function _diagHandleAttackDialogRender(app, element) {
   // Intentionally broad since the exact class name is unconfirmed.
   if (!name.toLowerCase().includes('attack')) return;
 
-  if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
-
+  // Normalize root unconditionally — both suppression and diagnostics
+  // need it, and suppression runs regardless of debugLogging state.
   const rawConstructor = element?.constructor?.name ?? 'unknown';
   const root = _diagNormalizeRoot(element);
   if (!root) {
-    _debugLog('[DIAG] AttackDialog controls: could not normalize element',
+    _debugLog('[DIAG] AttackDialog: could not normalize element',
       { appConstructor: name, rawElementConstructor: rawConstructor });
     return;
   }
 
+  /* ----------------------------------------------------------
+     PF1.5 FULL ATTACK SUPPRESSION
+     MODULE DESIGN PATTERN — NOT NATIVE PF1
+
+     Confirmed selector from v2.13.5 live diagnostics:
+       button[name="attack_full"]  → Full Attack button (remove)
+       button[name="attack_single"] → Single Attack button (leave)
+
+     Runs whenever pf15ModeEnabled is true, independent of
+     debug logging. Fails silently if the setting is not yet
+     registered or the button is not present.
+     ---------------------------------------------------------- */
+  try {
+    if (game.settings.get?.(AT_MODULE_ID, 'pf15ModeEnabled')) {
+      const fullAttackBtn = root.querySelector('button[name="attack_full"]');
+      if (fullAttackBtn) {
+        fullAttackBtn.remove();
+        _debugLog('PF1.5 mode: removed Full Attack button from AttackDialog');
+      }
+    }
+  } catch { /* settings not yet registered or other safe failure — noop */ }
+
+  /* ----------------------------------------------------------
+     DIAGNOSTIC LOGGING — debug-gated
+     ---------------------------------------------------------- */
+  if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
+
+  // Scan after suppression so the log reflects what the player sees.
   const { all, candidates } = _diagScanElements(root);
 
   const summary = {
     appConstructor:         name,
     rawElementConstructor:  rawConstructor,
     normalizedConstructor:  root?.constructor?.name ?? null,
+    pf15ModeEnabled:        (() => { try { return game.settings.get?.(AT_MODULE_ID, 'pf15ModeEnabled') ?? null; } catch { return null; } })(),
     totalElements:          all.length,
     attackCandidates:       candidates,
     allElements:            all
@@ -2165,5 +2208,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
 
   // IMPORTANT: do NOT return false here.
   // Returning false would cancel the action use.
-  // This handler is observer-only until v2.14.0 full-attack suppression.
+  // Full-attack suppression in v2.14.0 is implemented via the
+  // AttackDialog render hook, not by cancelling pf1PreActionUse.
+  // Do not add cancellation here without a deliberate decision.
 });
