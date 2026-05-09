@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.13.1
+**Current Version:** 2.13.2
 
 ---
 
@@ -77,6 +77,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.13.2 — "The Ledger Aligns"
+CSS-only layout polish. No spend logic changes.
+
+Action panel rows switched from flex to CSS grid (`grid-template-columns: 2.3rem 1fr`). Cost badge column is now a fixed width; label column fills the remainder with centred text. All three labels align at the same horizontal midpoint. Panel width unchanged.
 
 ### v2.13.1 — "The Ledger Abbreviates"
 Label polish and behavioral documentation only. No spend logic changes.

@@ -1,7 +1,14 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.6
+   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.7
    Gaslamp Gothic | Croaker's Ledger edition.
    Burnt brass, cold iron, dried blood — on PARCHMENT.
+
+   v1.7 Changes:
+   - Action panel row layout switched from flex to grid
+     (grid-template-columns: 2.3rem 1fr) for consistent cost
+     column width and centred label across all three rows.
+   - .baph-action-spend-label now centred horizontally.
+   - No functional or JS changes.
 
    v1.6 Changes:
    - Replaced single Stride button styles with Action Spend Panel
@@ -257,10 +264,12 @@
 }
 
 /* --- Spend button rows ---
-   Full-width flex: cost badge (left) | label text (right).
-   Styled as ruled ledger rows, not generic buttons. */
+   Grid layout: fixed cost column | flexible label column.
+   Grid gives both columns consistent widths regardless of
+   label text length, which flex could not guarantee. */
 .baph-action-spend-btn {
-  display: flex;
+  display: grid;
+  grid-template-columns: 2.3rem 1fr;
   align-items: stretch;
   width: 100%;
   padding: 0;
@@ -273,7 +282,6 @@
   -webkit-appearance: none;
   font-family: "Courier Prime", "Courier New", monospace;
   color: #2a231d;
-  text-align: left;
   transition: background 0.06s ease;
 }
 
@@ -291,26 +299,25 @@
   background: #b0a28a;
 }
 
-/* --- Cost badge — left column ---
-   Small brass-tinted pip count. Visual anchor on the left. */
+/* --- Cost badge — left grid column ---
+   Width controlled by grid-template-columns (2.3rem).
+   Internal flex used only to centre the digit. */
 .baph-action-spend-cost {
-  min-width: 2rem;
   padding: 0.32rem 0.4rem;
   background: rgba(158, 125, 67, 0.12);
   border-right: 1px solid rgba(158, 125, 67, 0.35);
   font-size: 0.85rem;
   font-weight: 700;
-  text-align: center;
   color: #6b5c3e;
-  flex-shrink: 0;
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-/* --- Action label — right column ---
-   Short hint. Labels are examples only, not enforced rules. */
+/* --- Action label — right grid column (1fr) ---
+   Centred within the remaining width so all three rows
+   present their text at the same horizontal midpoint. */
 .baph-action-spend-label {
   padding: 0.32rem 0.5rem;
   font-size: 0.76rem;
@@ -321,6 +328,8 @@
   line-height: 1;
   display: flex;
   align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 /* --- Position variants ---

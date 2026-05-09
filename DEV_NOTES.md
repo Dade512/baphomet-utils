@@ -4,6 +4,22 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.13.2 — Action Panel Alignment Polish
+
+CSS-only layout change. No JS or spend logic changes.
+
+Switched `.baph-action-spend-btn` from `display: flex` to `display: grid; grid-template-columns: 2.3rem 1fr`. The fixed `2.3rem` cost column ensures all three pip badges occupy identical width. The `1fr` label column fills the remainder and centres its text via `justify-content: center; text-align: center` on `.baph-action-spend-label`. Result:
+
+```
+[ 1 ]  SWING / MOVE
+[ 2 ]  CAST / READY
+[ 3 ]  D.DEV / F. CAST
+```
+
+All labels are now horizontally centred in the same column. `min-width` and `flex-shrink` removed from `.baph-action-spend-cost` (grid controls width directly). Panel outer width unchanged.
+
+---
+
 ## v2.13.1 — Action Panel Label Polish
 
 One label change and one behavioral note. No spend logic changes.
