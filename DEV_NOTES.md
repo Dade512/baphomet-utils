@@ -4,6 +4,31 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.11.2 — Expand Knowledge Skill Auto-Spend
+
+Expands Knowledge skill auto-spend to cover all standard PF1 Knowledge sub-skills.
+
+**New Knowledge keys added (all cost 1 action):**
+
+| Key | Skill |
+|-----|-------|
+| kdu | Knowledge Dungeoneering |
+| ken | Knowledge Engineering |
+| kge | Knowledge Geography |
+| khi | Knowledge History |
+| kno | Knowledge Nobility |
+| kpl | Knowledge Planes |
+
+(kar, kre, kna, klo were already present from v2.11.0–2.11.1.)
+
+**Allowlist migration:** One-time migration on first GM `ready` after this update. Detects the exact v2.11.1 string (`acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna,klo`) and replaces it with the v2.11.2 string (`acr,blf,int,ste,hea,umd,dev,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre`). Customized allowlists are not overwritten. `skillAllowlistMigrated212` flag written regardless.
+
+**Failed spend logging:** Added explicit `_debugLog` at the call site when `_spendActionForCombatant` returns `false`. Previously the failure path was silent at the handler level (the reason was logged inside the helper but not surfaced at the spend attempt line). Now logs: `skill auto-spend: failed — spend blocked or insufficient actions for {name} [{key}], needed {cost}`.
+
+**Perception (`per`) remains excluded.** Attack auto-spend deferred. No Move/Stride button. No ESM migration.
+
+---
+
 ## v2.11.1 — Migrate Confirmed Skill Allowlist
 
 Fixed the root cause of all skills being rejected in v2.11.0: Foundry preserves existing world setting values, so updating the `default` in `game.settings.register` does not overwrite a value already stored in the world database. The world still held the old provisional v2.9.9 string (`acrobatics,bluff,...`).

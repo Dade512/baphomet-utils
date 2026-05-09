@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.12
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.13
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,24 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.13 Changes (EXPAND KNOWLEDGE SKILL AUTO-SPEND):
+   - Added full standard PF1 Knowledge sub-skill keys to
+     SKILL_ACTION_COSTS (all cost 1 action):
+       kdu = Knowledge Dungeoneering
+       ken = Knowledge Engineering
+       kge = Knowledge Geography
+       khi = Knowledge History
+       kno = Knowledge Nobility
+       kpl = Knowledge Planes
+     (kar, kre, kna, klo already present from prior releases)
+   - Perception (per) remains excluded.
+   - Added explicit failure _debugLog after failed spend attempt.
+     Previously the failure path left no visible log at the
+     call site when _spendActionForCombatant returned false.
+   - All-or-nothing spend behavior unchanged.
+   - pf1AttackRoll remains diagnostic-only.
+   - No Move/Stride button. No ESM migration.
 
    v1.12 Changes (SKILL ALLOWLIST MIGRATION — klo ADDED):
    - Added klo (Knowledge Local) to SKILL_ACTION_COSTS (cost 1).
@@ -923,19 +941,25 @@ function _spendActionForActor(actor, count = 1, reason = '') {
    Confirmed PF1 key strings from v2.10.x diagnostic testing.
    Signature: pf1ActorRollSkill(actor, chatMessage, skillKey)
    
-   Key  →  Skill Name            →  Action cost
-   acr  →  Acrobatics            →  1
-   blf  →  Bluff                 →  1
-   int  →  Intimidate            →  1
-   ste  →  Stealth               →  1
-   hea  →  Heal                  →  1
-   umd  →  Use Magic Device      →  1
-   dev  →  Disable Device        →  3  (all-or-nothing)
-   slt  →  Sleight of Hand       →  1
-   kar  →  Knowledge (Arcana)    →  1
-   kre  →  Knowledge (Religion)  →  1
-   kna  →  Knowledge (Nature)    →  1
-   klo  →  Knowledge (Local)     →  1
+   Key  →  Skill Name               →  Action cost
+   acr  →  Acrobatics               →  1
+   blf  →  Bluff                    →  1
+   int  →  Intimidate               →  1
+   ste  →  Stealth                  →  1
+   hea  →  Heal                     →  1
+   umd  →  Use Magic Device         →  1
+   dev  →  Disable Device           →  3  (all-or-nothing)
+   slt  →  Sleight of Hand          →  1
+   kar  →  Knowledge (Arcana)       →  1
+   kdu  →  Knowledge (Dungeoneering) →  1
+   ken  →  Knowledge (Engineering)  →  1
+   kge  →  Knowledge (Geography)    →  1
+   khi  →  Knowledge (History)      →  1
+   klo  →  Knowledge (Local)        →  1
+   kna  →  Knowledge (Nature)       →  1
+   kno  →  Knowledge (Nobility)     →  1
+   kpl  →  Knowledge (Planes)       →  1
+   kre  →  Knowledge (Religion)     →  1
    
    Excluded:
    per  →  Perception — passive/reactive sense; excluded
@@ -954,10 +978,17 @@ const SKILL_ACTION_COSTS = {
   umd: 1,
   dev: 3,  // 3-action cost — all-or-nothing enforced by _spendActionForCombatant
   slt: 1,
-  kar: 1,
-  kre: 1,
-  kna: 1,
-  klo: 1   // Knowledge Local — confirmed live v2.11.0
+  // Knowledge sub-skills — all cost 1 action
+  kar: 1,  // Knowledge Arcana
+  kdu: 1,  // Knowledge Dungeoneering
+  ken: 1,  // Knowledge Engineering
+  kge: 1,  // Knowledge Geography
+  khi: 1,  // Knowledge History
+  klo: 1,  // Knowledge Local
+  kna: 1,  // Knowledge Nature
+  kno: 1,  // Knowledge Nobility
+  kpl: 1,  // Knowledge Planes
+  kre: 1   // Knowledge Religion
 };
 
 /* ============================================================
@@ -1250,6 +1281,7 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
   if (!spent) {
     // _spendActionForCombatant already logged the reason (insufficient actions
     // or API not ready).
+    _debugLog(`skill auto-spend: failed — spend blocked or insufficient actions for ${actor.name} [${skillKey}], needed ${cost}`);
     return;
   }
 

@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.11.1
+**Current Version:** 2.11.2
 
 ---
 
@@ -77,6 +77,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.11.2 — "The Ledger Knows More"
+Expands Knowledge skill auto-spend to the full standard PF1 set. No other behavior changes.
+
+Added six Knowledge sub-skills to `SKILL_ACTION_COSTS` (all cost 1 action): Knowledge Dungeoneering (`kdu`), Engineering (`ken`), Geography (`kge`), History (`khi`), Nobility (`kno`), and Planes (`kpl`). Combined with kar, kre, kna, klo from prior releases, all ten standard PF1 Knowledge sub-skills are now covered. Allowlist default updated accordingly. One-time migration upgrades existing confirmed v2.11.1 allowlists on first GM load; customized allowlists are never overwritten. Explicit failure log added to the skill handler when a spend attempt is blocked (e.g. insufficient pips for Disable Device). `per` (Perception) remains excluded.
 
 ### v2.11.1 — "The Ledger Remembers"
 Migration fix. No new automation features.
