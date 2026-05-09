@@ -4,6 +4,33 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.13.4 — PF1.5 Strike Guard Diagnostics
+
+Observer-only diagnostic pass. No gameplay behavior changes.
+
+**Purpose:** Identify PF1 full-attack UI controls and ActionUse payload shape before implementing full-attack suppression in v2.14.0. We do not guess selectors like `.full-attack` or `[data-action="fullAttack"]` in production code; this patch tells us what PF1 actually renders and passes.
+
+**Four diagnostic surfaces added (all debug-gated):**
+
+1. `renderActorSheetPFCharacter` — scans all interactive elements in the rendered actor sheet; highlights anything with "attack", "full", "fullAttack", "iterative", "multiple", or "swing" in any text/class/dataset/title field. PF1 sheets are V2; `element` is HTMLElement.
+
+2. `pf1RenderQuickActions` — scans all interactive elements in the token HUD quick-actions DocumentFragment. DocumentFragment supports `querySelectorAll` directly. Confirms whether a distinct full-attack quick action exists.
+
+3. `renderApplicationV1` + `renderApplicationV2` — both confirmed Foundry v13 hook names, filtered to apps whose constructor name contains "attack". AttackDialog's V1/V2 status is unconfirmed; both hooks are registered so whichever fires will appear in F12. Uses `_baphNormalizeHtml` to handle jQuery or HTMLElement coercion.
+
+4. `pf1PreActionUse` — logs a structured payload summary (constructor, own keys, actor, item, action keys, possible full-attack flags, activation data, rollMode data). **Never returns false.** This hook is confirmed cancellable; the return-false gate is explicitly not triggered in this diagnostic pass.
+
+**What to look for in the output:**
+- Which button/element in the actor sheet is the full-attack control (class, data-action, name, text)
+- Whether `pf1RenderQuickActions` exposes a distinct full-attack button
+- Which hook fires for AttackDialog (V1 or V2) and what controls it contains
+- Whether `actionUse.isFullAttack`, `actionUse.fullAttack`, or `actionUse.action.type` distinguishes a full attack from a single Strike
+- Which keys on ActionUse are safe to inspect for v2.14.0 suppression logic
+
+**Setting reserved for v2.14.0:** `pf15ModeEnabled` / "PF1.5 Mode" — documented here, not yet registered.
+
+---
+
 ## v2.13.2 — Action Panel Alignment Polish
 
 CSS-only layout change. No JS or spend logic changes.

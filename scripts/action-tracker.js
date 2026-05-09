@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.16
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.17
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,29 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.17 Changes (PF1.5 STRIKE GUARD DIAGNOSTICS):
+   - Added four observer-only diagnostic hooks to identify PF1
+     full-attack UI controls and ActionUse payload shape before
+     implementing full-attack suppression in v2.14.0.
+   - [DIAG] renderActorSheetPFCharacter: logs all buttons and
+     [data-action] elements in the rendered actor sheet, filtered
+     to highlight any attack/full-attack candidates.
+   - [DIAG] pf1RenderQuickActions: logs all interactive elements
+     in the token HUD quick-actions DocumentFragment, filtered
+     for attack/full-attack candidates.
+   - [DIAG] renderApplication / renderApplicationV2: logs all
+     interactive elements when the rendered app constructor name
+     matches 'AttackDialog'. Both V1 and V2 hook names registered
+     since AttackDialog's ApplicationV1/V2 status is unconfirmed.
+   - [DIAG] pf1PreActionUse: logs a structured payload summary
+     (constructor, keys, actor, item, action, possible full-attack
+     flags, activation/rollMode data). NEVER returns false —
+     observer only.
+   - All four diagnostics are gated behind the existing
+     debugLogging setting. Zero gameplay behavior change.
+   - No selectors removed or disabled. No pips spent from
+     attack hooks. No swing tracking. No MAP. No ESM migration.
 
    v1.16 Changes (PF1ATTACKROLL DIAGNOSTIC ENRICHMENT):
    - Added _summarizeAttackRoll(action, roll, extraData): builds a
@@ -1721,4 +1744,333 @@ Hooks.on('deleteCombat', () => {
 // is already active when the page loads (e.g. after a reload).
 Hooks.once('ready', () => {
   _renderActionPanel();
+});
+
+/* ============================================================
+   PF1.5 STRIKE GUARD DIAGNOSTICS — v1.17
+   ══════════════════════════════════════════════════════════
+
+   Observer-only diagnostics. NOTHING HERE changes gameplay.
+   No pips are spent, no controls are hidden, no actions cancelled.
+
+   Purpose: confirm PF1 full-attack UI selectors and ActionUse
+   payload shape before implementing full-attack suppression in
+   v2.14.0. All output is gated behind the debugLogging setting.
+
+   Four surfaces:
+     1. renderActorSheetPFCharacter — actor sheet attack controls
+     2. pf1RenderQuickActions       — token HUD quick-action controls
+     3. renderApplication /         — AttackDialog (V1 or V2)
+        renderApplicationV2
+     4. pf1PreActionUse             — ActionUse payload shape
+   ============================================================ */
+
+/* ----------------------------------------------------------
+   SHARED DIAGNOSTIC HELPER
+   Summarises one interactive element into a compact object.
+   Never throws. Never reads .data or deprecated PF1 paths.
+   ---------------------------------------------------------- */
+
+function _diagSummariseElement(el) {
+  const s = {};
+  try { s.tag          = el.tagName?.toLowerCase() ?? null; } catch { s.tag = null; }
+  try { s.text         = el.textContent?.trim().slice(0, 80) ?? null; } catch { s.text = null; }
+  try { s.className    = el.className ?? null; } catch { s.className = null; }
+  try { s.name         = el.name ?? null; } catch { s.name = null; }
+  try { s.type         = el.type ?? null; } catch { s.type = null; }
+  try { s.value        = el.value ?? null; } catch { s.value = null; }
+  try { s.title        = el.title ?? null; } catch { s.title = null; }
+  try { s.ariaLabel    = el.getAttribute?.('aria-label') ?? null; } catch { s.ariaLabel = null; }
+  // dataset: copy to plain object; skip any key whose value is huge
+  try {
+    const ds = {};
+    for (const [k, v] of Object.entries(el.dataset ?? {})) {
+      ds[k] = String(v).slice(0, 120);
+    }
+    s.dataset = ds;
+  } catch { s.dataset = null; }
+  return s;
+}
+
+/**
+ * Test whether an element summary is likely related to attacks or
+ * full-attack controls. Used to highlight candidates in log output.
+ */
+function _diagIsAttackCandidate(summary) {
+  const TERMS = ['attack', 'full', 'fullattack', 'iterative', 'multiple', 'swing'];
+  const fields = [
+    summary.text,
+    summary.className,
+    summary.name,
+    summary.title,
+    summary.ariaLabel,
+    summary.value,
+    ...Object.values(summary.dataset ?? {})
+  ];
+  return fields.some(f =>
+    typeof f === 'string' &&
+    TERMS.some(t => f.toLowerCase().includes(t))
+  );
+}
+
+/**
+ * Summarise all interactive elements inside a root node.
+ * Queries: button, a, input, select, [data-action], [data-tooltip].
+ * Returns { all, candidates } where candidates are attack-related.
+ *
+ * root must support querySelectorAll (HTMLElement or DocumentFragment).
+ */
+function _diagScanElements(root) {
+  const all = [];
+  const candidates = [];
+  try {
+    const els = root.querySelectorAll(
+      'button, a, input, select, [data-action], [data-tooltip]'
+    );
+    for (const el of els) {
+      const s = _diagSummariseElement(el);
+      all.push(s);
+      if (_diagIsAttackCandidate(s)) candidates.push(s);
+    }
+  } catch { /* noop */ }
+  return { all, candidates };
+}
+
+/* ----------------------------------------------------------
+   DIAGNOSTIC 1 — renderActorSheetPFCharacter
+
+   PF1 actor sheets are ApplicationV2. element is HTMLElement.
+   Logs all interactive controls; highlights attack candidates.
+
+   Goal: identify which button/element represents the full-attack
+   control on a weapon row, so v2.14.0 can hide it safely.
+
+   Does NOT modify the sheet DOM.
+   ---------------------------------------------------------- */
+
+Hooks.on('renderActorSheetPFCharacter', (sheet, element, context) => {
+  if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
+
+  const root = element instanceof HTMLElement ? element : null;
+  if (!root) {
+    _debugLog('[DIAG] renderActorSheetPFCharacter: element is not HTMLElement',
+      element?.constructor?.name);
+    return;
+  }
+
+  const actor = sheet?.actor;
+  const { all, candidates } = _diagScanElements(root);
+
+  _debugLog('[DIAG] renderActorSheetPFCharacter controls:', {
+    actorName:        actor?.name ?? null,
+    actorType:        actor?.type ?? null,
+    sheetConstructor: sheet?.constructor?.name ?? null,
+    elementIsHTMLElement: root instanceof HTMLElement,
+    totalInteractiveElements: all.length,
+    attackCandidates: candidates,
+    allElements: all   // full list — collapse in DevTools if noisy
+  });
+});
+
+/* ----------------------------------------------------------
+   DIAGNOSTIC 2 — pf1RenderQuickActions
+
+   Confirmed hook: pf1RenderQuickActions(hud, token, template)
+   template is a DocumentFragment. DocumentFragment supports
+   querySelectorAll directly — no coercion needed.
+
+   Goal: confirm whether PF1 quick actions include a full-attack
+   button distinct from the single-attack button.
+
+   Does NOT modify the template.
+   ---------------------------------------------------------- */
+
+Hooks.on('pf1RenderQuickActions', (hud, token, template) => {
+  if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
+
+  // DocumentFragment is not an HTMLElement but does support querySelectorAll
+  const root = (template instanceof HTMLElement || template instanceof DocumentFragment)
+    ? template : null;
+  if (!root) {
+    _debugLog('[DIAG] pf1RenderQuickActions: template is not HTMLElement or DocumentFragment',
+      template?.constructor?.name);
+    return;
+  }
+
+  const { all, candidates } = _diagScanElements(root);
+
+  _debugLog('[DIAG] pf1RenderQuickActions controls:', {
+    tokenName:          token?.name ?? token?.document?.name ?? null,
+    actorName:          token?.actor?.name ?? null,
+    templateConstructor: template?.constructor?.name ?? null,
+    totalElements:      all.length,
+    attackCandidates:   candidates,
+    allElements:        all
+  });
+});
+
+/* ----------------------------------------------------------
+   DIAGNOSTIC 3 — AttackDialog render
+
+   AttackDialog's V1 vs. V2 status is unconfirmed. Register both
+   the generic V1-era 'renderApplication' and the V2-era
+   'renderApplicationV2' hooks, filtered by constructor name.
+   Whichever fires (or both) will appear in the console.
+
+   If neither fires when the AttackDialog opens, the class name
+   may differ — the log from _summarizeAttackRoll.constructorName
+   in the pf1AttackRoll diagnostic can help confirm the real name.
+
+   Goal: log all interactive elements in the dialog to identify
+   any full-attack / iterative-attack controls.
+
+   Does NOT modify the dialog.
+   ---------------------------------------------------------- */
+
+function _diagHandleAttackDialogRender(app, element) {
+  const name = app?.constructor?.name ?? '';
+  // Filter to only AttackDialog or anything 'Attack' in the name.
+  // This cast is intentionally broad since the exact class name is
+  // unconfirmed — refine to exact match once confirmed.
+  if (!name.toLowerCase().includes('attack')) return;
+
+  if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
+
+  // Normalise element: V2 passes HTMLElement; V1 passes jQuery.
+  // Use existing module helper for coercion.
+  const root = _baphNormalizeHtml(element);
+  if (!root) {
+    _debugLog('[DIAG] AttackDialog controls: could not normalise element',
+      element?.constructor?.name);
+    return;
+  }
+
+  const { all, candidates } = _diagScanElements(root);
+
+  _debugLog('[DIAG] AttackDialog controls:', {
+    appConstructor:    name,
+    hookSource:        'see prefix in DevTools stack',
+    elementConstructor: root?.constructor?.name ?? null,
+    totalElements:     all.length,
+    attackCandidates:  candidates,
+    allElements:       all
+  });
+}
+
+// V1-era application render hook (confirmed Foundry v13 hook name)
+Hooks.on('renderApplicationV1', (app, html, data) => {
+  _diagHandleAttackDialogRender(app, html);
+});
+
+// V2-era application render hook (confirmed Foundry v13 hook name)
+Hooks.on('renderApplicationV2', (app, element, context) => {
+  _diagHandleAttackDialogRender(app, element);
+});
+
+/* ----------------------------------------------------------
+   DIAGNOSTIC 4 — pf1PreActionUse payload
+
+   Confirmed cancellable hook: pf1PreActionUse(actionUse)
+   Argument is a single ActionUse instance.
+
+   THIS HANDLER NEVER RETURNS FALSE. It is observer-only.
+   Returning false would cancel the action — do not do that
+   until full-attack suppression is deliberately implemented.
+
+   Goal: log the shape of ActionUse to confirm:
+   - actor access path
+   - item access path
+   - whether actionUse.isFullAttack / fullAttack / action.fullAttack exist
+   - activation and rollMode fields
+   - any field that could distinguish a single Strike from a full attack
+
+   All probing uses safe optional chaining. No .data access.
+   ---------------------------------------------------------- */
+
+Hooks.on('pf1PreActionUse', (actionUse) => {
+  if (!game.settings.get?.(AT_MODULE_ID, 'debugLogging')) return;
+
+  // Build a structured summary without deep-traversing circular objects.
+  const summary = {};
+
+  try { summary.constructorName = actionUse?.constructor?.name ?? null; } catch { summary.constructorName = null; }
+
+  // Own enumerable keys (shallow — avoids circular refs)
+  try {
+    summary.ownKeys = Object.keys(actionUse ?? {}).slice(0, 40);
+  } catch { summary.ownKeys = ['[unavailable]']; }
+
+  // Actor
+  try {
+    const a = actionUse?.actor;
+    summary.actorName = a?.name ?? null;
+    summary.actorId   = a?.id   ?? null;
+    summary.actorType = a?.type ?? null;
+  } catch { /* noop */ }
+
+  // Item
+  try {
+    const i = actionUse?.item;
+    summary.itemName = i?.name ?? null;
+    summary.itemId   = i?.id   ?? null;
+    summary.itemType = i?.type ?? null;
+  } catch { /* noop */ }
+
+  // Action (the specific ItemAction being used)
+  try {
+    const ac = actionUse?.action;
+    summary.actionName        = ac?.name ?? null;
+    summary.actionId          = ac?.id   ?? null;
+    summary.actionConstructor = ac?.constructor?.name ?? null;
+    // Shallow keys of the action object — do not expand sub-objects
+    summary.actionKeys = ac ? Object.keys(ac).slice(0, 30) : null;
+  } catch { summary.actionKeys = null; }
+
+  // Possible full-attack / attack flags — probe common field names
+  // without assuming any of them exist. Null = not present.
+  try {
+    summary.possibleFullAttackFlags = {
+      'actionUse.isFullAttack':         actionUse?.isFullAttack          ?? null,
+      'actionUse.fullAttack':           actionUse?.fullAttack            ?? null,
+      'actionUse.action?.fullAttack':   actionUse?.action?.fullAttack    ?? null,
+      'actionUse.action?.isFullAttack': actionUse?.action?.isFullAttack  ?? null,
+      'actionUse.action?.type':         actionUse?.action?.type          ?? null,
+      'actionUse.options?.fullAttack':  actionUse?.options?.fullAttack   ?? null,
+      'actionUse.config?.fullAttack':   actionUse?.config?.fullAttack    ?? null
+    };
+  } catch { summary.possibleFullAttackFlags = null; }
+
+  // Activation data — may carry action type / cost info
+  try {
+    const act = actionUse?.action?.activation ?? actionUse?.activation;
+    summary.possibleActivationData = act
+      ? {
+          type:  act?.type  ?? null,
+          cost:  act?.cost  ?? null,
+          cond:  act?.cond  ?? null,
+          keys: Object.keys(act).slice(0, 20)
+        }
+      : null;
+  } catch { summary.possibleActivationData = null; }
+
+  // Roll mode / shared data
+  try {
+    summary.possibleRollModeData = {
+      'actionUse.rollMode':    actionUse?.rollMode    ?? null,
+      'actionUse.options?.rollMode': actionUse?.options?.rollMode ?? null,
+      'actionUse.shared':      actionUse?.shared ? '[present]' : null
+    };
+  } catch { summary.possibleRollModeData = null; }
+
+  // Config / options keys
+  try {
+    summary.configKeys  = actionUse?.config  ? Object.keys(actionUse.config).slice(0, 20)  : null;
+    summary.optionsKeys = actionUse?.options ? Object.keys(actionUse.options).slice(0, 20) : null;
+  } catch { /* noop */ }
+
+  _debugLog('[DIAG] pf1PreActionUse summary:', summary);
+
+  // IMPORTANT: do NOT return false here.
+  // Returning false would cancel the action use.
+  // This handler is observer-only until v2.14.0 full-attack suppression.
 });

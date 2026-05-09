@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.13.2
+**Current Version:** 2.13.4
 
 ---
 
@@ -77,6 +77,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.13.4 — "The Ledger Looks Before It Cuts"
+Observer-only diagnostic pass. No gameplay behavior changes.
+
+Adds four debug-gated diagnostic hooks to identify PF1 full-attack UI controls and `ActionUse` payload shape before implementing full-attack suppression in v2.14.0: `renderActorSheetPFCharacter` (scans actor sheet interactive elements for attack-related controls), `pf1RenderQuickActions` (scans token HUD quick actions), `renderApplication`/`renderApplicationV2` (logs AttackDialog contents when visible), and `pf1PreActionUse` (logs structured ActionUse payload — never cancels). All output gated behind Action Tracker Debug Logging. No pips spent, no controls hidden, no actions cancelled.
 
 ### v2.13.2 — "The Ledger Aligns"
 CSS-only layout polish. No spend logic changes.
