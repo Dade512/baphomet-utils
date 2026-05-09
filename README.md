@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.12.0
+**Current Version:** 2.13.0
 
 ---
 
@@ -77,6 +77,11 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.13.0 — "The Ledger Decides"
+Replaces the single Stride button with a compact floating Action Spend Panel.
+
+Three generic manual spend buttons appear in a small parchment panel during active combat: **Swing / Move** (1 action), **Cast / Ready** (2 actions), **Disable / Full** (3 actions). Labels are illustrative only — they do not enforce action-type rules. Any spend is a plain pip deduction. The panel header shows the active combatant name. All spends are all-or-nothing: spending 2 with only 1 pip available spends 0 and warns. Condition-locked pips are never consumed. Ownership is re-validated at click time. Position still controlled by the per-client **Action Spend Panel Position** setting (setting key `moveButtonPosition` unchanged). Old `baph-stride-*` CSS classes removed; new `baph-action-panel*` classes replace them with the same position offsets. No attack automation, no token drag, no MAP/Strike counter, no ESM migration.
 
 ### v2.12.0 — "The Ledger Moves"
 Adds a floating Stride button for one-click action spending during combat.

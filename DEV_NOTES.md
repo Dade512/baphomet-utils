@@ -4,6 +4,72 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.13.0 — Floating Action Spend Panel
+
+Replaces the single Stride button (v2.12.0) with a compact three-button Action Spend Panel.
+
+**Buttons:**
+
+| Cost | Label | Reason key |
+|---|---|---|
+| 1 pip | Swing / Move | `manual-1` |
+| 2 pips | Cast / Ready | `manual-2` |
+| 3 pips | Disable / Full | `manual-3` |
+
+Labels are descriptive hints only. They do not enforce action-type rules. Any spend is a generic pip deduction.
+
+**Panel header:** Shows the active combatant name. Truncates with ellipsis if too long.
+
+**Visibility:** Active combat only. Current user must be GM or able to control the active combatant.
+
+**Spend behavior:** All-or-nothing via existing `_spendActionForCombatant`. Spending 2 with only 1 pip available spends 0 and warns. Condition-locked pips are never consumed.
+
+**Position:** Still controlled by the existing `moveButtonPosition` setting (key unchanged). Label updated to "Action Spend Panel Position".
+
+**Old Stride helpers removed:** `_getStrideButtonId`, `_removeStrideButton`, `_shouldShowStrideButton`, `_renderStrideButton` and `.baph-stride-*` CSS classes are all gone. Replaced by `_getActionPanelId`, `_removeActionPanel`, `_shouldShowActionPanel`, `_buildActionSpendButton`, `_renderActionPanel` and `.baph-action-panel*` CSS classes.
+
+**Hook registrations unchanged:** `renderCombatTracker`, `updateCombat`, `combatStart`, `deleteCombat`, `ready`.
+
+**Not added:** Attack automation, token drag, MAP/Strike counter, ESM migration.
+
+---
+
+## Rules Clarifications (confirmed, not yet requiring code changes)
+
+### Dazzled
+
+Dazzled is not yet implemented. When added, it will be a **minor penalty condition only** (toggle, no tier). It does not block reactions or attacks of opportunity. If fiction requires "you were not ready," use **Off-Guard** (the existing `offGuard` toggle) as the mechanical wrapper instead. A Dazzled condition in PF1.5 would apply a –1 penalty to attack rolls and sight-based Perception, consistent with standard PF1 behavior.
+
+Implementation path when ready: add a `dazzled` toggle entry to `CONDITIONS` in `condition-overlay.js` with a `buildChanges` targeting `attack` (–1 penalty). No changes to `_readConditionActionLoss` or `_applyConditionLocks` needed.
+
+### Action-Loss Stacking Rule (Staggered / Nauseated / Stunned / Slowed)
+
+The confirmed PF1.5 rule:
+
+> Compute actions lost from each applicable action-loss source, take the maximum actions lost, cap at 3, then subtract from the 3-action pool (floor 0).
+
+| Source | Type | Effect |
+|---|---|---|
+| Staggered | Floor (baseBlock) | 2 actions lost |
+| Nauseated | Floor (baseBlock) | 2 actions lost |
+| Stunned X | Additive | +X actions lost |
+| Slowed X | Additive | +X actions lost |
+| Paralyzed | Full incapacitation | All 3 actions + reaction locked (bypasses math) |
+
+Formula: `actionsLost = min(max(baseBlock, additive), 3)`
+
+Worked examples:
+- Staggered alone → max(2, 0) = **2 lost** → 1 action remains
+- Slowed 1 alone → max(0, 1) = **1 lost** → 2 actions remain
+- Staggered + Slowed 1 → max(2, 1) = **2 lost** → 1 action remains
+- Staggered + Slowed 2 → max(2, 2) = **2 lost** → 1 action remains
+- Staggered + Slowed 3 → max(2, 3) = **3 lost** → 0 actions remain
+- Stunned 2 + Slowed 1 → max(0, 3) = **3 lost** → 0 actions remain
+
+The current `_readConditionActionLoss` implementation matches this rule exactly. No code change required. These examples are now also documented in the function's comment block in `action-tracker.js`.
+
+---
+
 ## v2.12.0 — Add Floating Stride Button
 
 Adds a fixed-position Stride button visible during active combat. Clicking it spends 1 action from the current active combatant.

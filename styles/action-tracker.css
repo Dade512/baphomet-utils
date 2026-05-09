@@ -1,15 +1,17 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.5
+   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.6
    Gaslamp Gothic | Croaker's Ledger edition.
    Burnt brass, cold iron, dried blood — on PARCHMENT.
 
-   v1.5 Changes:
-   - Added floating Stride button styles (.baph-stride-button,
-     .baph-stride-{position} variants).
-   - Croaker's Ledger aesthetic: parchment background, brass
-     border, iron-gall text. Compact, readable in combat.
+   v1.6 Changes:
+   - Replaced single Stride button styles with Action Spend Panel
+     styles (.baph-action-panel, .baph-action-panel-header,
+     .baph-action-spend-btn, .baph-action-spend-cost,
+     .baph-action-spend-label, .baph-action-panel-{position}).
+   - Old .baph-stride-* classes removed entirely.
+   - Same position offsets preserved (right: 380px, left: 2rem).
 
-   v1.4 Changes:
+   v1.5 Changes:
    - Added native <button> reset (padding/font/appearance) so
      pip elements (now <button> instead of <div>) look identical
      to before but are semantically correct clickable controls.
@@ -219,76 +221,127 @@
 }
 
 /* ============================================================
-   FLOATING STRIDE BUTTON — v1.5
+   FLOATING ACTION SPEND PANEL — v1.6
    ============================================================ */
 
-/* --- Base button ---
-   Feels like a stamped brass marker pressed into the corner
-   of the table. Compact, readable, not glowing. */
-.baph-stride-button {
+/* --- Panel container ---
+   Fixed-position ledger card pressed flat against the canvas
+   edge. Compact enough not to dominate the screen. */
+.baph-action-panel {
   position: fixed;
   z-index: 100;
-  min-width: 5.5rem;
-  padding: 0.35rem 0.7rem;
+  width: 12.5rem;
   border: 1.5px solid #9e7d43;
   border-radius: 3px;
   background: #d1c6b4;
-  color: #2a231d;
+  box-shadow: 0 2px 6px rgba(42, 35, 29, 0.45),
+              inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+}
+
+/* --- Header — active combatant name ---
+   Slightly darker parchment strip. Truncates with ellipsis. */
+.baph-action-panel-header {
+  padding: 0.2rem 0.5rem;
+  background: #beb09b;
+  border-bottom: 1px solid #9e7d43;
   font-family: "Courier Prime", "Courier New", monospace;
-  font-size: 0.85rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
   text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #2a231d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Spend button rows ---
+   Full-width flex: cost badge (left) | label text (right).
+   Styled as ruled ledger rows, not generic buttons. */
+.baph-action-spend-btn {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid rgba(158, 125, 67, 0.3);
+  background: transparent;
   cursor: pointer;
   /* Button defaults reset */
   appearance: none;
   -webkit-appearance: none;
-  /* Inset relief — stamped into parchment */
-  box-shadow: 0 2px 5px rgba(42, 35, 29, 0.4),
-              inset 0 1px 2px rgba(255, 255, 255, 0.3),
-              inset 0 -1px 1px rgba(42, 35, 29, 0.15);
-  /* Crisp transitions only — no slow fades */
-  transition: background 0.08s ease,
-              border-color 0.08s ease,
-              box-shadow 0.08s ease;
+  font-family: "Courier Prime", "Courier New", monospace;
+  color: #2a231d;
+  text-align: left;
+  transition: background 0.06s ease;
 }
 
-.baph-stride-button:hover,
-.baph-stride-button:focus {
+.baph-action-spend-btn:last-child {
+  border-bottom: none;
+}
+
+.baph-action-spend-btn:hover,
+.baph-action-spend-btn:focus {
   background: #beb09b;
-  border-color: #6e2a22;
-  box-shadow: 0 3px 6px rgba(42, 35, 29, 0.5),
-              inset 0 1px 2px rgba(255, 255, 255, 0.25),
-              inset 0 -1px 1px rgba(42, 35, 29, 0.2);
   outline: none;
 }
 
-.baph-stride-button:active {
-  background: #beb09b;
-  border-color: #6e2a22;
-  box-shadow: inset 0 2px 4px rgba(42, 35, 29, 0.35);
-  transform: translateY(1px);
+.baph-action-spend-btn:active {
+  background: #b0a28a;
+}
+
+/* --- Cost badge — left column ---
+   Small brass-tinted pip count. Visual anchor on the left. */
+.baph-action-spend-cost {
+  min-width: 2rem;
+  padding: 0.32rem 0.4rem;
+  background: rgba(158, 125, 67, 0.12);
+  border-right: 1px solid rgba(158, 125, 67, 0.35);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-align: center;
+  color: #6b5c3e;
+  flex-shrink: 0;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* --- Action label — right column ---
+   Short hint. Labels are examples only, not enforced rules. */
+.baph-action-spend-label {
+  padding: 0.32rem 0.5rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  color: #2a231d;
+  line-height: 1;
+  display: flex;
+  align-items: center;
 }
 
 /* --- Position variants ---
-   bottom-right: above the Foundry hotbar, left of the sidebar.
-   Adjust right/bottom offsets if overlap occurs on your layout. */
-.baph-stride-bottom-right {
+   Same offsets as the former Stride button.
+   Adjust if overlap occurs on your layout. */
+.baph-action-panel-bottom-right {
   right: 380px;
   bottom: 5rem;
 }
 
-.baph-stride-bottom-left {
+.baph-action-panel-bottom-left {
   left: 2rem;
   bottom: 5rem;
 }
 
-.baph-stride-top-right {
+.baph-action-panel-top-right {
   right: 380px;
   top: 5rem;
 }
 
-.baph-stride-top-left {
+.baph-action-panel-top-left {
   left: 2rem;
   top: 5rem;
 }

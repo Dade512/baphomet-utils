@@ -1,6 +1,10 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.4
+   BAPHOMET UTILS — SETTINGS v1.5
    Central module settings registration.
+
+   v1.5 (module v2.13.0 — "Floating Action Spend Panel"):
+   - moveButtonPosition label/hint updated from Stride/Button
+     language to Action Spend Panel language. Setting key unchanged.
 
    v1.4 (module v2.12.0 — "Floating Stride Button"):
    - moveButtonPosition setting now live. Label/hint updated.
@@ -127,14 +131,14 @@ Hooks.once('init', () => {
   });
 
   /* ----------------------------------------------------------
-     FLOATING MOVE / STRIDE BUTTON POSITION — LIVE as of v2.12.0
+     ACTION SPEND PANEL POSITION — LIVE as of v2.12.0
      
-     Controls where the floating Stride button appears on screen.
+     Controls where the floating Action Spend Panel appears.
      Per-client setting (each user can choose their preferred corner).
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'moveButtonPosition', {
-    name: 'Stride Button Position',
-    hint: 'Controls the screen position of the floating Stride action button during combat.',
+    name: 'Action Spend Panel Position',
+    hint: 'Controls the screen position of the floating Action Spend Panel during combat.',
     scope: 'client',
     config: true,
     type: String,
@@ -162,7 +166,7 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.4 registered`);
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.5 registered`);
 });
 
 /* ----------------------------------------------------------

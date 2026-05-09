@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.14
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.15
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,28 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.15 Changes (FLOATING ACTION SPEND PANEL):
+   - Replaced single Stride button with a compact 3-button
+     Action Spend Panel. Buttons:
+       Spend 1 — Swing / Move       (1 action, reason: manual-1)
+       Spend 2 — Cast / Ready       (2 actions, reason: manual-2)
+       Spend 3 — Disable / Full     (3 actions, reason: manual-3)
+   - Labels are descriptive examples only. No action-type rules
+     are enforced. All spends are generic pip deductions.
+   - Panel header shows the active combatant name.
+   - All-or-nothing enforced via existing _spendActionForCombatant.
+   - Condition-locked pips not consumed.
+   - Ownership/combatant re-validated at click time.
+   - Position still controlled by moveButtonPosition setting.
+   - Old Stride helpers (_getStrideButtonId, _removeStrideButton,
+     _shouldShowStrideButton, _renderStrideButton) removed and
+     replaced with panel equivalents (_getActionPanelId,
+     _removeActionPanel, _shouldShowActionPanel, _renderActionPanel,
+     _buildActionSpendButton).
+   - Hook registrations unchanged (renderCombatTracker,
+     updateCombat, combatStart, deleteCombat, ready).
+   - No attack automation. No token drag. No ESM migration.
 
    v1.14 Changes (FLOATING STRIDE BUTTON):
    - Added floating Stride button that spends 1 action from the
@@ -290,9 +312,34 @@ function _resetState(combatantId) {
    3. AFTER the loop: calculate final actionsLost from all
       tracked values in one deterministic pass.
 
-   Actual rule: Staggered/Nauseated block to 2 actions lost
-   (1 action remaining). Stunned/Slowed add on top of that.
-   Combined: actionsLost = max(baseBlock, additive), capped at 3.
+   PF1.5 ACTION-LOSS RULE (confirmed ruling):
+   Compute actions lost from each applicable source, take the
+   maximum of the sources, cap at 3, then subtract from the
+   3-action pool (floor 0).
+
+   Sources that set a floor (baseBlock):
+     Staggered: 2 actions lost
+     Nauseated:  2 actions lost
+
+   Sources that are additive (stacked together):
+     Stunned X: +X actions lost
+     Slowed X:  +X actions lost
+
+   Final formula: actionsLost = min(max(baseBlock, additive), 3)
+
+   Worked examples:
+     Staggered alone          → max(2, 0) = 2 lost → 1 action remains
+     Slowed 1 alone           → max(0, 1) = 1 lost → 2 actions remain
+     Staggered + Slowed 1    → max(2, 1) = 2 lost → 1 action remains
+     Staggered + Slowed 2    → max(2, 2) = 2 lost → 1 action remains
+     Staggered + Slowed 3    → max(2, 3) = 3 lost → 0 actions remain
+     Stunned 2 + Slowed 1    → max(0, 3) = 3 lost → 0 actions remain
+     Paralyzed               → bypasses math; all actions + reaction locked
+
+   Note: Staggered + Slowed 3 equals 3 actions lost because the
+   Slowed additive total (3) exceeds the Staggered floor (2).
+   Slowed does not stack with Staggered's floor — it only matters
+   when the additive total surpasses the floor.
    ---------------------------------------------------------- */
 
 function _readConditionActionLoss(actor) {
@@ -1309,11 +1356,18 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
 });
 
 /* ============================================================
-   FLOATING STRIDE BUTTON — v1.14
+   FLOATING ACTION SPEND PANEL — v1.15
    ══════════════════════════════════════════════════════════
 
-   A fixed-position button visible only during active combat.
-   Spends 1 action from game.combat.combatant when clicked.
+   A fixed-position panel visible only during active combat.
+   Provides three generic manual action-spend buttons:
+
+     Spend 1 — Swing / Move      (1 pip, reason: manual-1)
+     Spend 2 — Cast / Ready      (2 pips, reason: manual-2)
+     Spend 3 — Disable / Full    (3 pips, reason: manual-3)
+
+   Labels are descriptive examples only. No action-type rules
+   are enforced. All spends are generic pip deductions.
 
    Source of truth: game.combat.combatant (active combatant).
    Never reads from selected tokens.
@@ -1321,29 +1375,33 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
    Visibility: only shown when the current user is GM or can
    control the active combatant (_canUserControlCombatant).
 
+   All spends are all-or-nothing. Spending 2 with only 1 pip
+   available spends 0 and warns. Condition-locked pips are
+   never consumed.
+
    Position: controlled by the existing 'moveButtonPosition'
    client setting (bottom-right / bottom-left / top-right / top-left).
 
-   No token drag automation. No MAP/Strike counter.
+   Replaces the single Stride button from v1.14.
    ============================================================ */
 
 /**
- * Return the DOM id used for the Stride button.
+ * Return the DOM id used for the action spend panel.
  * @returns {string}
  */
-function _getStrideButtonId() {
-  return 'baph-stride-button';
+function _getActionPanelId() {
+  return 'baph-action-panel';
 }
 
 /**
- * Remove the Stride button from the DOM if it exists.
+ * Remove the action panel from the DOM if it exists.
  */
-function _removeStrideButton() {
-  document.getElementById(_getStrideButtonId())?.remove();
+function _removeActionPanel() {
+  document.getElementById(_getActionPanelId())?.remove();
 }
 
 /**
- * Return true if the Stride button should be shown to the
+ * Return true if the action panel should be shown to the
  * current user right now.
  *
  * Requires:
@@ -1352,114 +1410,155 @@ function _removeStrideButton() {
  *
  * @returns {boolean}
  */
-function _shouldShowStrideButton() {
+function _shouldShowActionPanel() {
   const combat = game.combat;
   if (!combat?.active || !combat.combatant) return false;
   return _canUserControlCombatant(combat.combatant);
 }
 
 /**
- * Remove any existing Stride button and, if the user should see
- * one, inject a fresh button into document.body.
+ * Build a single spend button row for the action panel.
  *
- * Always calls _removeStrideButton() first to prevent duplicates.
+ * Re-validates combatant and ownership at click time so stale
+ * renders don’t enable spending for the wrong combatant.
+ *
+ * @param {number} cost    Number of action pips to spend (1–3)
+ * @param {string} label   Short descriptive label shown on the button
+ * @param {string} hint    Tooltip / title text
+ * @param {string} reason  Debug reason string passed to _spendActionForCombatant
+ * @returns {HTMLButtonElement}
  */
-function _renderStrideButton() {
-  _removeStrideButton();
+function _buildActionSpendButton(cost, label, hint, reason) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.classList.add('baph-action-spend-btn');
+  btn.title = hint;
 
-  if (!_shouldShowStrideButton()) return;
+  const costBadge = document.createElement('span');
+  costBadge.classList.add('baph-action-spend-cost');
+  costBadge.textContent = String(cost);
 
-  const combatant = game.combat.combatant;
-  const position  = game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right';
+  const labelEl = document.createElement('span');
+  labelEl.classList.add('baph-action-spend-label');
+  labelEl.textContent = label;
 
-  const button = document.createElement('button');
-  button.id    = _getStrideButtonId();
-  button.type  = 'button';
-  button.classList.add('baph-stride-button', `baph-stride-${position}`);
-  button.textContent = 'Stride';
-  button.title = `Stride: spend 1 action for ${combatant.name}`;
+  btn.appendChild(costBadge);
+  btn.appendChild(labelEl);
 
-  button.addEventListener('click', (event) => {
+  btn.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
 
-    // Re-validate at click time — the active combatant or
-    // user permissions may have changed since the button was
-    // rendered (turn advance, combat end, etc.).
+    // Re-validate at click time — active combatant or permissions
+    // may have changed since the panel was last rendered.
     const active = game.combat?.combatant;
 
     if (!active) {
-      _debugLog('Stride: failed — no active combatant at click time');
-      ui.notifications?.warn?.('No active combatant available to Stride.');
-      _renderStrideButton();
+      _debugLog('Action panel: failed — no active combatant at click time');
+      ui.notifications?.warn?.('No active combatant available.');
+      _renderActionPanel();
       return;
     }
 
     if (!_canUserControlCombatant(active)) {
-      _debugLog(`Stride: failed — user cannot control ${active.name}`);
+      _debugLog(`Action panel: failed — user cannot control ${active.name}`);
       ui.notifications?.warn?.(`You cannot control ${active.name}.`);
-      _renderStrideButton();
+      _renderActionPanel();
       return;
     }
 
+    _debugLog(`Action panel: attempting spend — ${active.name} / cost ${cost} / ${reason}`);
+
     // _spendActionForCombatant is synchronous and all-or-nothing.
-    // If it returns false, no pips were spent.
-    const spent = _spendActionForCombatant(active.id, 1, 'stride');
+    const spent = _spendActionForCombatant(active.id, cost, reason);
 
     if (!spent) {
-      _debugLog(`Stride: failed — not enough actions for ${active.name}`);
-      ui.notifications?.warn?.(`${active.name} does not have enough actions to Stride.`);
+      _debugLog(`Action panel: failed — not enough actions for ${active.name}, needed ${cost}`);
+      ui.notifications?.warn?.(`${active.name} does not have enough actions.`);
       _refreshPipRow(active.id);
       return;
     }
 
-    _debugLog(`Stride: spent 1 action for ${active.name}`);
+    _debugLog(`Action panel: success — spent ${cost} action(s) for ${active.name}`);
     _refreshPipRow(active.id);
-    _renderStrideButton();
+    _renderActionPanel();
   });
 
-  document.body.appendChild(button);
+  return btn;
+}
+
+/**
+ * Remove any existing action panel and, if the user should see
+ * one, inject a fresh panel into document.body.
+ *
+ * Always calls _removeActionPanel() first to prevent duplicates.
+ */
+function _renderActionPanel() {
+  _removeActionPanel();
+
+  if (!_shouldShowActionPanel()) return;
+
+  const combatant = game.combat.combatant;
+  const position  = game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right';
+
+  const panel = document.createElement('div');
+  panel.id = _getActionPanelId();
+  panel.classList.add('baph-action-panel', `baph-action-panel-${position}`);
+
+  // Compact header showing the active combatant name.
+  const header = document.createElement('div');
+  header.classList.add('baph-action-panel-header');
+  header.textContent = combatant.name;
+  header.title = combatant.name;
+  panel.appendChild(header);
+
+  // Spend buttons — labels are examples only, not rules.
+  panel.appendChild(_buildActionSpendButton(1, 'Swing / Move',   'Spend 1 action',  'manual-1'));
+  panel.appendChild(_buildActionSpendButton(2, 'Cast / Ready',   'Spend 2 actions', 'manual-2'));
+  panel.appendChild(_buildActionSpendButton(3, 'Disable / Full', 'Spend 3 actions', 'manual-3'));
+
+  document.body.appendChild(panel);
 }
 
 /* ----------------------------------------------------------
-   STRIDE BUTTON HOOK REGISTRATIONS
+   ACTION PANEL HOOK REGISTRATIONS
 
    Separate from the existing combat lifecycle hooks above
    (which manage pipState). These hooks manage only the
-   Stride button DOM element.
+   action panel DOM element.
 
    renderCombatTracker: covers turn advance, combatant changes,
    and any re-render of the tracker. Most state changes that
-   matter for the button fire this hook.
+   matter for the panel fire this hook.
 
    updateCombat: belt-and-suspenders for turn advances that may
    not always trigger a full renderCombatTracker re-render.
 
-   combatStart: ensures the button appears when combat begins.
+   combatStart: ensures the panel appears when combat begins.
 
-   deleteCombat: removes the button when combat ends.
+   deleteCombat: removes the panel when combat ends.
    (The existing deleteCombat hook cleans up pipState separately;
-   this listener only removes the DOM button.)
+   this listener only removes the DOM panel.)
    ---------------------------------------------------------- */
 
 Hooks.on('renderCombatTracker', () => {
-  _renderStrideButton();
+  _renderActionPanel();
 });
 
 Hooks.on('updateCombat', () => {
-  _renderStrideButton();
+  _renderActionPanel();
 });
 
 Hooks.on('combatStart', () => {
-  _renderStrideButton();
+  _renderActionPanel();
 });
 
 Hooks.on('deleteCombat', () => {
-  _removeStrideButton();
+  _removeActionPanel();
 });
 
-// Initial render on world ready — shows the button if a combat
+// Initial render on world ready — shows the panel if a combat
 // is already active when the page loads (e.g. after a reload).
 Hooks.once('ready', () => {
-  _renderStrideButton();
+  _renderActionPanel();
 });
