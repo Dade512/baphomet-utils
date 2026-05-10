@@ -1,6 +1,14 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.6
+   BAPHOMET UTILS — SETTINGS v1.7
    Central module settings registration.
+
+   v1.7 (module v2.15.0 — "Disable Device Task Prep"):
+   - skillAutoAllowlist default updated: dev removed.
+     Disable Device now uses the PF1.5 multi-round task pattern
+     and is not auto-spendable. The live handler warns when dev
+     is rolled in combat.
+   - skillAllowlistMigrated215 flag registered for one-time
+     migration from v2.14.0 to v2.15.0 confirmed allowlist.
 
    v1.6 (module v2.14.0 — "Hide PF1 Full Attack Button"):
    - pf15ModeEnabled registered. World scope, default true.
@@ -99,7 +107,7 @@ Hooks.once('init', () => {
      SKILL ALLOWLIST
      
      Comma-separated PF1 skill key strings. Keys confirmed via
-     v2.10.x–v2.11.2 live testing. Any additional skills added
+     v2.10.x–v2.15.0 live testing. Any additional skills added
      manually must be verified against the pf1ActorRollSkill
      hook payload before they will work.
      
@@ -110,7 +118,6 @@ Hooks.once('init', () => {
        ste = Stealth                  (1 action)
        hea = Heal                     (1 action)
        umd = Use Magic Device         (1 action)
-       dev = Disable Device           (3 actions — all-or-nothing)
        slt = Sleight of Hand          (1 action)
        kar = Knowledge Arcana         (1 action)
        kdu = Knowledge Dungeoneering  (1 action)
@@ -127,14 +134,20 @@ Hooks.once('init', () => {
        per = Perception — excluded intentionally. Perception is
        a passive/reactive sense; spending an action pip on it
        conflicts with PF1.5 action economy intent.
+
+       dev = Disable Device — excluded as of v2.15.0. Disable
+       Device uses the PF1.5 multi-round task pattern (commit
+       1 action/round with Continue Disabling). The live handler
+       warns the user when dev is rolled in combat. It will be
+       re-added once the task subsystem is built.
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'skillAutoAllowlist', {
     name: 'Skill Auto-Spend Allowlist',
-    hint: 'Comma-separated PF1 skill keys for automatic action spending. Confirmed keys: acr, blf, int, ste, hea, umd, dev, slt, kar, kdu, ken, kge, khi, klo, kna, kno, kpl, kre. Any keys added manually must be verified against the pf1ActorRollSkill hook payload.',
+    hint: 'Comma-separated PF1 skill keys for automatic action spending. Confirmed keys: acr, blf, int, ste, hea, umd, slt, kar, kdu, ken, kge, khi, klo, kna, kno, kpl, kre. Any keys added manually must be verified against the pf1ActorRollSkill hook payload.',
     scope: 'world',
     config: true,
     type: String,
-    default: 'acr,blf,int,ste,hea,umd,dev,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre'
+    default: 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre'
   });
 
   /* ----------------------------------------------------------
@@ -151,6 +164,13 @@ Hooks.once('init', () => {
   });
 
   game.settings.register(SETTINGS_MODULE_ID, 'skillAllowlistMigrated212', {
+    scope: 'world',
+    config: false,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(SETTINGS_MODULE_ID, 'skillAllowlistMigrated215', {
     scope: 'world',
     config: false,
     type: Boolean,
@@ -193,7 +213,7 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.6 registered`);
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.7 registered`);
 });
 
 /* ----------------------------------------------------------
@@ -272,4 +292,46 @@ Hooks.once('ready', async () => {
   }
 
   await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated212', true);
+});
+
+/* ----------------------------------------------------------
+   v2.15.0 MIGRATION — Remove Disable Device from Allowlist
+   
+   Runs once on the first GM ready after updating to v2.15.0.
+   Detects the confirmed v2.14.0 allowlist string and replaces
+   it with the v2.15.0 string (dev removed).
+   
+   Disable Device (dev) is no longer auto-spendable. It now
+   uses the PF1.5 multi-round task pattern. The live skill
+   handler warns the user when dev is rolled in combat.
+   
+   Safety: only replaces the exact v2.14.0 string.
+   Any GM-customized allowlist is left completely untouched.
+   The migration flag (skillAllowlistMigrated215) is written
+   regardless so this block never runs a second time.
+   ---------------------------------------------------------- */
+
+const _V214_ALLOWLIST = 'acr,blf,int,ste,hea,umd,dev,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre';
+const _V215_ALLOWLIST = 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre';
+
+Hooks.once('ready', async () => {
+  if (!game.user.isGM) return;
+
+  if (game.settings.get(SETTINGS_MODULE_ID, 'skillAllowlistMigrated215')) return;
+
+  const current = game.settings.get(SETTINGS_MODULE_ID, 'skillAutoAllowlist');
+
+  if (current === _V214_ALLOWLIST) {
+    await game.settings.set(SETTINGS_MODULE_ID, 'skillAutoAllowlist', _V215_ALLOWLIST);
+    console.log(
+      `%c ${SETTINGS_MODULE_ID} | v2.15.0 migration: dev removed from skillAutoAllowlist (Disable Device now uses multi-round task pattern) `,
+      'background: #6e2a22; color: #e8dfd0; font-weight: bold; padding: 2px 6px;'
+    );
+  } else {
+    console.log(
+      `${SETTINGS_MODULE_ID} | v2.15.0 migration: skillAutoAllowlist already customized or up-to-date — no change ("${current}")`
+    );
+  }
+
+  await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated215', true);
 });

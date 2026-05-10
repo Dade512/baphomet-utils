@@ -4,6 +4,33 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.15.0 — Disable Device Task Prep
+
+Safety patch only. No new automation features.
+
+**Disable Device is now governed by the PF1.5 Multi-Round Task Pattern.**
+
+The previous `dev: 3` implementation has been removed. Disable Device is not a 3-action auto-spendable skill — it is a multi-round task where the actor commits 1 action per round with **Continue Disabling** until the check resolves. Duration varies by complexity (simple: 1 round; typical: 1d4 rounds; complex: 2d4 rounds).
+
+**Current runtime behavior (v2.15.0):**
+- In active combat, a Disable Device roll triggers an explicit warning notification: *"Disable Device: PF1.5 multi-round task — commit 1 action/round. Task tracking not yet automated."*
+- Zero pips are spent automatically.
+- The PF1 roll itself still proceeds (no pre-roll blocking).
+- `dev` has been removed from `SKILL_ACTION_COSTS` and from the default `skillAutoAllowlist`.
+- A one-time migration (`skillAllowlistMigrated215`) removes `dev` from the stored allowlist on first GM load; customized allowlists are left untouched.
+
+**Task subsystem not yet implemented.** This patch is a safe holding state. The task-progress subsystem is a distinct future feature and will be implemented as its own release.
+
+**When the task subsystem is built, it should be reusable for:**
+- Disable Device (primary driver)
+- Survival tracking (e.g. foraging over multiple rounds)
+- Extended Heal treatment (longer-duration medicine checks)
+- Jury-rigging and improvised repairs
+- Ritual interruption tracking
+- Custom GM-defined multi-round tasks
+
+---
+
 ## v2.14.0 — Hide PF1 Full Attack Button
 
 Implements the first live PF1.5 action economy enforcement: hiding the Full Attack button from AttackDialog when PF1.5 Mode is enabled.

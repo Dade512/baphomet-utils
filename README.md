@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.14.0
+**Current Version:** 2.15.0
 
 ---
 
@@ -77,6 +77,14 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.15.0 — "The Ledger Waits Its Turn"
+Disable Device safety patch and task system prep. No new automation features.
+
+- Removed Disable Device (`dev`) from automatic skill action spending.
+- Disable Device now warns in combat instead of spending 3 actions: a notification appears and 0 pips are spent, while the PF1 roll continues normally.
+- Added one-time migration (`skillAllowlistMigrated215`) to remove `dev` from the default skill auto-spend allowlist on first GM load; customized allowlists are never overwritten.
+- Prepared for the future PF1.5 Multi-Round Task subsystem (Disable Device, Survival tracking, extended Heal, jury-rigging, ritual interruption, and custom GM tasks).
 
 ### v2.14.0 — "The Ledger Closes the Wrong Door"
 First live PF1.5 action economy enforcement. There is no Full Attack in PF1.5.

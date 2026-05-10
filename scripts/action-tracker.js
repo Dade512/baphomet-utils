@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.19
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.20
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,23 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.20 Changes (DISABLE DEVICE TASK PREP):
+   - SKILL_ACTION_COSTS: dev (Disable Device) removed entirely.
+     Disable Device now uses the PF1.5 multi-round task pattern
+     (commit 1 action/round with Continue Disabling). It is not
+     an auto-spendable 1-action skill.
+   - Live pf1ActorRollSkill handler: early gate added for dev
+     BEFORE the allowlist check. When skillKey === 'dev' and
+     combat is active, the handler warns the user that Disable
+     Device uses multi-round task handling, logs the decision,
+     and returns without spending any pips. The PF1 roll itself
+     continues (no pre-roll blocking).
+   - LIVE SKILL AUTO-SPEND section banner updated to remove
+     the now-obsolete Disable Device 3-action reference.
+   - No task subsystem built. No task state, no Continue Task
+     button, no duration tracking, no automatic final check.
+   - All other skill costs unchanged. No other automation changes.
 
    v1.19 Changes (HIDE PF1 FULL ATTACK BUTTON):
    - _diagHandleAttackDialogRender restructured: normalization
@@ -1104,7 +1121,6 @@ function _spendActionForActor(actor, count = 1, reason = '') {
    ste  →  Stealth                  →  1
    hea  →  Heal                     →  1
    umd  →  Use Magic Device         →  1
-   dev  →  Disable Device           →  3  (all-or-nothing)
    slt  →  Sleight of Hand          →  1
    kar  →  Knowledge (Arcana)       →  1
    kdu  →  Knowledge (Dungeoneering) →  1
@@ -1117,9 +1133,12 @@ function _spendActionForActor(actor, count = 1, reason = '') {
    kpl  →  Knowledge (Planes)       →  1
    kre  →  Knowledge (Religion)     →  1
    
-   Excluded:
+   Excluded from auto-spend:
    per  →  Perception — passive/reactive sense; excluded
            intentionally from action economy tracking.
+   dev  →  Disable Device — uses PF1.5 multi-round task pattern.
+           Not auto-spendable. Live handler warns user when dev
+           is rolled in combat. Re-add once task subsystem is built.
    
    Any skills added in future must be verified against the
    pf1ActorRollSkill payload before adding here.
@@ -1132,7 +1151,6 @@ const SKILL_ACTION_COSTS = {
   ste: 1,
   hea: 1,
   umd: 1,
-  dev: 3,  // 3-action cost — all-or-nothing enforced by _spendActionForCombatant
   slt: 1,
   // Knowledge sub-skills — all cost 1 action
   kar: 1,  // Knowledge Arcana
@@ -1453,12 +1471,13 @@ Hooks.once('ready', () => {
    Confirmed hook signature:
      pf1ActorRollSkill(actor, chatMessage, skillKey)
 
-   All-or-nothing: a skill with cost 3 (Disable Device) will
-   spend nothing if fewer than 3 pips are available.
-
    Gated behind 'autoSkillSpend' world setting (default OFF).
    Only fires for the current active combatant on the user's
    controlled token. Non-active actors are silently ignored.
+
+   Disable Device (dev) is intercepted BEFORE the allowlist gate
+   and receives a specific PF1.5 multi-round task warning instead
+   of a generic "not in allowlist" message. No pip is spent.
 
    Dedupe: keyed on actor.id + skillKey + chatMessage.id.
    500ms window. Client-local in-memory Set — does NOT protect
@@ -1530,6 +1549,16 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
     return;
   }
 
+  // Early gate: Disable Device uses PF1.5 multi-round task pattern.
+  // It is NOT auto-spendable. Warn the user explicitly before the
+  // allowlist check so 'dev' gets a specific message rather than a
+  // generic "not in allowlist" rejection. The PF1 roll continues.
+  if (skillKey === 'dev') {
+    _debugLog('skill auto-spend: Disable Device (dev) — PF1.5 multi-round task, no auto-spend');
+    ui.notifications?.warn?.('Disable Device: PF1.5 multi-round task — commit 1 action/round. Task tracking not yet automated.');
+    return;
+  }
+
   // Gate 5: skill in allowlist
   const allowlistRaw = game.settings.get(AT_MODULE_ID, 'skillAutoAllowlist') ?? '';
   const allowlist = allowlistRaw.split(',').map(s => s.trim()).filter(Boolean);
@@ -1564,9 +1593,7 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
     return;
   }
 
-  // All gates passed. _spendActionForCombatant enforces all-or-nothing:
-  // if cost is 3 (Disable Device) and fewer than 3 pips are available,
-  // it returns false without spending anything.
+  // All gates passed. _spendActionForCombatant enforces all-or-nothing.
   _debugLog(`skill auto-spend: attempting spend — ${actor.name} / ${skillKey} / cost ${cost}`);
   const spent = _spendActionForCombatant(combatant.id, cost, `skill-${skillKey}`);
 
@@ -1645,7 +1672,7 @@ function _shouldShowActionPanel() {
  * Build a single spend button row for the action panel.
  *
  * Re-validates combatant and ownership at click time so stale
- * renders don’t enable spending for the wrong combatant.
+ * renders don't enable spending for the wrong combatant.
  *
  * @param {number} cost    Number of action pips to spend (1–3)
  * @param {string} label   Short descriptive label shown on the button
