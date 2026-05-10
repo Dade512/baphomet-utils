@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.15.0
+**Current Version:** 2.15.1
 
 ---
 
@@ -77,6 +77,13 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 ---
 
 ## Changelog
+
+### v2.15.1 — "The Ledger Relabels"
+Cosmetic label change only. No mechanics changed.
+
+- Updated the 3-action panel example label from `D.DEV / F. CAST` to `F.CAST / RUN`.
+- The old label referenced Disable Device, which no longer costs 3 immediate actions as of v2.15.0.
+- The button still spends exactly 3 action pips (`manual-3`). No spend behavior changed.
 
 ### v2.15.0 — "The Ledger Waits Its Turn"
 Disable Device safety patch and task system prep. No new automation features.

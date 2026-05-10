@@ -4,6 +4,16 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.15.1 — Action Panel Label Cleanup
+
+Cosmetic only. No mechanics changed.
+
+The Spend 3 button's example label was updated from `D.DEV / F. CAST` to `F.CAST / RUN`. The old label referenced Disable Device, which no longer costs 3 immediate actions as of v2.15.0 — it uses the PF1.5 Multi-Round Task Pattern instead. The new label reflects generic 3-action uses (e.g. a full-action cast or a long run) without implying any specific rule.
+
+The button still spends exactly 3 action pips via `manual-3`. All spend behavior, condition-lock enforcement, and all-or-nothing logic are unchanged.
+
+---
+
 ## v2.15.0 — Disable Device Task Prep
 
 Safety patch only. No new automation features.

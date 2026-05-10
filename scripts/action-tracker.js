@@ -1616,7 +1616,7 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
 
      Spend 1 — Swing / Move      (1 pip, reason: manual-1)
      Spend 2 — Cast / Ready      (2 pips, reason: manual-2)
-     Spend 3 — Disable / Full    (3 pips, reason: manual-3)
+     Spend 3 — F.Cast / Run       (3 pips, reason: manual-3)
 
    Labels are descriptive examples only. No action-type rules
    are enforced. All spends are generic pip deductions.
@@ -1767,7 +1767,7 @@ function _renderActionPanel() {
   // Spend buttons — labels are examples only, not rules.
   panel.appendChild(_buildActionSpendButton(1, 'Swing / Move',   'Spend 1 action',  'manual-1'));
   panel.appendChild(_buildActionSpendButton(2, 'Cast / Ready',   'Spend 2 actions', 'manual-2'));
-  panel.appendChild(_buildActionSpendButton(3, 'D.Dev / F. Cast', 'Spend 3 actions', 'manual-3'));
+  panel.appendChild(_buildActionSpendButton(3, 'F.Cast / Run',    'Spend 3 actions', 'manual-3'));
 
   document.body.appendChild(panel);
 }
