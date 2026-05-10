@@ -4,6 +4,164 @@ Internal development notes. Not user-facing.
 
 ---
 
+## v2.16.0 — Multi-Round Task Scaffold
+
+API-only scaffold for multi-round task tracking. No UI, no Disable Device integration, no automatic resolution.
+
+### Storage Model
+
+**Public task state → actor flags**
+
+```javascript
+combatant.actor.setFlag('baphomet-utils', 'tasks', {
+  [taskId]: PublicTaskObject
+})
+```
+
+Readable by anyone with actor ownership. Never contains `roundsRequired`, hidden DCs, or `metadataHidden`. Safe to return to non-GM clients as-is.
+
+**Hidden task data → GM user flags**
+
+```javascript
+game.user.setFlag('baphomet-utils', 'hiddenTaskData', {
+  [taskId]: HiddenTaskObject
+})
+```
+
+Written to `game.user` (the GM who creates the task). Readable only by that same GM user client. `roundsRequired` and `metadataHidden` are never written to actor flags under any circumstances.
+
+### Single-GM Assumption
+
+v2.16.0 assumes a single-GM campaign. Hidden data is stored on `game.user` at creation time. If a different GM user later needs to commit or resolve a task, they will not have the hidden data. This is acceptable now and is a documented limitation.
+
+Multi-GM scenarios are future work. Do not add GM-authority election or hidden-data migration in this patch.
+
+### Public Task Object Shape
+
+Stored on actor flags. Fields safe to expose to players.
+
+```javascript
+{
+  taskId:               string,   // "${combatant.id}-${skillKey}-${Date.now()}"
+  skillKey:             string,   // PF1 skill key e.g. 'dvs' for Disable Device
+  taskType:             string,   // 'generic', 'disable-device', etc.
+  taskName:             string,   // human-readable label
+  roundsCommitted:      number,   // rounds of progress so far
+  startedRound:         number,   // combat.round when task was created
+  lastCommittedRound:   number | null, // last round a commit was made
+  status:               'active' | 'paused' | 'resolved' | 'abandoned',
+  pausedReason:         string | null, // e.g. 'combat-ended', 'player-choice'
+  readyToResolve:       boolean,  // set true by GM client only when roundsCommitted >= roundsRequired
+  createdByUserId:      string,   // game.user.id of the GM who created the task
+  hiddenDataOwnerUserId: string,  // same as createdByUserId; used to identify the GM's flags
+  metadataPublic:       object,   // player-safe notes, tags, display hints
+}
+```
+
+Not included in public object: `roundsRequired`, `metadataHidden`.
+
+### Hidden Task Object Shape
+
+Stored on GM user flags only.
+
+```javascript
+{
+  taskId:         string,
+  roundsRequired: number,  // the hidden target — never written to actor flags
+  metadataHidden: object,  // GM-only: trap DC, treasure notes, etc.
+}
+```
+
+### readyToResolve Policy
+
+Only the GM client that holds hidden data may set `readyToResolve` to `true`. Evaluation happens inside `commitAction` after a successful action spend:
+
+- If `game.user.isGM` and `hiddenAll[taskId]?.roundsRequired` is present: compare and set.
+- If `game.user.isGM` but hidden data is absent: log a warning, leave `readyToResolve` false. Do not guess.
+- If non-GM: skip evaluation entirely. The field will be `true` if the GM client already set it.
+
+### Combatant-First API
+
+All public API methods accept a `Combatant` object as the first argument. A string ID fallback is available internally (via `game.combat.combatants.get(id)`) for macro convenience, but the documented API is always `Combatant`-first.
+
+Reason: unlinked tokens produce synthetic actors not in `game.actors`. Using `combatant.actor` ensures we always get the contextually correct actor, even for unlinked tokens.
+
+### game.baphometTasks API
+
+```javascript
+game.baphometTasks = {
+  createTask(combatant, options),   // GM only
+  getTask(combatant, taskId),       // GM gets full object; non-GM gets sanitized
+  getTasks(combatant),              // same sanitization as getTask
+  commitAction(combatant, taskId),  // 9 gates; spends 1 action; GM or owner
+  pauseTask(combatant, taskId, reason), // GM or owner
+  resumeTask(combatant, taskId),    // GM or owner
+  abandonTask(combatant, taskId),   // GM or owner
+  resolveTask(combatant, taskId),   // GM only; STUB in v2.16.0
+}
+```
+
+### commitAction Gate Order
+
+1. `game.combat` exists
+2. Combatant resolves and has actor
+3. Combatant is `game.combat.combatant` (active turn only)
+4. Current user is GM or `_baphTaskCanControl(combatant)` (mirrors action-tracker ownership check)
+5. Task exists on actor flags
+6. Task status is not `'paused'`
+7. Task status is not `'resolved'` or `'abandoned'`
+8. `task.lastCommittedRound !== game.combat.round` (same-round guard)
+9. `_spendActionForCombatant(combatant.id, 1, 'task-${skillKey}')` returns `true`
+
+### Global Dependencies
+
+`task-tracker.js` depends on two globals from `action-tracker.js` (which loads first per `module.json`):
+
+- `_spendActionForCombatant(combatantId, count, reason)` — action spend, all-or-nothing, returns boolean
+- `_debugLog(msg, ...args)` — debug-gated console logger (gated on `debugLogging` setting)
+
+Since neither file uses an IIFE, both functions are on `window` and accessible. If either is unavailable at runtime, task-tracker will fail clearly (console error). Do not duplicate spend logic.
+
+### Debug Logging
+
+Task-tracker wraps `_debugLog` via `_baphTaskDebugLog(msg, ...args)` which prefixes `[task]` to all messages. Enable `debugLogging` in Module Settings to see all gate decisions, write confirmations, and hidden-data warnings.
+
+### Global Name Collision Policy
+
+`task-tracker.js` uses no IIFE. All module-level names are prefixed:
+- Constants: `BAPH_TASK_*`
+- Cache: `_baphTaskCache`
+- Helper functions: `_baphTask*`
+- Public implementations: `_baphTask*` (wrapped into `game.baphometTasks`)
+
+### v2.16.0 Hard Boundaries
+
+v2.16.0 does NOT implement:
+- Continue Task button or any task UI
+- Task progress widget
+- Disable Device integration (dev warning in action-tracker.js is unchanged)
+- `pf1PreActionUse` suppression
+- `actor.rollSkill()` or any skill roll invocation
+- `resolveTask` logic (stub only — logs and returns false)
+- `updateActor` cache listener (deferred to v2.17.1)
+- MAP, swing tracking, or attack changes
+- Skill auto-spend changes
+- Condition math changes
+- ESM migration
+- PF1 prototype patches or `pf1.config` mutation
+
+### Roadmap
+
+| Version | Release Name | Scope |
+|---------|-------------|-------|
+| **v2.16.0** | Multi-Round Task Scaffold | `task-tracker.js`, public actor flags, GM user flags, `game.baphometTasks` API, no UI |
+| **v2.17.0** | Read-Only Task Progress Widget | Display task progress in/near action panel; no player controls |
+| **v2.17.1** | Continue Task Button + Cache Sync | Continue button, player-client writes, `updateActor` cache listener |
+| **v2.18.0** | Disable Device Integration | Task creation triggered by skill use; careful around pre-roll suppression |
+| **v2.19.0** | Task Resolution Polish | GM duration dialog, hidden duration UX, Quick Disable/Trapfinder, failure handling, full `resolveTask` |
+
+---
+
 ## v2.15.1 — Action Panel Label Cleanup
 
 Cosmetic only. No mechanics changed.
@@ -245,230 +403,11 @@ Adds a fixed-position Stride button visible during active combat. Clicking it sp
 
 ---
 
-## v2.11.2 — Expand Knowledge Skill Auto-Spend
-
-Expands Knowledge skill auto-spend to cover all standard PF1 Knowledge sub-skills.
-
-**New Knowledge keys added (all cost 1 action):**
-
-| Key | Skill |
-|-----|-------|
-| kdu | Knowledge Dungeoneering |
-| ken | Knowledge Engineering |
-| kge | Knowledge Geography |
-| khi | Knowledge History |
-| kno | Knowledge Nobility |
-| kpl | Knowledge Planes |
-
-(kar, kre, kna, klo were already present from v2.11.0–2.11.1.)
-
-**Allowlist migration:** One-time migration on first GM `ready` after this update. Detects the exact v2.11.1 string (`acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna,klo`) and replaces it with the v2.11.2 string (`acr,blf,int,ste,hea,umd,dev,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre`). Customized allowlists are not overwritten. `skillAllowlistMigrated212` flag written regardless.
-
-**Failed spend logging:** Added explicit `_debugLog` at the call site when `_spendActionForCombatant` returns `false`. Previously the failure path was silent at the handler level (the reason was logged inside the helper but not surfaced at the spend attempt line). Now logs: `skill auto-spend: failed — spend blocked or insufficient actions for {name} [{key}], needed {cost}`.
-
-**Perception (`per`) remains excluded.** Attack auto-spend deferred. No Move/Stride button. No ESM migration.
-
----
-
-## v2.11.1 — Migrate Confirmed Skill Allowlist
-
-Fixed the root cause of all skills being rejected in v2.11.0: Foundry preserves existing world setting values, so updating the `default` in `game.settings.register` does not overwrite a value already stored in the world database. The world still held the old provisional v2.9.9 string (`acrobatics,bluff,...`).
-
-**Changes:**
-
-- `klo` (Knowledge Local) added to `SKILL_ACTION_COSTS` (cost 1) and the default allowlist. Confirmed from v2.11.0 live debug output.
-- `skillAutoAllowlist` default updated to `acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna,klo`.
-- One-time migration registered in `scripts/settings.js`. On the first GM `ready` after this update, if the world setting still holds the exact old provisional string, it is replaced with the confirmed string. If the GM has customized the allowlist to anything else, it is left untouched.
-- Migration flag `skillAllowlistMigrated211` registered as a hidden world setting (`config: false`). Written to `true` after migration runs (whether or not a replacement was needed). Ensures migration runs exactly once per world.
-
-**Migration detection string (exact match required):**
-```
-acrobatics,bluff,intimidate,stealth,heal,useMagicDevice,disableDevice,sleightOfHand,knowledge
-```
-
-**Replacement string:**
-```
-acr,blf,int,ste,hea,umd,dev,slt,kar,kre,kna,klo
-```
-
-Perception (`per`) remains excluded. Attack auto-spend remains deferred. No other behavior changes.
-
----
-
-## v2.11.0 — Skill Auto-Spend
-
-Skill auto-spend is now live behind the `autoSkillSpend` world setting (default OFF).
-
-**Confirmed hook signature:**
-```
-pf1ActorRollSkill(actor, chatMessage, skillKey)
-```
-Confirmed via v2.10.x diagnostic testing.
-
-**Confirmed skill keys and action costs:**
-
-| Key | Skill | Cost |
-|-----|-------|------|
-| acr | Acrobatics | 1 |
-| blf | Bluff | 1 |
-| int | Intimidate | 1 |
-| ste | Stealth | 1 |
-| hea | Heal | 1 |
-| umd | Use Magic Device | 1 |
-| dev | Disable Device | 3 (all-or-nothing) |
-| slt | Sleight of Hand | 1 |
-| kar | Knowledge (Arcana) | 1 |
-| kre | Knowledge (Religion) | 1 |
-| kna | Knowledge (Nature) | 1 |
-
-**Excluded:** `per` (Perception) — passive/reactive sense, excluded intentionally.
-
-**Disable Device / dev:** Costs 3 actions. If fewer than 3 pips are available, nothing is spent. All-or-nothing is enforced by `_spendActionForCombatant`.
-
-**Dedupe guard:** `_isSkillSpendDuped` keys on `actor.id:skillKey:chatMessage.id` with a 500ms window. If the hook fires multiple times for the same roll, only the first event spends pips.
-
-**Attack auto-spend deferred:** `pf1AttackRoll` confirmed as `(ItemAction, D20RollPF, Object)`. Dedupe behavior not yet designed — unclear whether it fires once per attack action, per iterative roll, or per damage/card event. Will be addressed after observing behavior in live play.
-
-**Move / Stride button deferred** to a future release.
-
----
-
-## v2.10.1 — Diagnostic Cleanup
-
-Cleaned up `_summarizeHookArg` in `scripts/action-tracker.js` to remove all `arg?.data` probing.
-
-**Root cause:** PF1 emits `ItemAction.data has been deprecated. Use the data directly on the action instead.` compatibility warnings whenever `.data` is accessed on an ItemAction object. The v2.10.0 diagnostic summarizer accessed `arg?.data?.actor`, `arg?.data?.skill`, `arg?.data?.skillId`, and `arg?.data?.skillKey`, triggering these warnings on every `pf1AttackRoll` fire.
-
-**Fix:** All `.data` paths removed from the summarizer. No replacement `.data` access was added. The summarizer now probes non-deprecated paths only:
-- Actor paths: `arg?.actor`, `arg?.item?.actor`, `arg?.action?.actor`, `arg?.subject?.actor`, `arg?.parent?.actor`, `arg?.parent`
-- Skill key paths: direct (`skill`, `skillId`, `skillKey`, `key`, `id`, `name`), via `arg?.action.*`, via `arg?.subject.*`
-
-Diagnostics remain debug-gated behind the `debugLogging` setting and observer-only. No live action automation is enabled.
-
----
-
-## v2.10.0 — Action Automation Diagnostics
-
-This version begins action automation work with diagnostic-only PF1 hook logging.
-
-Added debug-gated logging for:
-- `pf1AttackRoll`
-- `pf1ActorRollSkill`
-
-These hooks do not spend action pips. They exist only to verify the actual PF1 runtime payload shape before final automation logic is wired.
-
-**Testing goals:**
-- Confirm actor path for attack rolls.
-- Confirm actor path for skill rolls.
-- Confirm skill key path and format.
-- Confirm whether `pf1AttackRoll` fires once per attack action, once per iterative attack, for AoOs, or during damage/card display flow.
-- Look for any stable roll/message/action identifier usable for dedupe.
-
-Automation remains disabled until payload extraction and dedupe rules are confirmed.
-
----
-
-## v2.10.0 — Action Automation (Future Release — Planning Notes)
-
-**Status:** Planned. Scaffold registered in v2.9.9. Do NOT implement mid-campaign.
-
-**What v2.9.9 added (inert):**
-- `scripts/settings.js` — all automation settings registered, all default OFF
-- `_debugLog`, `_getActiveCombatant`, `_getActiveCombatantForActor`, `_canUserControlCombatant`, `_spendActionForCombatant`, `_spendActionForActor` helpers in `action-tracker.js` (no hooks call them yet)
-- `SKILL_ACTION_COSTS` constant in `action-tracker.js` (provisional key names, unverified)
-
-**What v2.10.0 must add:**
-
-### First step: diagnostic payload logging (v2.10.0 — do this before wiring)
-
-The argument signatures for `pf1AttackRoll` and `pf1ActorRollSkill` are **not verified yet**. Do not assume argument positions, field names, or payload shape. The first thing v2.10.0 must do is add temporary diagnostic hooks that log all raw arguments with `debugLogging` enabled.
-
-With `debugLogging` ON in Module Settings, add temporary hooks like these to identify the actual payload shape:
-
-```javascript
-// DIAGNOSTIC ONLY — do not ship. Log full argument list.
-// Run a few attacks and check F12 for the output.
-Hooks.on('pf1AttackRoll', (...args) => {
-  _debugLog('pf1AttackRoll raw args:', ...args);
-});
-
-// DIAGNOSTIC ONLY — do not ship. Run each skill in the approved list.
-Hooks.on('pf1ActorRollSkill', (...args) => {
-  _debugLog('pf1ActorRollSkill raw args:', ...args);
-});
-```
-
-**What to verify from the diagnostic output before wiring any automation:**
-
-- `pf1AttackRoll`: Which argument position (or property) carries the actor? Does it fire once per attack action, once per individual attack roll (iteratives), or once per damage/card event? Does it fire for AoOs? The dedup guard design depends on this.
-- `pf1ActorRollSkill`: Which argument position carries the actor? Which argument carries the skill key? Is the skill key a flat string (`acrobatics`), camelCase (`useMagicDevice`), a dot-path (`knowledge.arcana`), or something else? Log all sub-skill knowledge rolls to confirm the format.
-- Verify all keys in `SKILL_ACTION_COSTS` against logged output before enabling any skill automation.
-
-Only after logging and confirming the payload shape should spend wiring be added — using the verified argument positions and field names.
-
-### Approved first-pass skill list (v2.10.0)
-
-These skills are included in the default allowlist and `SKILL_ACTION_COSTS`. All key names are **provisional** and must be verified against the actual `pf1ActorRollSkill` hook payload at runtime before automation is enabled.
-
-| Skill | Action cost | Notes |
-|---|---|---|
-| Acrobatics | 1 | |
-| Bluff | 1 | |
-| Intimidate | 1 | |
-| Stealth | 1 | |
-| Heal | 1 | |
-| Use Magic Device | 1 | Verify untrained-use edge cases |
-| Disable Device | 3 | Verify cost is correct and not context-dependent |
-| Sleight of Hand | 1 | |
-| Knowledge (all) | 1 | Placeholder key — verify whether PF1 uses a flat key or dot-paths (e.g. `knowledge.arcana`) |
-
-**Excluded from the default allowlist:**
-- **Perception** — passive/reactive sense; spending an action on a Perception check conflicts with PF1.5 action economy intent. Remove from allowlist if a player adds it manually.
-
-### Required verification before enabling hooks
-
-- **Confirm pf1AttackRoll payload:** verify which field carries the actor, whether it fires for AoOs, whether it fires for iterative attacks separately (if so, a dedup guard is needed keyed on roll ID or timestamp).
-- **Confirm pf1ActorRollSkill payload:** verify the exact skill key string format (flat key vs dot-path for sub-skills, casing). Perform test rolls for each skill in the approved list and log the raw key received.
-- **Verify SKILL_ACTION_COSTS keys:** log pf1ActorRollSkill for each skill, compare output against the scaffold keys. Update any mismatches before enabling.
-- **Verify Disable Device cost:** confirm 3 actions is correct for all contexts in PF1.5 before enabling.
-- **Verify Knowledge key format:** confirm whether sub-skills arrive as `knowledge`, `knowledge.arcana`, or some other shape.
-- **Unlinked tokens:** `_getActiveCombatantForActor` matches on `actor.id`. Verify that unlinked token synthetic actors resolve correctly, or add a token-ID fallback.
-
-### Dedupe guard (required)
-
-Attack hooks and skill hooks may fire multiple times for the same user action (e.g., iterative attacks, hook re-entrant from PF1 internals). Before going live, implement a short-window dedup:
-
-```javascript
-const _recentSpends = new Set();
-
-function _dedupeSpend(key, fn) {
-  if (_recentSpends.has(key)) return;
-  _recentSpends.add(key);
-  setTimeout(() => _recentSpends.delete(key), 500); // 500ms window
-  fn();
-}
-```
-
-### Floating Move / Stride button
-
-- Position preference stored in `moveButtonPosition` setting (already registered)
-- Implementation: inject a fixed-position button during combat; clicking spends 1 action and emits a chat message or notification
-- Do NOT use token drag movement as the implementation — too unreliable and fires from GM scene panning
-- The button should appear only when combat is active AND the current user has a combatant with actions remaining
-
-### Exclusions (never add without explicit GM review)
-
-- **Perception** — excluded from default allowlist; do not include in first pass
-- **Token drag movement** — too noisy, wrong abstraction
-- **Standard/move/swift/full-round inference** — PF1.5 uses 3-action economy; never map back to PF1 action types
-
-### Stability requirements
-
-- All automation must be gatable to ON/OFF per setting (already registered)
-- Enable `debugLogging` during development — every spend decision should appear in F12
-- Test with automation ON and OFF to confirm pips stay unchanged when disabled
-- Test with no active combat — helpers must return false/null gracefully
-- `_getActiveCombatantForActor` only returns the current active combatant — off-turn actors must not trigger pip spends
+## Known Deferred Items
+
+- `FormApplication` in `local-lore-oracle` settings.js — fires v13 deprecation console warnings but is functional. Migrate to `ApplicationV2` in a future pass.
+- `baphomet-utils` now has `scripts/settings.js` — any future GM-configurable options (beyond weather UI and automation scaffold) should land there.
+- ESM migration — deferred. See "Staged ESM Migration" section in prior notes. Do not do mid-campaign.
 
 ---
 
@@ -485,16 +424,9 @@ Once a session-boundary exists where a full regression test is practical. This i
 - Introducing a `scripts/main.js` or `scripts/main.mjs` as the single entry point declared in `"esmodules"`, which imports the rest
 - Or migrating each file independently and declaring all of them in `"esmodules"` (easier, but loses the single-entry-point pattern)
 - Verifying `data/climate-zones.js` is also converted (it's loaded first in the scripts array and likely relies on being globally available)
-- End-to-end test: all seven features (theme, conditions, action tracker, roll cards, XP, weather engine, weather UI) pass smoke tests
+- End-to-end test: all features (theme, conditions, action tracker, task tracker, roll cards, XP, weather engine, weather UI) pass smoke tests
 
 **Recommended approach:**
 Introduce `scripts/main.mjs` as the orchestrator entry point. Convert each existing file to ESM (`export function`, `import { x } from './y.js'`). Declare only `main.mjs` in `"esmodules"`. Remove `"scripts"` array. This matches the pattern used by `local-lore-oracle`.
 
 **Do NOT do this mid-campaign** without a full test session.
-
----
-
-## Known Deferred Items
-
-- `FormApplication` in `local-lore-oracle` settings.js — fires v13 deprecation console warnings but is functional. Migrate to `ApplicationV2` in a future pass.
-- `baphomet-utils` now has `scripts/settings.js` — any future GM-configurable options (beyond weather UI and automation scaffold) should land there.

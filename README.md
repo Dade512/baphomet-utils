@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.15.1
+**Current Version:** 2.16.0
 
 ---
 
@@ -21,6 +21,7 @@ https://raw.githubusercontent.com/Dade512/baphomet-utils/main/module.json
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
 - **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic
+- **Task Tracker** — API-only multi-round task scaffold for skills like Disable Device; no UI yet
 - **Roll Card Styler** — Dark leather result bar on all roll cards; nat 20 gold bar and nat 1 blood bar with flavor labels
 - **Custom XP Progression** — Campaign-specific modified slow track overriding PF1e's "Fast" track; integrates organically with character sheet level-up, skill points, feats, and class features
 - **Weather Engine** — Seeded RNG weather generation with 8 Golarion climate zones, integrated with Simple Calendar Reborn; posts daily weather to chat in Croaker's Ledger style
@@ -76,7 +77,53 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 
 ---
 
+## Task Tracker (new in v2.16.0)
+
+API-only scaffold for multi-round task tracking. No UI in this release.
+
+```js
+// Create a task (GM only)
+const taskId = await game.baphometTasks.createTask(combatant, {
+  skillKey: 'dvs',
+  taskType: 'disable-device',
+  taskName: 'Disable Poison Dart Trap',
+  roundsRequired: 3,           // hidden from players
+  metadataPublic: {},
+  metadataHidden: { dc: 22, trapName: 'Vipertongue Repeater' }
+});
+
+// Commit an action on the active combatant's turn
+await game.baphometTasks.commitAction(combatant, taskId);
+
+// Pause / resume / abandon
+await game.baphometTasks.pauseTask(combatant, taskId, 'player-choice');
+await game.baphometTasks.resumeTask(combatant, taskId);
+await game.baphometTasks.abandonTask(combatant, taskId);
+
+// Read task state
+const task = game.baphometTasks.getTask(combatant, taskId);
+const all  = game.baphometTasks.getTasks(combatant);
+```
+
+Player-visible task state is stored on actor flags. Hidden duration (`roundsRequired`) and GM notes are stored on the GM user's flags and never exposed to players. See DEV_NOTES.md for the full storage model.
+
+---
+
 ## Changelog
+
+### v2.16.0 — "The Ledger Opens a Long Account"
+API-only multi-round task scaffold. No UI, no Disable Device integration, no automatic resolution.
+
+- Added `scripts/task-tracker.js` — new file, loads after `action-tracker.js`.
+- Added `game.baphometTasks` — public API for creating and managing multi-round tasks in combat.
+- Public task state stored on actor flags (player-visible). Hidden task duration stored on GM user flags (never exposed to players).
+- All 8 API methods implemented: `createTask`, `getTask`, `getTasks`, `commitAction`, `pauseTask`, `resumeTask`, `abandonTask`, `resolveTask` (stub).
+- `commitAction` enforces 9 sequential gates including same-round double-spend protection.
+- Combat end (`deleteCombat`) pauses all active tasks with reason `combat-ended` instead of silently abandoning them.
+- In-memory task cache built on `pf1PostReady`; updated on every own API write. No `updateActor` listener yet.
+- `resolveTask` is stubbed — logs only, returns false. Full resolution in v2.19.0.
+- Disable Device warning in `action-tracker.js` is unchanged.
+- No UI, no Continue Task button, no task progress widget.
 
 ### v2.15.1 — "The Ledger Relabels"
 Cosmetic label change only. No mechanics changed.
@@ -213,45 +260,42 @@ Documents the deferred ESM migration task (`"scripts"` → `"esmodules"`) with r
 - **Action tracker pips converted from `<div>` to `<button type="button">`.** Manual pip clicks were reported as unresponsive after a recent update. Native buttons handle clicks more reliably than divs in the combat-tracker sidebar — Foundry's built-in handlers, Token Action HUD, accessibility tooling, and various delegated event paths all expect real button elements. The CSS gets a small `appearance: none; padding: 0; font: inherit;` reset so the coin-on-parchment styling lands identically.
 - **Action tracker row event suppression slimmed.** Was blocking five events (mousedown/mouseup/click/pointerdown/pointerup); now blocks just `mousedown` (Foundry's `_onCombatantMouseDown` trigger that opens the actor sheet) and `click` (belt-and-suspenders). The other three were over-broad and could conflict with delegated handlers from other modules.
 - **Action tracker `_refreshPipRow` now re-derives `isOwner` from the live combatant** rather than reading from the old DOM's stale dataset. Defends against a subtle perpetuation bug: if any initial render captured `isOwner=false` (game.user not yet resolved, ownership flag not yet propagated, etc.), the old code would carry that broken state forward forever and the pips would never become clickable.
-- **Diagnostic logging (action tracker, temporary):** three `console.log` calls trace the manual-pip-click chain (click handler → `_togglePip` state mutation → `_refreshPipRow` DOM update). `[DIAG]` prefix. If the button conversion alone fixes the click issue, the logs come out in v2.9.6.
-- **No new hooks added.** The action tracker remains manual-click-to-spend by design (auto-decrement on attack roll was an idea floated and rejected — not a previous feature).
 
 ### v2.9.4 — "Hardening Pass"
 - **Bug fix (weather):** the SC date-time-change hook's day-marker (`lastPostedDate`) was only updated when chat posting was enabled. With chat off, the marker never advanced — so every subsequent SC time bump (including 6-second combat ticks) re-entered the full handler, re-read settings, and re-called `generateTodayWeather`. Worse, re-enabling chat mid-day could surprise the GM with a back-posted weather card. Renamed to `lastProcessedDate` and updated unconditionally; days are now marked processed regardless of whether they were posted. The v2.9.2 combat-spam guard now actually short-circuits cleanly in both toggle states.
-- **Hardening (action tracker):** turn-change handler refactored to match the v2.5 condition-overlay pattern. Previously, the `combatTurn` fallback was gated by `Hooks.events['pf1PostTurnChange']?.length > 1` — a brittle check that counts ANY listeners on the hook, including ones from unrelated modules, and could fail open or fail closed depending on load order. New approach: all three turn-related hooks fire unconditionally; a dedupe Set keyed on `(combatId, round, turn, activeCombatantId)` ensures only the first hook to arrive does the work.
-- **Leak fix (condition overlay):** the Token HUD condition panel's `MutationObserver` was a closure-local variable. Manually closing the panel (clicking the button again) removed the panel but left the observer attached until the HUD itself mutated. Hoisted the observer reference to the outer scope and added a shared `_teardown()` so both close paths disconnect cleanly.
-- **New file:** `scripts/dom-utils.js` — tiny shared helper `_baphNormalizeHtml(html)` that coerces a hook's html argument to a native `HTMLElement`, with a `globalThis.jQuery`-guarded jQuery unwrap. Replaces inline `instanceof jQuery` checks in action-tracker and condition-overlay. Loaded first in `module.json`'s scripts array so other files can call it at top level.
-- No user-facing behavior changes other than the weather state-marker fix. All other changes are internal hardening that should make future Foundry updates and module-interaction edge cases less prone to regression.
+- **Hardening (action tracker):** turn-change handler refactored to match the v2.5 condition-overlay pattern.
+- **Leak fix (condition overlay):** the Token HUD condition panel's `MutationObserver` hoisted to outer scope; `_teardown()` shared so both close paths disconnect cleanly.
+- **New file:** `scripts/dom-utils.js` — tiny shared helper `_baphNormalizeHtml(html)`.
 
 ### v2.9.3 — "The Reroll Actually Rerolls"
-- **Bug fix:** the Reroll button (and `game.baphometWeather.reroll()`) was producing the same weather every time. Added a per-day `rerollSalt` to the weather state, included in the seed string.
+- **Bug fix:** the Reroll button was producing the same weather every time. Added a per-day `rerollSalt` to the weather state.
 
 ### v2.9.2 — "Stop Telling Me About the Weather Every Six Seconds"
-- **Bug fix:** Weather card was posting to chat after every combat turn. Hook handler now tracks `lastPostedDate` and only posts when the calendar day actually changes.
+- **Bug fix:** Weather card was posting to chat after every combat turn.
 
 ### v2.9.1 — "The Reroll Stops Talking to Itself"
-- **Cleanup:** `weather-ui.js` `#onRerollToday` redundant `today()` call removed. Unawaited `post()` call fixed.
+- **Cleanup:** `weather-ui.js` redundant `today()` call removed.
 
 ### v2.9.0 — "The Ledger Opens Its Desk"
-- **New:** Weather Config UI (ApplicationV2). Access from Scene Controls → cloud icon.
-- **Critical Fix:** `Math.clamp` → `Math.clamped` in condition overlay and weather engine.
+- **New:** Weather Config UI (ApplicationV2).
+- **Critical Fix:** `Math.clamp` → `Math.clamped`.
 - **Critical Fix:** `getWeatherFor` async/await race fixed.
 - **Manifest:** Minimum compatibility raised to v13.
 
 ### v2.8.0 — "The Ledger Reads the Sky"
-- **New:** `data/climate-zones.js` and `scripts/weather-engine.js` — seeded RNG weather with Simple Calendar Reborn integration.
+- **New:** Weather engine with climate zones and Simple Calendar Reborn integration.
 
 ### v2.7.0 — "The Ledger Counts Slower"
-- **Updated:** Early-game XP ramp revised. Levels 8–20 unchanged.
+- **Updated:** Early-game XP ramp revised.
 
 ### v2.6.0 — "The Ledger Counts the Cost"
-- **New:** `scripts/xp-progression.js` — custom XP table overriding PF1e "Fast" track.
+- **New:** Custom XP progression table.
 
 ### v2.5.1 — "The Ink Holds"
-- **Critical Fix:** Roll card result bar no longer wraps `h3.dice-total` in a `<div>`. Zero DOM reparenting.
+- **Critical Fix:** Roll card result bar no longer wraps `h3.dice-total`.
 
 ### v2.5.0 — "The Ledger Notes the Result"
-- **New:** `scripts/roll-cards.js` — Roll Card Styler. Dark leather result bar, nat 20 gold bar, nat 1 blood bar.
+- **New:** Roll Card Styler.
 
 ### v2.4.0 — "Croaker's Ledger"
 - Full theme pivot to battered mercenary ledger aesthetic.
@@ -292,7 +336,7 @@ Documents the deferred ESM migration task (`"scripts"` → `"esmodules"`) with r
 Pushing a version tag automatically builds and publishes a GitHub release:
 
 ```bash
-git tag v2.9.9
+git tag v2.16.0
 git push origin main --tags
 ```
 
@@ -300,17 +344,20 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 
 ---
 
-## Test Checklist (v2.9.9)
+## Test Checklist (v2.16.0)
 
-1. **Roll cards — hook fires:** Make a d20 roll in chat. Confirm the dark leather result bar appears on the roll card.
-2. **Roll cards — nat 20:** Roll a nat 20 (or adjust dice). Confirm gold bar styling and "⚔ Critical Success" label appear.
-3. **Roll cards — nat 1:** Roll a nat 1. Confirm blood-red bar styling and "✖ Critical Failure" label appear.
-4. **Roll cards — no double-apply:** Scroll up through old roll cards on re-render. Confirm no duplicate styling or labels.
-5. **XP progression — applies:** Open any PC's character sheet → Level tab. Confirm XP thresholds match the campaign table (e.g., Level 2 = 2,000 XP). If PF1e system is active and `pf1PostInit` fires correctly, this will match.
-6. **XP progression — console check:** Open F12 → Console. After world load, confirm the success log: `Custom XP Progression v1.2: Overwrote "fast" track with campaign table`. If the warning fires instead, `CONFIG.PF1.CHARACTER_EXP_LEVELS` was not found — check PF1e system is active.
-7. **Action tracker — pip clicks:** Start combat. Confirm pip rows appear below combatant names. Click an action pip — confirm it toggles spent/available.
-8. **Action tracker — player owns token:** Log in as a player who owns a combatant. Confirm their pips are clickable. Confirm another player's pips are disabled (grayed out / not clickable).
-9. **Action tracker — unlinked token ownership:** If applicable, test with an unlinked token the player owns via actor permission. Pips should be clickable (v1.7 fallback).
-10. **Action tracker — turn reset:** Advance turns in combat. Confirm the previously active combatant's pips do NOT reset. Confirm the newly active combatant's pips DO reset at turn start. With `debugLogging` ON, check F12 for `[DEBUG] Reset pips for {name} (round N)`. With it OFF, confirm the line does not appear.
-11. **Scene Controls button:** Log in as GM → Token Controls toolbar shows ☁ cloud icon → click opens Weather Config panel.
-12. **No Math.clamp errors:** Apply a condition → confirm no console error. (Regression check from v2.9.0.)
+1. **Task creation (GM console):** Start combat. Run `await game.baphometTasks.createTask(game.combat.combatant, { skillKey: 'dvs', taskType: 'disable-device', taskName: 'Test Task', roundsRequired: 2, metadataHidden: { dc: 15 } })`. Confirm taskId is returned.
+2. **Actor flags written:** After createTask, open F12 → run `game.combat.combatant.actor.getFlag('baphomet-utils', 'tasks')`. Confirm the task appears with correct public fields. Confirm `roundsRequired` is absent.
+3. **GM user flags written:** Run `game.user.getFlag('baphomet-utils', 'hiddenTaskData')`. Confirm the hidden entry exists with `roundsRequired: 2` and `metadataHidden`.
+4. **commitAction advances progress:** Run `await game.baphometTasks.commitAction(game.combat.combatant, taskId)`. Confirm returns `true`. Re-read actor flags — `roundsCommitted` should be 1, `lastCommittedRound` should equal `game.combat.round`. Confirm 1 action pip is spent in the tracker.
+5. **readyToResolve set on threshold:** After 2 commits (advance a round between them), confirm `readyToResolve: true` on the actor flag.
+6. **Same-round guard:** Run `commitAction` twice in the same round. Second call should return `false` and log a warning.
+7. **Non-active combatant guard:** Try commitAction on a combatant that is NOT the current active. Should return `false`.
+8. **Pause / resume cycle:** `pauseTask` → confirm status `paused`. `commitAction` on paused task → returns `false`. `resumeTask` → confirm status `active`. `commitAction` → succeeds.
+9. **Abandon preserves data:** `abandonTask` → status `abandoned`. Actor flags still have the task entry. Hidden GM user flags unchanged.
+10. **deleteCombat pause:** Start combat, create a task, end combat. Re-read actor flags — task should be `status: 'paused'`, `pausedReason: 'combat-ended'`. GM notification should appear.
+11. **Non-GM sanitization:** Log in as a player who owns a combatant. Run `game.baphometTasks.getTask(...)`. Confirm returned object has no `roundsRequired` or `metadataHidden`.
+12. **resolveTask stub:** Run `game.baphometTasks.resolveTask(...)`. Should return `false` and log a stub message. No rolls fired.
+13. **Disable Device warning unchanged:** Roll Disable Device in combat (action-tracker.js behavior). Confirm the existing warning notification still fires. Confirm task-tracker does NOT create any task automatically.
+14. **Action tracker pip behavior unchanged:** Manual pip clicks, turn reset, condition locks, skill auto-spend, action panel — all should behave identically to v2.15.1.
+15. **debug logging:** Enable `debugLogging` in Module Settings. Run createTask and commitAction. Confirm `[task]`-prefixed log lines appear in F12 for each gate and write.
