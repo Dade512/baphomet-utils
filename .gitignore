@@ -1,6 +1,25 @@
-﻿desktop.ini
-.DS_Store
+﻿# Windows
+desktop.ini
 *.bat
+
+# Claude Code / dev workflow
+.claude/
+CLAUDE.md
+DEV_NOTES.md
+GOAL_v*.md
+COMPLETED_GOAL_*.md
+CORRECTION_*.md
+RUNTIME_VERIFICATION_REQUIRED.md
+SERVER_TESTING_CHECKLIST.md
 _run_validator.bat
 _validator_*.txt
 _goal_aborted.md
+
+# Reference docs (local only)
+docs/
+
+# Validator tool (local only)
+tools/
+
+# macOS
+.DS_Store
