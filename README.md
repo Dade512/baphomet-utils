@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.20.1
+**Current Version:** 2.20.2
 
 ---
 
@@ -110,6 +110,16 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.20.2 — Minor-Failure UX Clarity
+
+Improves the player-facing experience after a minor Resolve failure. No mechanical changes — outcome thresholds, retry rules, and action economy are unchanged.
+
+- **Chat message:** Minor failure now explicitly states the task is not complete and Resolve may be retried next round. Format: *"Minor Failure — [Actor] does not complete [Task]. The task is not complete and remains ready. Resolve may be retried next round."*
+- **Widget — fresh Ready:** Still shows `Ready to resolve` (no change).
+- **Widget — same-round post-failure:** Shows `Minor failure — retry next round` immediately after a failed Resolve; Resolve button remains visible (still guards same-round retry internally).
+- **Widget — later-round retry:** Shows `Retry available — resolve again` on the next eligible round, making it clear the task was previously attempted and a retry is valid.
+- **State derived from existing fields:** All three states are inferred from `task.lastResolvedAttemptRound` vs `game.combat.round` — no new data storage added.
 
 ### v2.20.1 — Player Task Readiness Socket
 

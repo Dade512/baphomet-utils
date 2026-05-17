@@ -1919,8 +1919,18 @@ function _renderTaskWidget() {
   const progressEl = document.createElement('div');
   progressEl.classList.add('baph-task-widget-progress');
   if (task.readyToResolve) {
-    progressEl.textContent = 'Ready to resolve';
-    progressEl.classList.add('baph-task-widget-ready');
+    const currentRound     = game.combat?.round ?? null;
+    const lastAttemptRound = task.lastResolvedAttemptRound ?? null;
+    if (lastAttemptRound !== null && lastAttemptRound === currentRound) {
+      progressEl.textContent = 'Minor failure — retry next round';
+      progressEl.classList.add('baph-task-widget-minor-failure');
+    } else if (lastAttemptRound !== null) {
+      progressEl.textContent = 'Retry available — resolve again';
+      progressEl.classList.add('baph-task-widget-retry');
+    } else {
+      progressEl.textContent = 'Ready to resolve';
+      progressEl.classList.add('baph-task-widget-ready');
+    }
   } else {
     progressEl.textContent = `Progress: ${task.roundsCommitted ?? 0} committed`;
   }

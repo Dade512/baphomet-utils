@@ -424,6 +424,20 @@
   font-weight: 600;
 }
 
+/* --- Same-round minor failure state ---
+   Dried-blood accent signals a failed Resolve attempt this round. */
+.baph-task-widget-progress.baph-task-widget-minor-failure {
+  color: #6e2a22;
+  font-weight: 600;
+}
+
+/* --- Later-round retry-ready state ---
+   Tarnished brass signals prior attempt + retry now available. */
+.baph-task-widget-progress.baph-task-widget-retry {
+  color: #9e7d43;
+  font-weight: 600;
+}
+
 /* --- Continue Task button (v2.17.1) ---
    Full-width tactical button below the progress line.
    Visible only to the controlling user on unresolved tasks.

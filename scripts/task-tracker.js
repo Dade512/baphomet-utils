@@ -877,10 +877,10 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
     } else if (diff >= -4) {
       // task.status and task.readyToResolve unchanged — stays ready to retry.
       chatContent =
-        `<p><strong>${actorName}</strong> fails to resolve ` +
+        `<p><strong>Minor Failure</strong> — <strong>${actorName}</strong> does not complete ` +
         `<em>${taskName}</em>.</p>` +
-        `<p>Result: <strong>Failure</strong> — task remains ready to resolve. ` +
-        `May retry next round.</p>`;
+        `<p>The task is not complete and remains ready. ` +
+        `Resolve may be retried next round.</p>`;
       _baphTaskDebugLog(
         `adjudicate MINOR FAILURE — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
