@@ -375,14 +375,23 @@ const AT_MODULE_ID = 'baphomet-utils';
 // true = available, false = spent
 const pipState = new Map();
 
+// Flag key used to persist pip state cross-client on the Combatant document.
+// Stored as: { actions: [bool,bool,bool], reaction: [bool], reflexPip: [bool], resetForRound: number|null }
+const PIP_FLAG_KEY = 'pipState';
+
 function _initState(combatantId, hasCombatReflex) {
+  // Hydrate from the shared combatant flag if it exists (cross-client reload support).
+  // getFlag is synchronous — reads from the document's in-memory data.
+  const combatant = game.combat?.combatants?.get(combatantId);
+  const saved = combatant?.getFlag('baphomet-utils', PIP_FLAG_KEY) ?? null;
+
   pipState.set(combatantId, {
-    actions: [true, true, true],
-    reaction: [true],
-    combatReflex: hasCombatReflex,
-    reflexPip: hasCombatReflex ? [true] : [],
+    actions:         (saved?.actions  && saved.actions.length  === 3) ? [...saved.actions]  : [true, true, true],
+    reaction:        (saved?.reaction && saved.reaction.length === 1)  ? [...saved.reaction] : [true],
+    combatReflex:    hasCombatReflex,
+    reflexPip:       saved?.reflexPip ? [...saved.reflexPip] : (hasCombatReflex ? [true] : []),
     conditionLocked: 0,
-    _resetForRound: null
+    _resetForRound:  saved?.resetForRound ?? null,
   });
 }
 
@@ -399,6 +408,29 @@ function _resetState(combatantId) {
   state.conditionLocked = 0;
   // _resetForRound is metadata, not pip state — DO NOT touch it here.
   // It's owned by the render-based reset logic.
+}
+
+/**
+ * Persist the current pip availability state to the Combatant document flag.
+ * All connected clients receive an updateCombatant hook event and re-hydrate
+ * their local pipState cache, providing cross-client pip synchronization.
+ *
+ * Fire-and-forget (no await) — keeps all spend paths synchronous.
+ * Errors are logged to console but never throw.
+ */
+function _writePipFlag(combatantId) {
+  const state = _getState(combatantId);
+  if (!state) return;
+  const combatant = game.combat?.combatants?.get(combatantId);
+  if (!combatant) return;
+  if (!combatant.isOwner) return;
+
+  combatant.setFlag('baphomet-utils', PIP_FLAG_KEY, {
+    actions:      [...state.actions],
+    reaction:     [...state.reaction],
+    reflexPip:    [...state.reflexPip],
+    resetForRound: state._resetForRound,
+  }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
 }
 
 /* ----------------------------------------------------------
@@ -557,6 +589,9 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
     _applyConditionLocks(combatantId, combatant.actor);
   }
 
+  // Persist reset state so remote clients hydrate the fresh full pips.
+  _writePipFlag(combatantId);
+
   _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${round})`);
 }
 
@@ -689,6 +724,7 @@ function _togglePip(combatantId, type, index) {
   }
 
   _refreshPipRow(combatantId);
+  _writePipFlag(combatantId);
 }
 
 /* ----------------------------------------------------------
@@ -885,6 +921,7 @@ Hooks.once('ready', () => {
     reset: (combatantId) => {
       _resetState(combatantId);
       _refreshPipRow(combatantId);
+      _writePipFlag(combatantId);
     },
     spendAction: (combatantId, count = 1) => {
       const state = _getState(combatantId);
@@ -898,6 +935,7 @@ Hooks.once('ready', () => {
         }
       }
       _refreshPipRow(combatantId);
+      if (spent > 0) _writePipFlag(combatantId);
       return spent > 0;
     },
     spendReaction: (combatantId) => {
@@ -905,6 +943,7 @@ Hooks.once('ready', () => {
       if (!state || !state.reaction[0]) return false;
       state.reaction[0] = false;
       _refreshPipRow(combatantId);
+      _writePipFlag(combatantId);
       return true;
     }
   };
@@ -1550,12 +1589,27 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
   }
 
   // Early gate: Disable Device uses PF1.5 multi-round task pattern.
-  // It is NOT auto-spendable. Warn the user explicitly before the
-  // allowlist check so 'dev' gets a specific message rather than a
-  // generic "not in allowlist" rejection. The PF1 roll continues.
+  // It is NOT auto-spendable here. Warn when this is a standalone
+  // player-initiated roll outside the task resolution framework.
+  // Suppressed when task-tracker.js is actively running resolveTask()
+  // OR aidTask() (_baphResolveTaskRollActive / _baphAidTaskRollActive).
   if (skillKey === 'dev') {
-    _debugLog('skill auto-spend: Disable Device (dev) — PF1.5 multi-round task, no auto-spend');
-    ui.notifications?.warn?.('Disable Device: PF1.5 multi-round task — commit 1 action/round. Task tracking not yet automated.');
+    const taskRollActive =
+      (typeof _baphResolveTaskRollActive !== 'undefined' && _baphResolveTaskRollActive) ||
+      (typeof _baphAidTaskRollActive !== 'undefined' && _baphAidTaskRollActive);
+    if (!taskRollActive) {
+      _debugLog('skill auto-spend: Disable Device (dev) — PF1.5 multi-round task, no auto-spend');
+      ui.notifications?.warn?.('Disable Device: PF1.5 multi-round task — use Continue Task / Resolve Task in the task widget.');
+    }
+    return;
+  }
+
+  // Early gate: suppress auto-spend during any task-system-initiated skill roll.
+  // Prevents double-action-spend when resolveTask() or aidTask() fires a skill
+  // roll internally. Non-dev task skills (future resolvers) are also protected.
+  if ((typeof _baphResolveTaskRollActive !== 'undefined' && _baphResolveTaskRollActive) ||
+      (typeof _baphAidTaskRollActive !== 'undefined' && _baphAidTaskRollActive)) {
+    _debugLog(`skill auto-spend: task system roll in progress — suppressing auto-spend for ${skillKey}`);
     return;
   }
 
@@ -1747,6 +1801,8 @@ function _buildActionSpendButton(cost, label, hint, reason) {
  */
 function _renderActionPanel() {
   _removeActionPanel();
+  _renderTaskWidget();
+  _renderAidPanel();
 
   if (!_shouldShowActionPanel()) return;
 
@@ -1770,6 +1826,637 @@ function _renderActionPanel() {
   panel.appendChild(_buildActionSpendButton(3, 'F.Cast / Run',    'Spend 3 actions', 'manual-3'));
 
   document.body.appendChild(panel);
+}
+
+/* ============================================================
+   TASK PROGRESS WIDGET — v2.17.0 / v2.17.1
+   Interactive display for the active combatant's first active task.
+
+   Visible to all users when all three conditions are met:
+     1. Active combat encounter
+     2. Current active combatant
+     3. At least one task with status === 'active' on that combatant
+
+   Does NOT expose hidden task data (roundsRequired, metadataHidden).
+   Player-safe display only: taskName + roundsCommitted + readyToResolve.
+
+   If multiple active tasks exist, shows the first one found.
+   Multi-task display is future work.
+
+   v2.17.1 additions:
+   - Continue Task button (shown when task is not readyToResolve and
+     the current user can control the active combatant).
+   - Click: spends 1 action via game.baphometTasks.commitAction(),
+     then calls _renderActionPanel() to refresh.
+   - Cross-client cache sync handled by updateActor hook in
+     task-tracker.js — widget updates automatically on all clients.
+   ============================================================ */
+
+const TASK_WIDGET_ID = 'baph-task-widget';
+
+function _removeTaskWidget() {
+  document.getElementById(TASK_WIDGET_ID)?.remove();
+}
+
+/**
+ * Render (or remove) the task progress widget for the active combatant.
+ * Called from _renderActionPanel() on every panel lifecycle event and
+ * indirectly by the updateActor cache-sync hook in task-tracker.js.
+ *
+ * Widget visibility depends on combat/combatant/task state only.
+ * Continue Task button additionally requires user control of combatant.
+ */
+function _renderTaskWidget() {
+  _removeTaskWidget();
+
+  const combat = game.combat;
+  if (!combat?.active) return;
+  const combatant = combat.combatant;
+  if (!combatant) return;
+
+  // game.baphometTasks is registered on pf1PostReady; guard for early calls.
+  if (!game.baphometTasks) return;
+
+  const tasks = game.baphometTasks.getTasks(combatant);
+  const task = Object.values(tasks).find(t => t.status === 'active');
+
+  if (!task) {
+    const position = (() => {
+      try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
+      catch { return 'bottom-right'; }
+    })();
+    if (game.user.isGM) {
+      _renderBeginTaskWidget(combatant, position);
+    } else if (_canUserControlCombatant(combatant)) {
+      _renderRequestTaskWidget(combatant, position);
+    }
+    return;
+  }
+
+  const canControl = _canUserControlCombatant(combatant);
+
+  const position = (() => {
+    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
+    catch { return 'bottom-right'; }
+  })();
+
+  const widget = document.createElement('div');
+  widget.id = TASK_WIDGET_ID;
+  widget.classList.add('baph-task-widget', `baph-task-widget-${position}`);
+
+  const header = document.createElement('div');
+  header.classList.add('baph-task-widget-header');
+  header.textContent = 'Task';
+  widget.appendChild(header);
+
+  const nameEl = document.createElement('div');
+  nameEl.classList.add('baph-task-widget-name');
+  nameEl.textContent = task.taskName ?? '(unnamed)';
+  nameEl.title = task.taskName ?? '';
+  widget.appendChild(nameEl);
+
+  // Player-safe progress: never exposes roundsRequired or hidden metadata.
+  const progressEl = document.createElement('div');
+  progressEl.classList.add('baph-task-widget-progress');
+  if (task.readyToResolve) {
+    progressEl.textContent = 'Ready to resolve';
+    progressEl.classList.add('baph-task-widget-ready');
+  } else {
+    progressEl.textContent = `Progress: ${task.roundsCommitted ?? 0} committed`;
+  }
+  widget.appendChild(progressEl);
+
+  // Pending aid display — shows total queued assistance if any.
+  const pendingBonuses     = task.pendingResolutionBonuses ?? [];
+  const pendingBonusTotal  = pendingBonuses.reduce((s, b) => s + (b.amount ?? 0), 0);
+  if (pendingBonusTotal > 0) {
+    const aidEl = document.createElement('div');
+    aidEl.classList.add('baph-task-widget-aid-queued');
+    aidEl.textContent = `Assistance queued: +${pendingBonusTotal}`;
+    widget.appendChild(aidEl);
+  }
+
+  // Continue Task button — only for controlling users on unresolved tasks.
+  // Spend 1 action + commit 1 progress unit. Hidden when readyToResolve.
+  if (!task.readyToResolve && canControl) {
+    const taskId = task.taskId;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.classList.add('baph-task-widget-continue-btn');
+    btn.textContent = 'Continue Task';
+    btn.title = 'Spend 1 action to commit 1 round of task progress';
+
+    btn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const active = game.combat?.combatant;
+      if (!active || !game.baphometTasks) {
+        _debugLog('Task widget: Continue Task — no active combatant or API not ready');
+        return;
+      }
+
+      _debugLog(`Task widget: Continue Task — ${active.name} / task ${taskId}`);
+      const ok = await game.baphometTasks.commitAction(active, taskId);
+
+      if (ok) {
+        _debugLog('Task widget: Continue Task succeeded — refreshing');
+        _renderActionPanel();
+      } else {
+        _debugLog('Task widget: Continue Task failed — commitAction returned false');
+        ui.notifications?.warn?.(
+          'Continue Task: action not taken. Not enough actions or already committed this round.'
+        );
+        _renderActionPanel();
+      }
+    });
+
+    widget.appendChild(btn);
+  }
+
+  // Resolve Task button — shown when task is ready to resolve and user controls combatant.
+  // Spend 1 action and roll the skill check via the existing resolveTask path.
+  if (task.readyToResolve && canControl) {
+    const taskId = task.taskId;
+    const resolveBtn = document.createElement('button');
+    resolveBtn.type = 'button';
+    resolveBtn.classList.add('baph-task-widget-resolve-btn');
+    resolveBtn.textContent = 'Resolve Task';
+    resolveBtn.title = 'Spend 1 action to roll the skill check and resolve this task';
+
+    resolveBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const active = game.combat?.combatant;
+      if (!active || !game.baphometTasks) {
+        _debugLog('Task widget: Resolve Task — no active combatant or API not ready');
+        return;
+      }
+
+      _debugLog(`Task widget: Resolve Task — ${active.name} / task ${taskId}`);
+      const ok = await game.baphometTasks.resolveTask(active, taskId);
+
+      if (!ok) {
+        _debugLog('Task widget: Resolve Task failed — resolveTask returned false');
+        ui.notifications?.warn?.(
+          'Resolve Task: action not taken. Not enough actions, task not ready, or already attempted this round.'
+        );
+      } else {
+        _debugLog('Task widget: Resolve Task succeeded — refreshing');
+      }
+      _renderActionPanel();
+    });
+
+    widget.appendChild(resolveBtn);
+  }
+
+  // Abandon Task button — shown to controlling users for any non-terminal active task.
+  // Costs 0 actions, no roll. Clears pending aid. Chat notification posted.
+  if (canControl) {
+    const abandonTaskId = task.taskId;
+    const abandonBtn = document.createElement('button');
+    abandonBtn.type = 'button';
+    abandonBtn.classList.add('baph-task-widget-abandon-btn');
+    abandonBtn.textContent = 'Abandon Task';
+    abandonBtn.title = 'Abandon this task. Costs no actions.';
+
+    abandonBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const active = game.combat?.combatant;
+      if (!active || !game.baphometTasks) {
+        _debugLog('Task widget: Abandon Task — no active combatant or API not ready');
+        return;
+      }
+
+      _debugLog(`Task widget: Abandon Task — ${active.name} / task ${abandonTaskId}`);
+      const ok = await game.baphometTasks.abandonTask(active, abandonTaskId);
+
+      if (!ok) {
+        _debugLog('Task widget: Abandon Task failed — abandonTask returned false');
+        ui.notifications?.warn?.('Abandon Task: could not abandon this task.');
+      }
+      _renderActionPanel();
+    });
+
+    widget.appendChild(abandonBtn);
+  }
+
+  document.body.appendChild(widget);
+}
+
+/* ============================================================
+   AID TASK PANEL — v2.18.0
+
+   Compact panel listing allied ready-to-resolve tasks that the
+   active combatant can aid this turn. Appears when eligible aid
+   targets exist in the current combat.
+
+   Position: above the task widget on the same horizontal rail.
+   The active combatant's own task widget and the aid panel may
+   show simultaneously; they share the same position setting.
+   ============================================================ */
+
+const AID_PANEL_ID = 'baph-aid-panel';
+
+function _removeAidPanel() {
+  document.getElementById(AID_PANEL_ID)?.remove();
+}
+
+/**
+ * Render (or remove) the aid task panel for the active combatant.
+ * Shows one row per eligible ally ready task with an Aid button.
+ * Called from _renderActionPanel() on every panel lifecycle event.
+ */
+function _renderAidPanel() {
+  _removeAidPanel();
+
+  const combat = game.combat;
+  if (!combat?.active) return;
+  const activeCombatant = combat.combatant;
+  if (!activeCombatant) return;
+  if (!game.baphometTasks) return;
+  if (!_canUserControlCombatant(activeCombatant)) return;
+
+  const aidTargets   = [];
+
+  for (const combatant of combat.combatants) {
+    if (combatant.id === activeCombatant.id) continue;
+    if (!combatant.actor) continue;
+
+    const tasks = game.baphometTasks.getTasks(combatant);
+    for (const task of Object.values(tasks)) {
+      // Aid available for all active tasks: both in-progress and ready-to-resolve (v2.18.1)
+      if (task.status !== 'active') continue;
+
+      // "Aided ✓" state: helper already has a successful contribution for this pending Resolve attempt.
+      // Uses successfulAidContributors (cleared on Resolve) rather than roundAdded (cleared on turn).
+      const successfulContributors = task.successfulAidContributors ?? [];
+      const alreadyAided = successfulContributors.includes(activeCombatant.id);
+      aidTargets.push({ combatant, task, alreadyAided });
+    }
+  }
+
+  if (aidTargets.length === 0) return;
+
+  const position = (() => {
+    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
+    catch { return 'bottom-right'; }
+  })();
+
+  const panel = document.createElement('div');
+  panel.id = AID_PANEL_ID;
+  panel.classList.add('baph-aid-panel', `baph-aid-panel-${position}`);
+
+  const header = document.createElement('div');
+  header.classList.add('baph-aid-panel-header');
+  header.textContent = 'Aid Task';
+  panel.appendChild(header);
+
+  for (const { combatant, task, alreadyAided } of aidTargets) {
+    const row = document.createElement('div');
+    row.classList.add('baph-aid-panel-row');
+
+    const label = document.createElement('span');
+    label.classList.add('baph-aid-panel-label');
+    label.textContent = `${combatant.actor.name} — ${task.taskName}`;
+    label.title = `${combatant.actor.name}: ${task.taskName}`;
+    row.appendChild(label);
+
+    if (alreadyAided) {
+      const aidedNote = document.createElement('span');
+      aidedNote.classList.add('baph-aid-panel-aided');
+      aidedNote.textContent = 'Aided ✓';
+      row.appendChild(aidedNote);
+    } else {
+      const targetCombatantId = combatant.id;
+      const targetTaskId      = task.taskId;
+
+      const aidBtn = document.createElement('button');
+      aidBtn.type = 'button';
+      aidBtn.classList.add('baph-aid-panel-btn');
+      aidBtn.textContent = 'Aid';
+      aidBtn.title =
+        `Spend 1 action, roll ${task.taskName ? task.skillKey.toUpperCase() : 'skill'} vs DC 10 ` +
+        `to aid ${combatant.actor.name}'s ${task.taskName} (+2 on success)`;
+
+      aidBtn.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const active = game.combat?.combatant;
+        if (!active || !game.baphometTasks) return;
+
+        _debugLog(
+          `Aid panel: Aid Task — ${active.name} → ${combatant.actor.name} / task ${targetTaskId}`
+        );
+        const ok = await game.baphometTasks.aidTask(active, targetCombatantId, targetTaskId);
+
+        if (!ok) {
+          ui.notifications?.warn?.(
+            'Aid Task: could not aid. Not enough actions, task no longer eligible, or already aided this round.'
+          );
+        }
+        _renderActionPanel();
+      });
+
+      row.appendChild(aidBtn);
+    }
+
+    panel.appendChild(row);
+  }
+
+  document.body.appendChild(panel);
+}
+
+/**
+ * Render a minimal task widget showing only the "Begin Task" button.
+ * Visible to GM only, when the active combatant has no unresolved task.
+ */
+function _renderBeginTaskWidget(combatant, position) {
+  const widget = document.createElement('div');
+  widget.id = TASK_WIDGET_ID;
+  widget.classList.add('baph-task-widget', `baph-task-widget-${position}`);
+
+  const header = document.createElement('div');
+  header.classList.add('baph-task-widget-header');
+  header.textContent = 'Task';
+  widget.appendChild(header);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.classList.add('baph-task-widget-begin-btn');
+  btn.textContent = 'Begin Task';
+  btn.title = 'Open GM task builder for this combatant';
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    _openTaskBuilderOverlay(combatant);
+  });
+  widget.appendChild(btn);
+
+  document.body.appendChild(widget);
+}
+
+/* ============================================================
+   GM TASK BUILDER OVERLAY — v2.19.0
+
+   GM-only compact form overlay for initiating a supported
+   multi-round Disable Device task for the active combatant.
+
+   Opens when the GM clicks the "Begin Task" button that appears
+   in the task widget area when the active combatant has no task.
+
+   The overlay collects:
+     - Task Name (text)
+     - Action flavor (select: disable / arm / sabotage / jury_rig / custom)
+     - Duration mode (Simple 1d4 / Difficult 2d4 / Manual)
+     - Manual rounds required (shown only for Manual mode)
+     - Resolution DC (number)
+
+   On confirm:
+     1. Re-validates active combatant matches the stored ID.
+     2. Secret rolls for Simple/Difficult modes (GM-side Math.random).
+     3. Calls game.baphometTasks.initiateTask() which spends 1 action
+        and creates the task with roundsCommitted=1.
+
+   Positioned at the task widget location (bottom: 11.5rem for bottom-*
+   variants), z-index: 101 (above task widget and aid panel at 100).
+
+   Removed by: confirm click, cancel click, deleteCombat hook.
+   Does NOT close on _renderActionPanel calls so the GM can fill it
+   across incremental re-renders. Stale-combatant is caught at confirm.
+   ============================================================ */
+
+const TASK_BUILDER_ID = 'baph-task-builder';
+
+function _removeTaskBuilderOverlay() {
+  document.getElementById(TASK_BUILDER_ID)?.remove();
+}
+
+function _openTaskBuilderOverlay(combatant) {
+  _removeTaskBuilderOverlay();
+  _removeTaskWidget();
+
+  const position = (() => {
+    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
+    catch { return 'bottom-right'; }
+  })();
+
+  const overlay = document.createElement('div');
+  overlay.id = TASK_BUILDER_ID;
+  overlay.classList.add('baph-task-builder', `baph-task-builder-${position}`);
+  overlay.dataset.combatantId = combatant.id;
+
+  // Header
+  const header = document.createElement('div');
+  header.classList.add('baph-task-builder-header');
+  header.textContent = 'Begin Task';
+  overlay.appendChild(header);
+
+  // Read-only skill display
+  const skillEl = document.createElement('div');
+  skillEl.classList.add('baph-task-builder-skill-line');
+  skillEl.textContent = 'Skill: Disable Device';
+  overlay.appendChild(skillEl);
+
+  // Task Name
+  const nameLabel = document.createElement('label');
+  nameLabel.classList.add('baph-task-builder-field-label');
+  nameLabel.textContent = 'Task Name';
+  overlay.appendChild(nameLabel);
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.classList.add('baph-task-builder-input');
+  nameInput.name = 'taskName';
+  nameInput.placeholder = 'e.g. Disable Poison Dart Trap';
+  overlay.appendChild(nameInput);
+
+  // Action flavor
+  const actionLabel = document.createElement('label');
+  actionLabel.classList.add('baph-task-builder-field-label');
+  actionLabel.textContent = 'Action';
+  overlay.appendChild(actionLabel);
+
+  const actionSelect = document.createElement('select');
+  actionSelect.classList.add('baph-task-builder-select');
+  actionSelect.name = 'taskAction';
+  [
+    { value: 'disable',  label: 'Disable' },
+    { value: 'arm',      label: 'Arm' },
+    { value: 'sabotage', label: 'Sabotage' },
+    { value: 'jury_rig', label: 'Jury-rig' },
+    { value: 'custom',   label: 'Custom' },
+  ].forEach(({ value, label }) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    actionSelect.appendChild(opt);
+  });
+  overlay.appendChild(actionSelect);
+
+  // Duration mode
+  const durationLabel = document.createElement('label');
+  durationLabel.classList.add('baph-task-builder-field-label');
+  durationLabel.textContent = 'Duration';
+  overlay.appendChild(durationLabel);
+
+  const durationSelect = document.createElement('select');
+  durationSelect.classList.add('baph-task-builder-select');
+  durationSelect.name = 'roundsMode';
+  [
+    { value: 'simple',    label: 'Simple — secret 1d4' },
+    { value: 'difficult', label: 'Difficult — secret 2d4' },
+    { value: 'manual',    label: 'Manual' },
+  ].forEach(({ value, label }) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    durationSelect.appendChild(opt);
+  });
+  overlay.appendChild(durationSelect);
+
+  // Manual rounds group (hidden unless manual selected)
+  const manualGroup = document.createElement('div');
+  manualGroup.classList.add('baph-task-builder-manual-group');
+  manualGroup.style.display = 'none';
+
+  const manualLabel = document.createElement('label');
+  manualLabel.classList.add('baph-task-builder-field-label');
+  manualLabel.textContent = 'Rounds Required';
+  manualGroup.appendChild(manualLabel);
+
+  const manualInput = document.createElement('input');
+  manualInput.type = 'number';
+  manualInput.classList.add('baph-task-builder-input', 'baph-task-builder-input-num');
+  manualInput.name = 'roundsManual';
+  manualInput.min = '1';
+  manualInput.step = '1';
+  manualInput.value = '2';
+  manualGroup.appendChild(manualInput);
+  overlay.appendChild(manualGroup);
+
+  durationSelect.addEventListener('change', () => {
+    manualGroup.style.display = durationSelect.value === 'manual' ? '' : 'none';
+  });
+
+  // Resolution DC
+  const dcLabel = document.createElement('label');
+  dcLabel.classList.add('baph-task-builder-field-label');
+  dcLabel.textContent = 'Resolution DC';
+  overlay.appendChild(dcLabel);
+
+  const dcInput = document.createElement('input');
+  dcInput.type = 'number';
+  dcInput.classList.add('baph-task-builder-input', 'baph-task-builder-input-num');
+  dcInput.name = 'dc';
+  dcInput.min = '1';
+  dcInput.step = '1';
+  dcInput.value = '15';
+  overlay.appendChild(dcInput);
+
+  // Button row
+  const btnRow = document.createElement('div');
+  btnRow.classList.add('baph-task-builder-btn-row');
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.type = 'button';
+  confirmBtn.classList.add('baph-task-builder-btn', 'baph-task-builder-btn-confirm');
+  confirmBtn.textContent = 'Begin Task';
+
+  confirmBtn.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Re-validate active combatant at click time
+    const active = game.combat?.combatant;
+    if (!active) {
+      ui.notifications?.warn?.('No active combatant — cannot begin task.');
+      _removeTaskBuilderOverlay();
+      _renderActionPanel();
+      return;
+    }
+    if (active.id !== overlay.dataset.combatantId) {
+      ui.notifications?.warn?.('Turn has changed — task builder closed.');
+      _removeTaskBuilderOverlay();
+      _renderActionPanel();
+      return;
+    }
+
+    // Collect and validate form values
+    const taskName   = nameInput.value.trim();
+    const taskAction = actionSelect.value;
+    const roundsMode = durationSelect.value;
+    const dcRaw      = parseInt(dcInput.value, 10);
+
+    if (!taskName) {
+      ui.notifications?.warn?.('Task Name is required.');
+      nameInput.focus();
+      return;
+    }
+    if (!Number.isFinite(dcRaw) || dcRaw < 1) {
+      ui.notifications?.warn?.('Resolution DC must be a positive integer.');
+      dcInput.focus();
+      return;
+    }
+
+    // Secret roll for duration (GM-side only — not visible to players)
+    let roundsRequired;
+    if (roundsMode === 'simple') {
+      roundsRequired = Math.floor(Math.random() * 4) + 1;       // 1d4
+    } else if (roundsMode === 'difficult') {
+      roundsRequired = (Math.floor(Math.random() * 4) + 1)      // 2d4
+                     + (Math.floor(Math.random() * 4) + 1);
+    } else {
+      roundsRequired = parseInt(manualInput.value, 10);
+      if (!Number.isFinite(roundsRequired) || roundsRequired < 1) {
+        ui.notifications?.warn?.('Rounds Required must be a positive integer.');
+        manualInput.focus();
+        return;
+      }
+    }
+
+    _removeTaskBuilderOverlay();
+
+    if (!game.baphometTasks) {
+      ui.notifications?.warn?.('Task system not ready.');
+      _renderActionPanel();
+      return;
+    }
+
+    // initiateTask handles: action spend, task creation, chat, panel refresh
+    await game.baphometTasks.initiateTask(active, {
+      taskName,
+      taskAction,
+      roundsRequired,
+      dc: dcRaw,
+    });
+    // initiateTask calls _renderActionPanel() on success.
+    // On failure it notifies via ui.notifications and we fall through.
+    _renderActionPanel();
+  });
+  btnRow.appendChild(confirmBtn);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.classList.add('baph-task-builder-btn', 'baph-task-builder-btn-cancel');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    _removeTaskBuilderOverlay();
+    _renderActionPanel();
+  });
+  btnRow.appendChild(cancelBtn);
+
+  overlay.appendChild(btnRow);
+  document.body.appendChild(overlay);
+
+  // Focus task name field after DOM insertion
+  setTimeout(() => nameInput.focus(), 50);
 }
 
 /* ----------------------------------------------------------
@@ -1807,6 +2494,55 @@ Hooks.on('combatStart', () => {
 
 Hooks.on('deleteCombat', () => {
   _removeActionPanel();
+  _removeTaskWidget();
+  _removeAidPanel();
+  _removeTaskBuilderOverlay();
+  _removeRequestTaskOverlay();
+  _removeGMApprovalModal();
+});
+
+/* ----------------------------------------------------------
+   CROSS-CLIENT PIP SYNC — v2.19.1
+
+   When any client writes the pip flag (spendAction, spendReaction,
+   reset, or manual toggle), Foundry propagates an updateCombatant
+   hook to ALL connected clients. This hook re-hydrates the local
+   pipState from the combatant flag and refreshes the pip row,
+   making remote clients display the current spend state without
+   requiring a manual reload.
+
+   updateCombatant is confirmed in:
+     docs/reference/foundry-v13/99_Combined_Foundry_v13_PF1_[KnowledgeFiles.md].md
+     Hooks.on('updateCombatant', (combatant, changes, options, userId) => {});
+
+   getFlag is synchronous (reads from in-memory document data).
+   ---------------------------------------------------------- */
+Hooks.on('updateCombatant', (combatant, changes) => {
+  // Bail fast if this isn't a pip-state flag update.
+  if (!changes?.flags?.['baphomet-utils']?.[PIP_FLAG_KEY]) return;
+
+  const combat = game.combat;
+  if (!combat) return;
+
+  // Confirm this combatant belongs to the currently active combat.
+  if (combatant.parent?.id !== combat.id) return;
+
+  const existing = _getState(combatant.id);
+  if (!existing) return;
+
+  // Read authoritative merged state from the document (not from changes
+  // which may be a partial update in edge cases).
+  const saved = combatant.getFlag('baphomet-utils', PIP_FLAG_KEY);
+  if (!saved) return;
+
+  // Hydrate pip arrays only; conditionLocked is derived from actor, not stored.
+  if (Array.isArray(saved.actions)   && saved.actions.length   === 3) existing.actions   = [...saved.actions];
+  if (Array.isArray(saved.reaction)  && saved.reaction.length  === 1) existing.reaction  = [...saved.reaction];
+  if (Array.isArray(saved.reflexPip))                                  existing.reflexPip = [...saved.reflexPip];
+  if ('resetForRound' in saved) existing._resetForRound = saved.resetForRound;
+
+  // Refresh the pip row in the combat tracker sidebar for this combatant.
+  _refreshPipRow(combatant.id);
 });
 
 // Initial render on world ready — shows the panel if a combat
@@ -1814,6 +2550,597 @@ Hooks.on('deleteCombat', () => {
 Hooks.once('ready', () => {
   _renderActionPanel();
 });
+
+/* ============================================================
+   PLAYER TASK REQUEST SYSTEM — v2.20.0
+
+   Entry point for non-GM players to request multi-round task
+   initiation through the combat HUD. Requests route to the GM
+   via socket for approval, preserving the hidden-data privacy model.
+
+   Key design principles (from GOAL_v2.20.0.md):
+     - Hidden DC and roundsRequired remain on GM user flags only.
+     - Player request contains no DC or duration — GM sets those.
+     - Approval calls the existing initiateTask path (not a parallel one).
+     - Request expires after 60 s if no GM responds.
+
+   Cross-file globals (callable from task-tracker.js):
+     _openGMApprovalModal(payload, validation)
+     _baphHandleRequestResponse(payload)
+     _removeRequestTaskOverlay()
+     _removeGMApprovalModal()
+     _baphSignalNextGMRequest()
+   ============================================================ */
+
+/* --- Multi-round skill registry ---
+   Registry-driven: add entries here to expose new skills in future
+   milestones without modifying the player dialog UI code.
+   v2.20.0: Disable Device ('dev') only. */
+const BAPH_MULTI_ROUND_SKILL_REGISTRY = [
+  { key: 'dev', label: 'Disable Device' },
+];
+
+const BAPH_REQUEST_OVERLAY_ID = 'baph-request-task-overlay';
+const BAPH_GM_APPROVAL_ID     = 'baph-gm-approval-modal';
+
+// Single pending request state (player side only — one request at a time).
+let _baphActiveRequestId    = null;
+let _baphRequestExpireTimer = null;
+
+function _clearPendingRequest() {
+  if (_baphRequestExpireTimer !== null) {
+    clearTimeout(_baphRequestExpireTimer);
+    _baphRequestExpireTimer = null;
+  }
+  _baphActiveRequestId = null;
+}
+
+function _removeRequestTaskOverlay() {
+  document.getElementById(BAPH_REQUEST_OVERLAY_ID)?.remove();
+}
+
+function _removeGMApprovalModal() {
+  document.getElementById(BAPH_GM_APPROVAL_ID)?.remove();
+}
+
+/**
+ * Look up the display label for a skill key in the registry.
+ * Falls back to the raw key if not found.
+ */
+function _getSkillLabel(skillKey) {
+  const entry = BAPH_MULTI_ROUND_SKILL_REGISTRY.find(s => s.key === skillKey);
+  return entry ? entry.label : skillKey;
+}
+
+/**
+ * Render the "Request Skill Task" widget for a non-GM player who
+ * controls the active combatant and has no active task.
+ * Mirrors _renderBeginTaskWidget structurally.
+ */
+function _renderRequestTaskWidget(combatant, position) {
+  const widget = document.createElement('div');
+  widget.id = TASK_WIDGET_ID;
+  widget.classList.add('baph-task-widget', `baph-task-widget-${position}`);
+
+  const header = document.createElement('div');
+  header.classList.add('baph-task-widget-header');
+  header.textContent = 'Task';
+  widget.appendChild(header);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.classList.add('baph-task-widget-request-btn');
+  btn.textContent = 'Request Skill Task';
+  btn.title = 'Send a multi-round skill task request to the GM for approval';
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const active = game.combat?.combatant;
+    if (!active || active.id !== combatant.id) {
+      ui.notifications?.warn?.('You are no longer the active combatant.');
+      _renderActionPanel();
+      return;
+    }
+    _openRequestTaskDialog(combatant);
+  });
+  widget.appendChild(btn);
+
+  document.body.appendChild(widget);
+}
+
+/**
+ * Open the player-side task initiation dialog.
+ * Collects skill (registry-driven) and description, then emits a
+ * socket request to the GM. Switches to a waiting state on submit.
+ */
+function _openRequestTaskDialog(combatant) {
+  _removeRequestTaskOverlay();
+
+  const position = (() => {
+    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
+    catch { return 'bottom-right'; }
+  })();
+
+  const overlay = document.createElement('div');
+  overlay.id = BAPH_REQUEST_OVERLAY_ID;
+  overlay.classList.add('baph-request-overlay', `baph-request-overlay-${position}`);
+  overlay.dataset.combatantId = combatant.id;
+
+  // Header
+  const header = document.createElement('div');
+  header.classList.add('baph-request-overlay-header');
+  header.textContent = 'Request Skill Task';
+  overlay.appendChild(header);
+
+  // Skill selector (single entry = read-only label; multiple = dropdown)
+  const skillLineLabel = document.createElement('label');
+  skillLineLabel.classList.add('baph-task-builder-field-label');
+  skillLineLabel.textContent = 'Skill';
+  overlay.appendChild(skillLineLabel);
+
+  let selectedSkillKey = BAPH_MULTI_ROUND_SKILL_REGISTRY[0].key;
+
+  if (BAPH_MULTI_ROUND_SKILL_REGISTRY.length === 1) {
+    const skillDisplay = document.createElement('div');
+    skillDisplay.classList.add('baph-task-builder-skill-line');
+    skillDisplay.textContent = BAPH_MULTI_ROUND_SKILL_REGISTRY[0].label;
+    overlay.appendChild(skillDisplay);
+  } else {
+    const skillSelect = document.createElement('select');
+    skillSelect.classList.add('baph-task-builder-select');
+    for (const { key, label } of BAPH_MULTI_ROUND_SKILL_REGISTRY) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = label;
+      skillSelect.appendChild(opt);
+    }
+    skillSelect.addEventListener('change', () => { selectedSkillKey = skillSelect.value; });
+    overlay.appendChild(skillSelect);
+  }
+
+  // Description
+  const descLabel = document.createElement('label');
+  descLabel.classList.add('baph-task-builder-field-label');
+  descLabel.textContent = 'What are you attempting?';
+  overlay.appendChild(descLabel);
+
+  const descInput = document.createElement('textarea');
+  descInput.classList.add('baph-task-builder-input', 'baph-request-textarea');
+  descInput.name = 'description';
+  descInput.placeholder = 'e.g. Disabling the poison-dart trap on the floor tile';
+  descInput.rows = 3;
+  overlay.appendChild(descInput);
+
+  // Info text
+  const infoEl = document.createElement('div');
+  infoEl.classList.add('baph-request-overlay-info');
+  infoEl.textContent = 'Your request will be sent to the GM for approval.';
+  overlay.appendChild(infoEl);
+
+  // Button row
+  const btnRow = document.createElement('div');
+  btnRow.classList.add('baph-task-builder-btn-row');
+
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.classList.add('baph-task-builder-btn', 'baph-task-builder-btn-confirm');
+  submitBtn.textContent = 'Submit';
+  submitBtn.disabled = true;
+
+  descInput.addEventListener('input', () => {
+    submitBtn.disabled = descInput.value.trim().length === 0;
+  });
+
+  submitBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const description = descInput.value.trim();
+    if (!description) return;
+
+    // Re-validate active combatant at click time
+    const active = game.combat?.combatant;
+    if (!active || active.id !== combatant.id) {
+      ui.notifications?.warn?.('You are no longer the active combatant.');
+      _removeRequestTaskOverlay();
+      _renderActionPanel();
+      return;
+    }
+    if (!_canUserControlCombatant(active)) {
+      ui.notifications?.warn?.('You do not control this combatant.');
+      _removeRequestTaskOverlay();
+      _renderActionPanel();
+      return;
+    }
+
+    // Unique request ID (stable without requiring crypto.randomUUID)
+    const requestId = `req-${game.user.id}-${Date.now()}`;
+
+    // Switch to waiting state
+    submitBtn.disabled  = true;
+    submitBtn.textContent = 'Waiting…';
+    descInput.disabled  = true;
+    infoEl.textContent  = 'Request sent. Awaiting GM response…';
+
+    // Track pending request and start 60 s expiry timer
+    _clearPendingRequest();
+    _baphActiveRequestId = requestId;
+    _baphRequestExpireTimer = setTimeout(() => {
+      if (_baphActiveRequestId !== requestId) return;
+      _clearPendingRequest();
+      _removeRequestTaskOverlay();
+      _renderActionPanel();
+      ui.notifications?.warn?.(
+        'Task request expired — no GM responded. Try again when the GM is ready.'
+      );
+      _debugLog(`Request ${requestId} expired after 60 s`);
+    }, 60000);
+
+    const payload = {
+      requestId,
+      requestingUserId:      game.user.id,
+      requestingActorId:     combatant.actor?.id ?? null,
+      requestingCombatantId: combatant.id,
+      skillId:               selectedSkillKey,
+      description,
+      timestamp:             Date.now(),
+    };
+
+    game.socket.emit(`module.${AT_MODULE_ID}`, {
+      action:  'baphTaskRequest',
+      payload,
+    });
+
+    _debugLog(`Task request submitted: ${requestId}`, payload);
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.classList.add('baph-task-builder-btn', 'baph-task-builder-btn-cancel');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    _clearPendingRequest();
+    _removeRequestTaskOverlay();
+    _renderActionPanel();
+  });
+
+  btnRow.appendChild(submitBtn);
+  btnRow.appendChild(cancelBtn);
+  overlay.appendChild(btnRow);
+
+  document.body.appendChild(overlay);
+  setTimeout(() => descInput.focus(), 50);
+}
+
+/**
+ * Open the GM approval modal for a player-submitted task request.
+ * Called from task-tracker.js socket handler on GM clients.
+ *
+ * @param {object} payload     - The baphTaskRequest socket payload
+ * @param {object} validation  - { isActiveCombatant, userName, actorName }
+ */
+function _openGMApprovalModal(payload, validation) {
+  _removeGMApprovalModal();
+
+  const position = (() => {
+    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
+    catch { return 'bottom-right'; }
+  })();
+
+  const modal = document.createElement('div');
+  modal.id = BAPH_GM_APPROVAL_ID;
+  modal.classList.add('baph-gm-approval', `baph-gm-approval-${position}`);
+  modal.dataset.requestId = payload.requestId;
+
+  // Header
+  const header = document.createElement('div');
+  header.classList.add('baph-gm-approval-header');
+  header.textContent = 'Player Task Request';
+  modal.appendChild(header);
+
+  // Read-only request details
+  const details = document.createElement('div');
+  details.classList.add('baph-gm-approval-details');
+
+  function addDetailRow(label, value) {
+    const row = document.createElement('div');
+    row.classList.add('baph-gm-approval-detail-row');
+    const lbl = document.createElement('span');
+    lbl.classList.add('baph-gm-approval-detail-label');
+    lbl.textContent = `${label}: `;
+    const val = document.createElement('span');
+    val.classList.add('baph-gm-approval-detail-value');
+    val.textContent = value;
+    row.appendChild(lbl);
+    row.appendChild(val);
+    details.appendChild(row);
+  }
+
+  addDetailRow('Player',    validation.userName  ?? 'Unknown');
+  addDetailRow('Character', validation.actorName ?? 'Unknown');
+  addDetailRow('Skill',     _getSkillLabel(payload.skillId));
+  addDetailRow(
+    'Active turn',
+    validation.isActiveCombatant ? 'Yes — active turn' : 'No — turn has changed'
+  );
+
+  const descLabel = document.createElement('div');
+  descLabel.classList.add('baph-task-builder-field-label');
+  descLabel.textContent = 'Description:';
+  details.appendChild(descLabel);
+
+  const descText = document.createElement('div');
+  descText.classList.add('baph-gm-approval-description');
+  descText.textContent = payload.description ?? '(none)';
+  details.appendChild(descText);
+
+  modal.appendChild(details);
+
+  // GM-only section divider
+  const divider = document.createElement('div');
+  divider.classList.add('baph-gm-approval-divider');
+  divider.textContent = '─── GM Settings (hidden from player) ───';
+  modal.appendChild(divider);
+
+  // Difficulty preset
+  const diffLabel = document.createElement('label');
+  diffLabel.classList.add('baph-task-builder-field-label');
+  diffLabel.textContent = 'Difficulty Preset';
+  modal.appendChild(diffLabel);
+
+  const diffSelect = document.createElement('select');
+  diffSelect.classList.add('baph-task-builder-select');
+  [
+    { value: 'simple',    label: 'Simple trap — 1d4 rounds' },
+    { value: 'difficult', label: 'Difficult trap — 2d4 rounds' },
+    { value: 'custom',    label: 'Custom / Manual' },
+  ].forEach(({ value, label }) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    diffSelect.appendChild(opt);
+  });
+  modal.appendChild(diffSelect);
+
+  // Rounds Required row (input + roll button)
+  const roundsLabel = document.createElement('label');
+  roundsLabel.classList.add('baph-task-builder-field-label');
+  roundsLabel.textContent = 'Rounds Required';
+  modal.appendChild(roundsLabel);
+
+  const roundsRow = document.createElement('div');
+  roundsRow.classList.add('baph-gm-approval-inline-row');
+
+  const roundsInput = document.createElement('input');
+  roundsInput.type = 'number';
+  roundsInput.classList.add('baph-task-builder-input', 'baph-task-builder-input-num');
+  roundsInput.name = 'roundsRequired';
+  roundsInput.min  = '1';
+  roundsInput.step = '1';
+  roundsInput.value = '2';
+  roundsRow.appendChild(roundsInput);
+
+  const rollBtn = document.createElement('button');
+  rollBtn.type = 'button';
+  rollBtn.classList.add('baph-gm-approval-roll-btn');
+  rollBtn.textContent = '🎲 Roll';
+  rollBtn.title = 'Roll the selected difficulty preset';
+  rollBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const mode = diffSelect.value;
+    if (mode === 'simple') {
+      roundsInput.value = Math.floor(Math.random() * 4) + 1;
+    } else if (mode === 'difficult') {
+      roundsInput.value = (Math.floor(Math.random() * 4) + 1)
+                        + (Math.floor(Math.random() * 4) + 1);
+    } else {
+      roundsInput.value = parseInt(roundsInput.value, 10) || 2;
+    }
+  });
+  roundsRow.appendChild(rollBtn);
+  modal.appendChild(roundsRow);
+
+  // Auto-roll when a preset is selected (except custom)
+  diffSelect.addEventListener('change', () => {
+    const mode = diffSelect.value;
+    if (mode === 'simple') {
+      roundsInput.value = Math.floor(Math.random() * 4) + 1;
+    } else if (mode === 'difficult') {
+      roundsInput.value = (Math.floor(Math.random() * 4) + 1)
+                        + (Math.floor(Math.random() * 4) + 1);
+    }
+  });
+
+  // Resolution DC
+  const dcLabel = document.createElement('label');
+  dcLabel.classList.add('baph-task-builder-field-label');
+  dcLabel.textContent = 'Resolution DC';
+  modal.appendChild(dcLabel);
+
+  const dcInput = document.createElement('input');
+  dcInput.type  = 'number';
+  dcInput.classList.add('baph-task-builder-input', 'baph-task-builder-input-num');
+  dcInput.name  = 'dc';
+  dcInput.min   = '1';
+  dcInput.step  = '1';
+  dcInput.value = '20';
+  modal.appendChild(dcInput);
+
+  // Button row
+  const btnRow = document.createElement('div');
+  btnRow.classList.add('baph-task-builder-btn-row');
+
+  const approveBtn = document.createElement('button');
+  approveBtn.type = 'button';
+  approveBtn.classList.add('baph-task-builder-btn', 'baph-task-builder-btn-confirm');
+  approveBtn.textContent = 'Approve';
+  if (!validation.isActiveCombatant) {
+    approveBtn.disabled = true;
+    approveBtn.title = 'Cannot approve: this combatant is no longer the active turn.';
+  }
+
+  approveBtn.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Re-validate at click time
+    const combatant = game.combat?.combatants.get(payload.requestingCombatantId);
+    if (!combatant) {
+      ui.notifications?.warn?.('Combatant no longer exists — cannot approve.');
+      _removeGMApprovalModal();
+      _baphSignalNextGMRequest();
+      return;
+    }
+    if (combatant.id !== game.combat?.combatant?.id) {
+      ui.notifications?.warn?.('Combatant is no longer the active turn — cannot approve.');
+      approveBtn.disabled = true;
+      approveBtn.title = 'Cannot approve: turn has advanced.';
+      return;
+    }
+
+    const roundsRaw = parseInt(roundsInput.value, 10);
+    const dcRaw     = parseInt(dcInput.value, 10);
+    if (!Number.isFinite(roundsRaw) || roundsRaw < 1) {
+      ui.notifications?.warn?.('Rounds Required must be a positive integer.');
+      roundsInput.focus();
+      return;
+    }
+    if (!Number.isFinite(dcRaw) || dcRaw < 1) {
+      ui.notifications?.warn?.('Resolution DC must be a positive integer.');
+      dcInput.focus();
+      return;
+    }
+
+    _removeGMApprovalModal();
+
+    if (!game.baphometTasks) {
+      ui.notifications?.warn?.('Task system not ready.');
+      _baphSignalNextGMRequest();
+      return;
+    }
+
+    // Use the player's description as the task name; initiateTask handles action spend,
+    // flag writes, and chat message exactly as the GM task builder does.
+    const taskId = await game.baphometTasks.initiateTask(combatant, {
+      taskName:       payload.description ?? 'Skill Task',
+      taskAction:     'disable',
+      roundsRequired: roundsRaw,
+      dc:             dcRaw,
+    });
+
+    game.socket.emit(`module.${AT_MODULE_ID}`, {
+      action:  'baphTaskRequestResponse',
+      payload: {
+        requestId:    payload.requestId,
+        approved:     taskId !== false,
+        reason:       taskId !== false ? null : 'Task initiation failed.',
+        taskId:       taskId !== false ? taskId : null,
+        targetUserId: payload.requestingUserId,
+      },
+    });
+
+    _debugLog(
+      `GM approved task request ${payload.requestId}: ` +
+      `taskId=${taskId}, combatant=${combatant.name}`
+    );
+
+    _baphSignalNextGMRequest();
+    _renderActionPanel();
+  });
+
+  const rejectBtn = document.createElement('button');
+  rejectBtn.type = 'button';
+  rejectBtn.classList.add('baph-task-builder-btn', 'baph-task-builder-btn-cancel');
+  rejectBtn.textContent = 'Reject';
+
+  rejectBtn.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    _removeGMApprovalModal();
+
+    // Whisper rejection notice to the requesting player
+    const requestingUser = game.users.get(payload.requestingUserId);
+    const skillLabel = _getSkillLabel(payload.skillId);
+    await ChatMessage.create({
+      content:
+        `<p><strong>Task Request Declined.</strong></p>` +
+        `<p>Your <em>${skillLabel}</em> task request was declined by the GM. ` +
+        `Try a different approach or wait for a better moment.</p>`,
+      speaker: { alias: 'Baphomet Tasks' },
+      whisper: requestingUser ? [requestingUser.id] : [],
+    });
+
+    game.socket.emit(`module.${AT_MODULE_ID}`, {
+      action:  'baphTaskRequestResponse',
+      payload: {
+        requestId:    payload.requestId,
+        approved:     false,
+        reason:       'GM declined',
+        taskId:       null,
+        targetUserId: payload.requestingUserId,
+      },
+    });
+
+    _debugLog(`GM rejected task request ${payload.requestId}`);
+    _baphSignalNextGMRequest();
+  });
+
+  btnRow.appendChild(approveBtn);
+  btnRow.appendChild(rejectBtn);
+  modal.appendChild(btnRow);
+
+  document.body.appendChild(modal);
+}
+
+/**
+ * Handle a baphTaskRequestResponse on the requesting player's client.
+ * Clears the pending timer, closes the overlay, and notifies the player.
+ * Called from the task-tracker.js socket handler.
+ */
+function _baphHandleRequestResponse(payload) {
+  const { requestId, approved, reason, targetUserId } = payload;
+
+  // Only the targeted user processes this response
+  if (targetUserId && targetUserId !== game.user.id) return;
+
+  // Ensure this matches the currently pending request
+  if (requestId !== _baphActiveRequestId) {
+    _debugLog(`baphTaskRequestResponse: requestId mismatch — ignoring (got ${requestId})`);
+    return;
+  }
+
+  _clearPendingRequest();
+  _removeRequestTaskOverlay();
+
+  if (approved) {
+    ui.notifications?.info?.(
+      'GM approved — your task has begun. Check the task widget for progress.'
+    );
+    _debugLog(`Task request ${requestId} approved`);
+  } else {
+    ui.notifications?.warn?.(
+      `GM declined: ${reason ?? 'no reason given'}.`
+    );
+    _debugLog(`Task request ${requestId} rejected: ${reason}`);
+  }
+
+  _renderActionPanel();
+}
+
+/**
+ * Signal that the GM approval modal was closed (approve or reject).
+ * Calls _baphProcessNextGMRequest in task-tracker.js if available.
+ * Guard: noop if called before task-tracker.js has loaded.
+ */
+function _baphSignalNextGMRequest() {
+  if (typeof _baphProcessNextGMRequest === 'function') {
+    _baphProcessNextGMRequest();
+  }
+}
 
 /* ============================================================
    PF1.5 STRIKE GUARD DIAGNOSTICS — v1.17

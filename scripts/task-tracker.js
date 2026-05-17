@@ -7,6 +7,7 @@
    Uses globals from action-tracker.js:
      _spendActionForCombatant(combatantId, count, reason) → boolean
      _debugLog(msg, ...args) — gated on debugLogging setting
+     _renderActionPanel() — re-renders action panel + task widget (v2.17.1)
 
    Storage model:
      Public task state  → combatant.actor flags       (player-visible)
@@ -63,6 +64,31 @@
 const BAPH_TASK_MODULE_ID    = 'baphomet-utils';
 const BAPH_TASK_FLAG_PUBLIC  = 'tasks';          // actor flag key
 const BAPH_TASK_FLAG_HIDDEN  = 'hiddenTaskData'; // GM user flag key
+
+/* ----------------------------------------------------------
+   _baphResolveTaskRollActive
+   Cross-script flag: true while resolveTask() is executing its
+   actor.rollSkill() call. action-tracker.js reads this at runtime
+   (both scripts loaded) to suppress the 'dev' no-auto-spend
+   warning when the roll is an intentional task-resolution roll.
+   var is required: top-level var creates a window property that
+   is accessible from other classic-script files at runtime.
+   ---------------------------------------------------------- */
+// eslint-disable-next-line no-var
+var _baphResolveTaskRollActive = false;
+
+/* ----------------------------------------------------------
+   _baphAidTaskRollActive
+   Cross-script flag: true while aidTask() is executing its
+   actor.rollSkill() call for the Aid Another check. action-tracker.js
+   reads this to suppress the 'dev' warning and skill auto-spend
+   during what is an intentional aid-check roll, not a standalone
+   skill use.
+   var is required: top-level var creates a window property that
+   is accessible from other classic-script files at runtime.
+   ---------------------------------------------------------- */
+// eslint-disable-next-line no-var
+var _baphAidTaskRollActive = false;
 
 /* ----------------------------------------------------------
    IN-MEMORY CACHE
@@ -180,19 +206,22 @@ async function _baphTaskWriteHiddenAll(data) {
 
 function _baphTaskSanitize(task) {
   return {
-    taskId:               task.taskId,
-    skillKey:             task.skillKey,
-    taskType:             task.taskType,
-    taskName:             task.taskName,
-    roundsCommitted:      task.roundsCommitted,
-    startedRound:         task.startedRound,
-    lastCommittedRound:   task.lastCommittedRound,
-    status:               task.status,
-    pausedReason:         task.pausedReason,
-    readyToResolve:       task.readyToResolve,
-    createdByUserId:      task.createdByUserId,
-    hiddenDataOwnerUserId: task.hiddenDataOwnerUserId,
-    metadataPublic:       task.metadataPublic,
+    taskId:                   task.taskId,
+    skillKey:                 task.skillKey,
+    taskType:                 task.taskType,
+    taskName:                 task.taskName,
+    roundsCommitted:          task.roundsCommitted,
+    startedRound:             task.startedRound,
+    lastCommittedRound:       task.lastCommittedRound,
+    lastResolvedAttemptRound: task.lastResolvedAttemptRound ?? null,
+    status:                      task.status,
+    pausedReason:                task.pausedReason,
+    readyToResolve:              task.readyToResolve,
+    createdByUserId:             task.createdByUserId,
+    hiddenDataOwnerUserId:       task.hiddenDataOwnerUserId,
+    metadataPublic:              task.metadataPublic,
+    pendingResolutionBonuses:    task.pendingResolutionBonuses ?? [],
+    successfulAidContributors:    task.successfulAidContributors ?? [],
   };
 }
 
@@ -317,15 +346,18 @@ async function _baphTaskCreate(combatantOrId, options = {}) {
     skillKey,
     taskType,
     taskName,
-    roundsCommitted:       0,
-    startedRound:          startRound,
-    lastCommittedRound:    null,
-    status:                'active',
-    pausedReason:          null,
-    readyToResolve:        false,
-    createdByUserId:       game.user.id,
-    hiddenDataOwnerUserId: game.user.id,
+    roundsCommitted:          0,
+    startedRound:             startRound,
+    lastCommittedRound:       null,
+    lastResolvedAttemptRound: null,
+    status:                   'active',
+    pausedReason:             null,
+    readyToResolve:              false,
+    createdByUserId:             game.user.id,
+    hiddenDataOwnerUserId:       game.user.id,
     metadataPublic,
+    pendingResolutionBonuses:    [],
+    successfulAidContributors:    [],  // cleared on each Resolve attempt
   };
 
   const actorTasks = _baphTaskReadActorTasks(combatant.actor);
@@ -605,6 +637,26 @@ async function _baphTaskCommit(combatantOrId, taskId) {
   await _baphTaskWriteActorTasks(combatant.actor, tasks);
   _baphTaskUpdateCache(combatant.id, tasks);
 
+  // Non-GM: public progress is now written; request GM-side readiness evaluation.
+  // The GM client reads hidden roundsRequired and flips readyToResolve when the
+  // public committed progress meets the threshold.
+  // GM clients skip this — they already evaluated readiness synchronously above.
+  if (!game.user.isGM) {
+    _baphTaskDebugLog(
+      `commitAction: emitting readiness-check request — ` +
+      `task "${task.taskName}", roundsCommitted=${task.roundsCommitted}`
+    );
+    game.socket.emit(`module.${BAPH_TASK_MODULE_ID}`, {
+      action:  'baphTaskReadinessCheck',
+      payload: {
+        combatantId:        combatant.id,
+        taskId,
+        roundsCommitted:    task.roundsCommitted,
+        requestingUserId:   game.user.id,
+      },
+    });
+  }
+
   _baphTaskDebugLog(
     `commitAction: "${task.taskName}" advanced — ` +
     `roundsCommitted=${task.roundsCommitted}, ` +
@@ -739,46 +791,834 @@ async function _baphTaskAbandon(combatantOrId, taskId) {
     return false;
   }
 
-  task.status   = 'abandoned';
-  tasks[taskId] = task;
+  if (task.status === 'resolved' || task.status === 'abandoned') {
+    _baphTaskDebugLog(
+      `abandonTask rejected: task "${task.taskName}" is already ${task.status}`
+    );
+    return false;
+  }
+
+  const taskName  = task.taskName;
+  const actorName = combatant.actor.name;
+
+  task.status                   = 'abandoned';
+  task.pendingResolutionBonuses = [];
+  tasks[taskId]                 = task;
   await _baphTaskWriteActorTasks(combatant.actor, tasks);
   _baphTaskUpdateCache(combatant.id, tasks);
 
+  await ChatMessage.create({
+    content:
+      `<p><strong>${actorName}</strong> abandons <em>${taskName}</em>.</p>` +
+      `<p>Task abandoned — no further progress possible.</p>`,
+    speaker: { alias: 'Baphomet Tasks' },
+    whisper: [],
+  });
+
   _baphTaskDebugLog(
-    `abandonTask: "${task.taskName}" abandoned (actor flag data preserved for audit)`
+    `abandonTask: "${taskName}" abandoned — actor flag data preserved for audit, ` +
+    `hidden data preserved, pending bonuses cleared`
   );
   return true;
 }
 
 /* ----------------------------------------------------------
+   _baphTaskAdjudicate(combatant, taskId, task, rollTotal)
+
+   GM-only. Reads the hidden DC for the task, classifies the
+   roll result, posts a chat message, and writes updated task
+   state to actor flags in one pass.
+
+   Called by:
+     - _baphTaskResolve (GM-direct path, task in memory)
+     - The socket listener (player-triggered path, task read
+       from live actor flags by the socket handler)
+
+   In both cases the task object carries lastResolvedAttemptRound
+   already set. This function merges it back into a fresh read
+   of the full tasks object before writing, ensuring no other
+   concurrent task changes are discarded.
+
+   @param {Combatant} combatant    Resolved Combatant object
+   @param {string}    taskId       Task identifier string
+   @param {object}    task         Task object (in-memory, pre-modified)
+   @param {number}    rollTotal    Captured roll total from pf1ActorRollSkill
+   @returns {Promise<void>}
+   ---------------------------------------------------------- */
+
+async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
+  if (!game.user.isGM) return;
+
+  const hiddenAll = _baphTaskReadHiddenAll();
+  const hidden    = hiddenAll[taskId];
+  const dc        = hidden?.metadataHidden?.dc ?? null;
+  const actorName = combatant.actor.name;
+  const taskName  = task.taskName;
+
+  if (dc !== null && Number.isFinite(rollTotal)) {
+    const diff = rollTotal - dc;
+    let chatContent;
+
+    if (diff >= 0) {
+      task.status        = 'resolved';
+      task.readyToResolve = false;
+      chatContent =
+        `<p><strong>${actorName}</strong> successfully resolves ` +
+        `<em>${taskName}</em>.</p>` +
+        `<p>Result: <strong>Success.</strong></p>`;
+      _baphTaskDebugLog(
+        `adjudicate SUCCESS — "${taskName}" / ${actorName} / ` +
+        `roll ${rollTotal} vs DC ${dc} (margin: +${diff})`
+      );
+      console.log(
+        `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate SUCCESS — ` +
+        `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
+      );
+    } else if (diff >= -4) {
+      // task.status and task.readyToResolve unchanged — stays ready to retry.
+      chatContent =
+        `<p><strong>${actorName}</strong> fails to resolve ` +
+        `<em>${taskName}</em>.</p>` +
+        `<p>Result: <strong>Failure</strong> — task remains ready to resolve. ` +
+        `May retry next round.</p>`;
+      _baphTaskDebugLog(
+        `adjudicate MINOR FAILURE — "${taskName}" / ${actorName} / ` +
+        `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
+      );
+      console.log(
+        `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate MINOR FAILURE — ` +
+        `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
+      );
+    } else {
+      task.status        = 'resolved';
+      task.readyToResolve = false;
+      chatContent =
+        `<p><strong>${actorName}</strong> catastrophically fails ` +
+        `<em>${taskName}</em>.</p>` +
+        `<p>Result: <strong>Catastrophic Failure</strong> — GM: apply trap ` +
+        `consequence manually where appropriate.</p>`;
+      _baphTaskDebugLog(
+        `adjudicate CATASTROPHIC FAILURE — "${taskName}" / ${actorName} / ` +
+        `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
+      );
+      console.log(
+        `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate CATASTROPHIC FAILURE — ` +
+        `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
+      );
+    }
+
+    await ChatMessage.create({
+      content: chatContent,
+      speaker: { alias: 'Baphomet Tasks' },
+      whisper: [],
+    });
+
+  } else {
+    // DC absent or roll total not finite — classification not possible.
+    _baphTaskDebugLog(
+      `adjudicate WARNING: classification skipped — ` +
+      `dc=${dc}, rollTotal=${rollTotal}. ` +
+      `Hidden data may be absent. GM should adjudicate manually.`
+    );
+    console.warn(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate — ` +
+      `classification skipped (dc=${dc}, rollTotal=${rollTotal}). ` +
+      `Was this task created on a different GM client?`
+    );
+  }
+
+  // Consume pending aid bonuses and successful contributor records after every Resolve attempt.
+  // Both clear regardless of outcome (success, minor failure, catastrophic failure).
+  // After minor failure the task stays ready; to help again the aider must Aid again.
+  task.pendingResolutionBonuses = [];
+  task.successfulAidContributors = [];
+
+  // Always write the task state (includes lastResolvedAttemptRound + any status change).
+  // Read fresh tasks object so no concurrent sibling-task changes are discarded.
+  const tasks = _baphTaskReadActorTasks(combatant.actor);
+  tasks[taskId] = task;
+  await _baphTaskWriteActorTasks(combatant.actor, tasks);
+  _baphTaskUpdateCache(combatant.id, tasks);
+
+  _baphTaskDebugLog(
+    `adjudicate: wrote task state for "${taskName}" — ` +
+    `status=${task.status}, readyToResolve=${task.readyToResolve}`
+  );
+}
+
+/* ----------------------------------------------------------
    resolveTask(combatant, taskId)
 
-   STUBBED in v2.16.0. GM only.
-   Actual resolution logic (skill roll, trap trigger, etc.)
-   is deferred to v2.19.0 — Task Resolution Polish.
-   Hidden data is never read or revealed by this stub.
+   Spend 1 PF1.5 action and execute the skill check resolution
+   for a task that is in readyToResolve state. Implements the
+   Disable Device resolution path (v2.17.2).
+
+   Gate order:
+     1.  Active combat exists
+     2.  Combatant resolves and is valid with an actor
+     3.  Combatant is the currently active combatant
+     4.  Current user can control the combatant
+     5.  Task exists on the actor
+     6.  Task readyToResolve is true
+     7.  Task status is not already 'resolved' or 'abandoned'
+     8.  Same-round guard (lastResolvedAttemptRound !== currentRound)
+     9.  Spend 1 action via _spendActionForCombatant
+
+   On spend success:
+     - Registers a one-time pf1ActorRollSkill hook to capture total.
+     - Sets _baphResolveTaskRollActive=true so action-tracker.js
+       suppresses the 'dev' no-auto-spend warning during this roll.
+     - Calls actor.rollSkill(skillKey, {skipDialog:true}).
+     - Cleans up the flag and hook after the roll completes.
+
+   GM clients:
+     - Calls _baphTaskAdjudicate() directly with the captured total.
+     - Adjudicate reads DC from metadataHidden.dc, classifies, posts
+       chat, and writes all task state changes in one setFlag call.
+
+   Non-GM clients:
+     - Writes lastResolvedAttemptRound to actor flags immediately.
+     - Emits a socket message (module.baphomet-utils) with the roll
+       total and identifying context.
+     - The socket listener on the GM client picks this up and calls
+       _baphTaskAdjudicate() server-side to classify without leaking
+       the hidden DC to the player.
 
    @param {Combatant|string} combatant
    @param {string}           taskId
-   @returns {false}          Always false in this version.
+   @returns {Promise<boolean>}  true if action spent and roll fired
    ---------------------------------------------------------- */
 
-function _baphTaskResolve(combatantOrId, taskId) {
-  if (!game.user.isGM) {
-    _baphTaskDebugLog('resolveTask rejected: GM only');
+async function _baphTaskResolve(combatantOrId, taskId) {
+
+  // Gate 1: active combat
+  if (!game.combat) {
+    _baphTaskDebugLog('resolveTask rejected: no active combat');
     return false;
   }
+
+  // Gate 2: valid combatant with actor
   const combatant = _baphTaskResolveCombatant(combatantOrId);
-  const actorName = combatant?.actor?.name ?? String(combatantOrId);
+  if (!combatant) {
+    _baphTaskDebugLog('resolveTask rejected: could not resolve combatant');
+    return false;
+  }
+  if (!combatant.actor) {
+    _baphTaskDebugLog(`resolveTask rejected: combatant "${combatant.name}" has no actor`);
+    return false;
+  }
+
+  // Gate 3: must be the active combatant
+  if (combatant.id !== game.combat.combatant?.id) {
+    _baphTaskDebugLog(
+      `resolveTask rejected: "${combatant.name}" is not the active combatant ` +
+      `(active: "${game.combat.combatant?.name ?? 'none'}")`
+    );
+    return false;
+  }
+
+  // Gate 4: user can control this combatant
+  if (!_baphTaskCanControl(combatant)) {
+    _baphTaskDebugLog(
+      `resolveTask rejected: current user cannot control "${combatant.name}"`
+    );
+    return false;
+  }
+
+  // Gate 5: task exists (read live for current status)
+  const tasks = _baphTaskReadActorTasks(combatant.actor);
+  const task  = tasks[taskId];
+  if (!task) {
+    _baphTaskDebugLog(
+      `resolveTask rejected: task "${taskId}" not found on ${combatant.actor.name}`
+    );
+    return false;
+  }
+
+  // Gate 6: task must be ready to resolve
+  if (!task.readyToResolve) {
+    _baphTaskDebugLog(
+      `resolveTask rejected: task "${task.taskName}" is not ready to resolve`
+    );
+    return false;
+  }
+
+  // Gate 7: not already terminal
+  if (task.status === 'resolved' || task.status === 'abandoned') {
+    _baphTaskDebugLog(
+      `resolveTask rejected: task "${task.taskName}" is already ${task.status}`
+    );
+    return false;
+  }
+
+  // Gate 8: same-round guard
+  const currentRound = game.combat.round;
+  if ((task.lastResolvedAttemptRound ?? null) === currentRound) {
+    _baphTaskDebugLog(
+      `resolveTask rejected: already attempted resolution for "${task.taskName}" ` +
+      `this round (round ${currentRound}) — wait for the next round`
+    );
+    return false;
+  }
+
+  // Gate 9: spend 1 action
+  const spent = _spendActionForCombatant(combatant.id, 1, `resolve-${task.skillKey}`);
+  if (!spent) {
+    _baphTaskDebugLog(
+      `resolveTask rejected: action spend failed for "${task.taskName}" ` +
+      `— not enough actions remaining`
+    );
+    return false;
+  }
+
+  // ── All gates passed. Roll the resolution skill check. ────────────
+
+  // Record this attempt so same-round double-clicks are blocked.
+  task.lastResolvedAttemptRound = currentRound;
+
+  // Capture the roll total via pf1ActorRollSkill.
+  // The hook fires synchronously inside actor.rollSkill() before its
+  // Promise resolves, so capturedTotal is populated by the time the
+  // await below returns.
+  let capturedTotal = null;
+  const captureHook = (rolledActor, chatMessage, rolledSkillKey) => {
+    if (rolledActor?.id === combatant.actor.id && rolledSkillKey === task.skillKey) {
+      capturedTotal = chatMessage?.rolls?.[0]?.total ?? null;
+    }
+  };
+  Hooks.on('pf1ActorRollSkill', captureHook);
+
+  // Sum queued aid bonuses and apply to the resolution roll.
+  // bonus option confirmed in PF1 docs (actor.rollSkill options: skipDialog, bonus, dice).
+  const pendingBonus = (task.pendingResolutionBonuses ?? [])
+    .reduce((sum, b) => sum + (b.amount ?? 0), 0);
+  const rollOptions = { skipDialog: true };
+  if (pendingBonus !== 0) rollOptions.bonus = pendingBonus;
+
+  // Suppress the action-tracker.js 'dev' no-auto-spend notification
+  // for this intentional task-resolution roll.
+  _baphResolveTaskRollActive = true;
+  try {
+    await combatant.actor.rollSkill(task.skillKey, rollOptions);
+  } finally {
+    _baphResolveTaskRollActive = false;
+    Hooks.off('pf1ActorRollSkill', captureHook);
+  }
+
   _baphTaskDebugLog(
-    `resolveTask: STUB — resolution not implemented in v2.16.0 ` +
-    `(task: ${taskId}, actor: ${actorName}). Implement in v2.19.0.`
+    `resolveTask: rolled ${task.skillKey} for "${task.taskName}" on ${combatant.actor.name} ` +
+    `— captured total: ${capturedTotal}`
+  );
+
+  // ── Classify and write outcome ────────────────────────────────────
+  if (game.user.isGM) {
+    // GM-direct path: classify locally using hidden DC, write all changes
+    // in a single setFlag call via _baphTaskAdjudicate.
+    await _baphTaskAdjudicate(combatant, taskId, task, capturedTotal);
+  } else {
+    // Non-GM path: write the player's lastResolvedAttemptRound change first
+    // to block same-round retry, then request GM-side adjudication via socket.
+    tasks[taskId] = task;
+    await _baphTaskWriteActorTasks(combatant.actor, tasks);
+    _baphTaskUpdateCache(combatant.id, tasks);
+
+    if (capturedTotal !== null && Number.isFinite(capturedTotal)) {
+      _baphTaskDebugLog(
+        `resolveTask: emitting GM adjudication request — ` +
+        `task "${task.taskName}", rollTotal=${capturedTotal}`
+      );
+      game.socket.emit(`module.${BAPH_TASK_MODULE_ID}`, {
+        action:  'baphTaskResolveAdjudicate',
+        payload: {
+          combatantId:        combatant.id,
+          taskId,
+          rollTotal:          capturedTotal,
+          requestingUserId:   game.user.id,
+        },
+      });
+    } else {
+      // Roll total not captured — socket not emitted; GM must adjudicate manually.
+      _baphTaskDebugLog(
+        `resolveTask: roll total not captured — socket adjudication skipped. ` +
+        `GM must adjudicate manually.`
+      );
+      console.warn(
+        `${BAPH_TASK_MODULE_ID} | task-tracker: resolveTask — ` +
+        `roll total not captured for non-GM path. Manual GM adjudication required.`
+      );
+    }
+  }
+
+  _baphTaskDebugLog(
+    `resolveTask: completed — ` +
+    `status=${task.status}, readyToResolve=${task.readyToResolve}, ` +
+    `lastResolvedAttemptRound=${task.lastResolvedAttemptRound}`
+  );
+  return true;
+}
+
+/* ----------------------------------------------------------
+   aidTask(aiderCombatant, targetCombatantOrId, targetTaskId)
+
+   Spend 1 PF1.5 action from the aider and queue a +2 pending
+   resolution bonus on an allied ready-to-resolve task (v2.18.0).
+
+   Gate order:
+     1.  Active combat exists
+     2.  Aider combatant resolves and has an actor
+     3.  Aider is the currently active combatant
+     4.  Current user can control the aider
+     5.  Target combatant resolves, has an actor, and differs from aider
+     6.  Target task exists, status is 'active', readyToResolve is true,
+         not already terminal
+     7.  Aider has not already contributed aid to this task this round
+     8.  Spend 1 action from aider via _spendActionForCombatant
+
+   GM clients:
+     - Write the +2 bonus directly to the target actor's task flags.
+     - Post a chat message confirming aid.
+
+   Non-GM clients:
+     - Action is already spent; emit a socket message (module.baphomet-utils)
+       with action 'baphTaskAidAdjudicate'.
+     - GM socket listener validates and writes the bonus.
+     - Hidden DC and hidden task metadata are never transmitted.
+
+   @param {Combatant|string} aiderCombatantOrId
+   @param {Combatant|string} targetCombatantOrId
+   @param {string}           targetTaskId
+   @returns {Promise<boolean>}  true if action spent and aid queued
+   ---------------------------------------------------------- */
+
+async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskId) {
+
+  // Gate 1: active combat
+  if (!game.combat) {
+    _baphTaskDebugLog('aidTask rejected: no active combat');
+    return false;
+  }
+
+  // Gate 2: valid aider combatant with actor
+  const aider = _baphTaskResolveCombatant(aiderCombatantOrId);
+  if (!aider) {
+    _baphTaskDebugLog('aidTask rejected: could not resolve aider combatant');
+    return false;
+  }
+  if (!aider.actor) {
+    _baphTaskDebugLog(`aidTask rejected: aider "${aider.name}" has no actor`);
+    return false;
+  }
+
+  // Gate 3: aider must be the active combatant
+  if (aider.id !== game.combat.combatant?.id) {
+    _baphTaskDebugLog(
+      `aidTask rejected: "${aider.name}" is not the active combatant ` +
+      `(active: "${game.combat.combatant?.name ?? 'none'}")` 
+    );
+    return false;
+  }
+
+  // Gate 4: user can control the aider
+  if (!_baphTaskCanControl(aider)) {
+    _baphTaskDebugLog(`aidTask rejected: current user cannot control "${aider.name}"`);
+    return false;
+  }
+
+  // Gate 5: valid target combatant — different from aider, has actor
+  const targetCombatant = _baphTaskResolveCombatant(targetCombatantOrId);
+  if (!targetCombatant?.actor) {
+    _baphTaskDebugLog('aidTask rejected: could not resolve target combatant');
+    return false;
+  }
+  if (targetCombatant.id === aider.id) {
+    _baphTaskDebugLog('aidTask rejected: aider and target are the same combatant');
+    return false;
+  }
+
+  // Gate 6: target task exists and is an eligible active task.
+  // Aid Another is available during BOTH:
+  //   - in-progress tasks (status === 'active', readyToResolve === false)
+  //   - ready-to-resolve tasks (status === 'active', readyToResolve === true)
+  // Aid is NOT available for: paused, resolved, or abandoned tasks.
+  const targetTasks = _baphTaskReadActorTasks(targetCombatant.actor);
+  const targetTask  = targetTasks[targetTaskId];
+  if (!targetTask) {
+    _baphTaskDebugLog(
+      `aidTask rejected: task "${targetTaskId}" not found on ${targetCombatant.actor.name}`
+    );
+    return false;
+  }
+  if (targetTask.status !== 'active') {
+    _baphTaskDebugLog(
+      `aidTask rejected: target task "${targetTask.taskName}" is not active ` +
+      `(status: ${targetTask.status})`
+    );
+    return false;
+  }
+
+  // Gate 7: duplicate contributor guard.
+  // successfulAidContributors tracks combatant IDs who have already banked a +2
+  // for this pending Resolve attempt. Cleared when Resolve fires (success or failure).
+  // Failed aid attempts do NOT add to successfulAidContributors; a helper may retry
+  // after a failure (natural 3-action economy is the deterrent).
+  const existingContributors = targetTask.successfulAidContributors ?? [];
+  if (existingContributors.includes(aider.id)) {
+    _baphTaskDebugLog(
+      `aidTask rejected: "${aider.name}" already successfully aided "${targetTask.taskName}" ` +
+      `for this pending Resolve attempt`
+    );
+    return false;
+  }
+
+  // Gate 8: spend 1 action from aider
+  const spent = _spendActionForCombatant(aider.id, 1, `aid-${targetTask.skillKey}`);
+  if (!spent) {
+    _baphTaskDebugLog(
+      `aidTask rejected: action spend failed for aider "${aider.name}" — not enough actions remaining`
+    );
+    return false;
+  }
+
+  // ── All gates passed. Roll the Aid Another skill check (DC 10). ─────────────
+  // The aider rolls the task's relevant skill. A result of 10+ banks +2 on the
+  // target task. Failure banks no bonus. Action is spent on both outcomes.
+  //
+  // Roll pattern mirrors resolveTask: pf1ActorRollSkill hook fires synchronously
+  // inside actor.rollSkill(), so capturedAidTotal is populated before await returns.
+  // Confirmed API: actor.rollSkill(skillKey, {skipDialog:true})
+  //   (docs/reference/foundry-v13/99_Combined_Foundry_v13_PF1_[KnowledgeFiles.md].md)
+
+  let capturedAidTotal = null;
+  const captureHook = (rolledActor, chatMessage, rolledSkillKey) => {
+    if (rolledActor?.id === aider.actor.id && rolledSkillKey === targetTask.skillKey) {
+      capturedAidTotal = chatMessage?.rolls?.[0]?.total ?? null;
+    }
+  };
+  Hooks.on('pf1ActorRollSkill', captureHook);
+
+  // _baphAidTaskRollActive suppresses: dev warning in action-tracker.js AND
+  // skill auto-spend handler (to prevent double-action-spend during this roll).
+  _baphAidTaskRollActive = true;
+  try {
+    await aider.actor.rollSkill(targetTask.skillKey, { skipDialog: true });
+  } finally {
+    _baphAidTaskRollActive = false;
+    Hooks.off('pf1ActorRollSkill', captureHook);
+  }
+
+  _baphTaskDebugLog(
+    `aidTask: rolled ${targetTask.skillKey} for "${aider.actor.name}" (Aid check) ` +
+    `— captured total: ${capturedAidTotal}`
+  );
+
+  // ── DC 10 adjudication ────────────────────────────────────────────────────────
+  // Aid DC is fixed public DC 10 (not the task's hidden resolution DC).
+  const AID_DC = 10;
+
+  if (game.user.isGM) {
+    // GM-direct path: compare locally, write bonus immediately.
+    const aidSucceeded = capturedAidTotal !== null && capturedAidTotal >= AID_DC;
+
+    if (aidSucceeded) {
+      const bonusEntry = {
+        sourceCombatantId: aider.id,
+        sourceActorId:     aider.actor.id,
+        sourceUserId:      game.user.id,
+        amount:            2,
+        label:             'Aid Another',
+        roundAdded:        game.combat.round,
+      };
+      const existingBonuses = targetTask.pendingResolutionBonuses ?? [];
+      targetTask.pendingResolutionBonuses    = [...existingBonuses, bonusEntry];
+      targetTask.successfulAidContributors   = [...existingContributors, aider.id];
+      targetTasks[targetTaskId]              = targetTask;
+      await _baphTaskWriteActorTasks(targetCombatant.actor, targetTasks);
+      _baphTaskUpdateCache(targetCombatant.id, targetTasks);
+
+      await ChatMessage.create({
+        content:
+          `<p><strong>${aider.actor.name}</strong> aids ` +
+          `<strong>${targetCombatant.actor.name}</strong>'s ` +
+          `<em>${targetTask.taskName}</em>.</p>` +
+          `<p>Aid check: <strong>${capturedAidTotal}</strong> vs DC ${AID_DC} — ` +
+          `<strong>Success.</strong> Aid queued: +2 to the next resolution roll.</p>`,
+        speaker: { alias: 'Baphomet Tasks' },
+        whisper: [],
+      });
+
+      _baphTaskDebugLog(
+        `aidTask: SUCCESS — "${aider.actor.name}" aided "${targetTask.taskName}" on ` +
+        `${targetCombatant.actor.name} (+2, roll ${capturedAidTotal} vs DC ${AID_DC}, GM direct)`
+      );
+    } else {
+      // Failed Aid: action spent, no bonus banked.
+      await ChatMessage.create({
+        content:
+          `<p><strong>${aider.actor.name}</strong> attempts to aid ` +
+          `<strong>${targetCombatant.actor.name}</strong>'s ` +
+          `<em>${targetTask.taskName}</em>.</p>` +
+          `<p>Aid check: <strong>${capturedAidTotal ?? '?'}</strong> vs DC ${AID_DC} — ` +
+          `<strong>Failure.</strong> No bonus queued. Action spent.</p>`,
+        speaker: { alias: 'Baphomet Tasks' },
+        whisper: [],
+      });
+
+      _baphTaskDebugLog(
+        `aidTask: FAILURE — "${aider.actor.name}" failed aid for "${targetTask.taskName}" ` +
+        `(roll ${capturedAidTotal ?? '?'} vs DC ${AID_DC}, GM direct)`
+      );
+    }
+  } else {
+    // Non-GM path: action already spent on player client.
+    // Emit socket with roll total for GM-side DC 10 adjudication.
+    // Hidden task DC and metadataHidden are never transmitted.
+    _baphTaskDebugLog(
+      `aidTask: emitting GM aid adjudication request — ` +
+      `aider=${aider.id}, target=${targetCombatant.id}, task=${targetTaskId}, ` +
+      `rollTotal=${capturedAidTotal}`
+    );
+
+    if (capturedAidTotal !== null && Number.isFinite(capturedAidTotal)) {
+      game.socket.emit(`module.${BAPH_TASK_MODULE_ID}`, {
+        action:  'baphTaskAidAdjudicate',
+        payload: {
+          aiderCombatantId:  aider.id,
+          aiderActorId:      aider.actor.id,
+          aiderActorName:    aider.actor.name,
+          targetCombatantId: targetCombatant.id,
+          targetTaskId,
+          requestingUserId:  game.user.id,
+          roundAdded:        game.combat.round,
+          rollTotal:         capturedAidTotal,  // GM uses this for DC 10 check
+        },
+      });
+    } else {
+      // Roll total not captured — skip socket; action was spent but no bonus queued.
+      _baphTaskDebugLog(
+        `aidTask: roll total not captured — socket adjudication skipped. ` +
+        `Action was spent but no bonus queued. GM may need to adjudicate manually.`
+      );
+      console.warn(
+        `${BAPH_TASK_MODULE_ID} | task-tracker: aidTask — ` +
+        `roll total not captured for non-GM path. Manual GM adjudication required.`
+      );
+    }
+  }
+
+  return true;
+}
+
+/* ----------------------------------------------------------
+   initiateTask(combatant, options)
+
+   GM-only combat task initiation. Spends exactly 1 PF1.5 action
+   from the active combatant and creates a new multi-round task
+   with the first round of work already committed.
+
+   This is the front-door entry point for combat task creation.
+   Unlike createTask() (which starts with roundsCommitted=0),
+   initiateTask() records the initiation action as the first
+   committed work unit (roundsCommitted=1). If roundsRequired<=1,
+   the task immediately enters readyToResolve state.
+
+   Gate order:
+     1.  GM only
+     2.  Active combat exists
+     3.  Combatant resolves and has an actor
+     4.  Combatant is the currently active combatant
+     5.  No existing active task on this combatant
+     6.  taskName is a non-empty string
+     7.  roundsRequired is a positive integer
+     8.  dc is a positive integer
+     9.  Spend 1 action via _spendActionForCombatant
+
+   On spend success:
+     - Creates task with roundsCommitted=1, lastCommittedRound=startRound
+     - readyToResolve=true when roundsRequired<=1
+     - Stores roundsRequired+dc in GM user hidden flags (never on actor)
+     - Posts public chat (no hidden data revealed)
+     - Calls _renderActionPanel() to refresh UI
+
+   @param {Combatant|string} combatantOrId
+   @param {object}  options
+   @param {string}  options.taskName        Human-readable label (required)
+   @param {string}  [options.taskAction='disable']  Flavor tag (disable/arm/sabotage/jury_rig/custom)
+   @param {number}  options.roundsRequired  Positive integer; hidden from players
+   @param {number}  options.dc              Resolution DC; hidden from players
+   @returns {string|false}  taskId on success, false on any failure
+   ---------------------------------------------------------- */
+
+async function _baphTaskInitiate(combatantOrId, options = {}) {
+
+  // Gate 1: GM only
+  if (!game.user.isGM) {
+    _baphTaskDebugLog('initiateTask rejected: GM only');
+    ui.notifications?.warn?.('Baphomet Tasks: only the GM can initiate tasks.');
+    return false;
+  }
+
+  // Gate 2: active combat
+  if (!game.combat) {
+    _baphTaskDebugLog('initiateTask rejected: no active combat');
+    return false;
+  }
+
+  // Gate 3: valid combatant with actor
+  const combatant = _baphTaskResolveCombatant(combatantOrId);
+  if (!combatant) {
+    _baphTaskDebugLog('initiateTask rejected: could not resolve combatant');
+    return false;
+  }
+  if (!combatant.actor) {
+    _baphTaskDebugLog(`initiateTask rejected: combatant "${combatant.name}" has no actor`);
+    return false;
+  }
+
+  // Gate 4: must be the currently active combatant
+  if (combatant.id !== game.combat.combatant?.id) {
+    _baphTaskDebugLog(
+      `initiateTask rejected: "${combatant.name}" is not the active combatant ` +
+      `(active: "${game.combat.combatant?.name ?? 'none'}")`
+    );
+    ui.notifications?.warn?.('Task initiation: this combatant is not currently active.');
+    return false;
+  }
+
+  // Gate 5: no existing active task on this combatant
+  const existingTasks = _baphTaskGetCachedOrLive(combatant);
+  const hasActive = Object.values(existingTasks).some(t => t.status === 'active');
+  if (hasActive) {
+    _baphTaskDebugLog(
+      `initiateTask rejected: "${combatant.name}" already has an active task`
+    );
+    ui.notifications?.warn?.('This combatant already has an active task.');
+    return false;
+  }
+
+  // Gate 6: taskName required
+  const {
+    taskName,
+    taskAction = 'disable',
+    roundsRequired,
+    dc,
+  } = options;
+
+  const trimmedName = (taskName ?? '').trim();
+  if (!trimmedName) {
+    _baphTaskDebugLog('initiateTask rejected: taskName is required');
+    ui.notifications?.warn?.('Task Name is required.');
+    return false;
+  }
+
+  // Gate 7: roundsRequired must be a positive integer
+  if (
+    typeof roundsRequired !== 'number' ||
+    !Number.isInteger(roundsRequired)  ||
+    roundsRequired < 1
+  ) {
+    _baphTaskDebugLog(
+      `initiateTask rejected: roundsRequired must be a positive integer ` +
+      `(received ${JSON.stringify(roundsRequired)})`
+    );
+    ui.notifications?.warn?.('Rounds Required must be a positive integer.');
+    return false;
+  }
+
+  // Gate 8: dc must be a positive integer
+  if (
+    typeof dc !== 'number' ||
+    !Number.isInteger(dc) ||
+    dc < 1
+  ) {
+    _baphTaskDebugLog(
+      `initiateTask rejected: dc must be a positive integer ` +
+      `(received ${JSON.stringify(dc)})`
+    );
+    ui.notifications?.warn?.('Resolution DC must be a positive integer.');
+    return false;
+  }
+
+  // Gate 9: spend 1 action — all-or-nothing
+  const spent = _spendActionForCombatant(combatant.id, 1, 'task-initiate');
+  if (!spent) {
+    _baphTaskDebugLog(
+      `initiateTask rejected: action spend failed for "${combatant.actor.name}" ` +
+      `— insufficient actions remaining`
+    );
+    ui.notifications?.warn?.(
+      `${combatant.actor.name} has no actions available to begin this task.`
+    );
+    return false;
+  }
+
+  // ── All gates passed. Build and store the task. ──────────────────
+
+  const taskId     = `${combatant.id}-dev-${Date.now()}`;
+  const startRound = game.combat.round ?? 0;
+
+  // readyToResolve immediately if the task requires only 1 round.
+  // The initiation action itself counts as that one committed work unit.
+  const readyToResolve = roundsRequired <= 1;
+
+  const publicTask = {
+    taskId,
+    skillKey:                 'dev',
+    taskType:                 taskAction,
+    taskName:                 trimmedName,
+    roundsCommitted:          1,           // initiation counts as first round
+    startedRound:             startRound,
+    lastCommittedRound:       startRound,  // prevents double-commit same round
+    lastResolvedAttemptRound: null,
+    status:                   'active',
+    pausedReason:             null,
+    readyToResolve,
+    createdByUserId:          game.user.id,
+    hiddenDataOwnerUserId:    game.user.id,
+    metadataPublic:           { taskAction },
+    pendingResolutionBonuses: [],
+    successfulAidContributors: [],
+  };
+
+  const actorTasks = _baphTaskReadActorTasks(combatant.actor);
+  actorTasks[taskId] = publicTask;
+  await _baphTaskWriteActorTasks(combatant.actor, actorTasks);
+
+  // Hidden data: roundsRequired and DC never go on actor flags.
+  const hiddenAll = _baphTaskReadHiddenAll();
+  hiddenAll[taskId] = { taskId, roundsRequired, metadataHidden: { dc } };
+  await _baphTaskWriteHiddenAll(hiddenAll);
+
+  _baphTaskUpdateCache(combatant.id, actorTasks);
+
+  // Chat notification — no hidden rounds or DC revealed.
+  const stateLabel = readyToResolve
+    ? 'Task begun and ready to resolve.'
+    : 'Task begun. Work in progress.';
+  await ChatMessage.create({
+    content:
+      `<p><strong>${combatant.actor.name}</strong> begins ` +
+      `<em>${trimmedName}</em>.</p>` +
+      `<p>${stateLabel}</p>`,
+    speaker: { alias: 'Baphomet Tasks' },
+    whisper: [],
+  });
+
+  _baphTaskDebugLog(
+    `initiateTask: created "${trimmedName}" (${taskId}) on ${combatant.actor.name} — ` +
+    `roundsRequired=${roundsRequired}, readyToResolve=${readyToResolve}, ` +
+    `hiddenDC=${dc}, hiddenDataOwner=${game.user.id}`
   );
   console.log(
-    `${BAPH_TASK_MODULE_ID} | task-tracker: resolveTask is a stub in v2.16.0. ` +
-    `Implement resolution in v2.19.0.`
+    `${BAPH_TASK_MODULE_ID} | task-tracker: initiated task "${trimmedName}" ` +
+    `(${taskId}) on ${combatant.actor.name}`
   );
-  return false;
+
+  // Refresh UI on all clients via updateActor hook triggered by setFlag.
+  // The direct call here ensures the initiating GM's UI updates immediately
+  // without waiting for the hook propagation.
+  if (typeof _renderActionPanel === 'function') _renderActionPanel();
+
+  return taskId;
 }
 
 /* ============================================================
@@ -855,6 +1695,200 @@ Hooks.on('deleteCombat', async (combat, options, userId) => {
 });
 
 /* ============================================================
+   HOOK: updateActor — cross-client cache sync (v2.17.1)
+
+   When actor.setFlag() writes task progress (after commitAction),
+   Foundry propagates an updateActor hook to ALL connected clients.
+   Without this listener, clients that did not make the write keep
+   stale data in _baphTaskCache and show outdated widget progress.
+
+   On every baphomet-utils flag change on an actor that is a
+   combatant in the current combat:
+     1. Rebuild that combatant's cache entry from live actor flags.
+     2. Call _renderActionPanel() so the widget reflects fresh data.
+
+   _renderActionPanel is globally available from action-tracker.js,
+   which loads before this file. This continues the established
+   cross-file global pattern (see: _spendActionForCombatant, _debugLog).
+
+   The hook is safe to register at module load time because
+   _baphTaskCache and _baphTaskUpdateCache are available immediately,
+   and _renderTaskWidget already guards for !game.baphometTasks.
+   ============================================================ */
+
+Hooks.on('updateActor', (actor, changes) => {
+  // Fast bail: only interested in baphomet-utils flag updates on actors.
+  if (!changes?.flags?.[BAPH_TASK_MODULE_ID]) return;
+
+  const combat = game.combat;
+  if (!combat) return;
+
+  // Find the combatant for this actor in the active combat.
+  const combatant = combat.combatants.find(c => c.actor?.id === actor.id);
+  if (!combatant) return;
+
+  // Rebuild this combatant's cache entry from the now-authoritative actor data.
+  const freshTasks = actor.getFlag(BAPH_TASK_MODULE_ID, BAPH_TASK_FLAG_PUBLIC) ?? {};
+  _baphTaskUpdateCache(combatant.id, freshTasks);
+
+  _baphTaskDebugLog(
+    `updateActor: task cache refreshed for "${combatant.name}" — re-rendering widget`
+  );
+
+  // Re-render floating UI on all clients so the widget shows fresh progress.
+  _renderActionPanel();
+});
+
+/* ============================================================
+   PLAYER TASK REQUEST — GM SIDE STATE AND HELPERS (v2.20.0)
+
+   Handles the GM's side of the player task request handshake:
+     Player → baphTaskRequest → GM validates + shows approval modal
+     GM approves/rejects → baphTaskRequestResponse → player clears state
+
+   _openGMApprovalModal is a global from action-tracker.js (loads first).
+   _baphSignalNextGMRequest (also action-tracker.js) calls _baphProcessNextGMRequest
+   after the modal closes, allowing sequential request handling.
+   ============================================================ */
+
+// Queue of pending player task request payloads awaiting GM attention.
+const _baphGMRequestQueue = [];
+let _baphGMApprovalActive = false;
+
+/**
+ * Validate and dispatch a baphTaskRequest payload received from a player.
+ * If a modal is already active, the request is queued for sequential handling.
+ * GM-side only.
+ */
+function _baphHandleTaskRequest(payload) {
+  if (!game.user.isGM) return;
+
+  _baphTaskDebugLog(`baphTaskRequest received: ${payload.requestId}`);
+
+  const {
+    requestId, requestingUserId, requestingActorId,
+    requestingCombatantId, timestamp,
+  } = payload;
+
+  if (!requestId || !requestingCombatantId || !requestingUserId) {
+    _baphTaskDebugLog('baphTaskRequest rejected: missing required fields');
+    return;
+  }
+
+  // Reject stale requests older than 70 s (buffer above the 60 s player timeout)
+  if (timestamp && Date.now() - timestamp > 70000) {
+    _baphTaskDebugLog(`baphTaskRequest ${requestId} expired on arrival — ignoring`);
+    return;
+  }
+
+  if (_baphGMApprovalActive) {
+    _baphGMRequestQueue.push(payload);
+    _baphTaskDebugLog(`baphTaskRequest ${requestId} queued (modal already active, queue depth: ${_baphGMRequestQueue.length})`);
+    return;
+  }
+
+  _baphShowGMApprovalForPayload(payload);
+}
+
+/**
+ * Validate a single request payload and open the GM approval modal for it.
+ */
+function _baphShowGMApprovalForPayload(payload) {
+  if (!game.user.isGM) return;
+
+  _baphGMApprovalActive = true;
+
+  const {
+    requestId, requestingUserId, requestingActorId, requestingCombatantId,
+  } = payload;
+
+  // Validate: active combat
+  if (!game.combat) {
+    _baphTaskDebugLog('baphTaskRequest: no active combat — rejecting request');
+    _baphGMApprovalActive = false;
+    _baphProcessNextGMRequest();
+    return;
+  }
+
+  // Validate: combatant exists and actor is consistent
+  const combatant = game.combat.combatants.get(requestingCombatantId);
+  if (!combatant?.actor) {
+    _baphTaskDebugLog(`baphTaskRequest: combatant "${requestingCombatantId}" not found`);
+    _baphGMApprovalActive = false;
+    _baphProcessNextGMRequest();
+    return;
+  }
+  if (requestingActorId && combatant.actor.id !== requestingActorId) {
+    _baphTaskDebugLog(
+      `baphTaskRequest: actor mismatch — ` +
+      `expected ${requestingActorId}, got ${combatant.actor.id}`
+    );
+    _baphGMApprovalActive = false;
+    _baphProcessNextGMRequest();
+    return;
+  }
+
+  // Validate: requesting user exists and owns the actor
+  const requestingUser = game.users.get(requestingUserId);
+  if (!requestingUser) {
+    _baphTaskDebugLog(`baphTaskRequest: user ${requestingUserId} not found`);
+    _baphGMApprovalActive = false;
+    _baphProcessNextGMRequest();
+    return;
+  }
+  const OWNER_LEVEL = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+  const ownership   = combatant.actor.ownership ?? {};
+  const userLevel   = ownership[requestingUserId] ?? 0;
+  const defLevel    = ownership['default'] ?? 0;
+  const effLevel    = Math.max(userLevel, defLevel);
+  if (!requestingUser.isGM && effLevel < OWNER_LEVEL) {
+    _baphTaskDebugLog(
+      `baphTaskRequest: user ${requestingUserId} does not own "${combatant.actor.name}" — rejected`
+    );
+    _baphGMApprovalActive = false;
+    _baphProcessNextGMRequest();
+    return;
+  }
+
+  const isActiveCombatant = (combatant.id === game.combat.combatant?.id);
+
+  const validation = {
+    isActiveCombatant,
+    userName:  requestingUser.name  ?? 'Unknown Player',
+    actorName: combatant.actor.name ?? 'Unknown',
+  };
+
+  _baphTaskDebugLog(
+    `baphTaskRequest ${requestId}: opening GM approval modal — ` +
+    `user="${validation.userName}", isActive=${isActiveCombatant}`
+  );
+
+  // _openGMApprovalModal is a global from action-tracker.js (loads before this file).
+  if (typeof _openGMApprovalModal === 'function') {
+    _openGMApprovalModal(payload, validation);
+  } else {
+    _baphTaskDebugLog('baphTaskRequest: _openGMApprovalModal not available — aborting');
+    _baphGMApprovalActive = false;
+    _baphProcessNextGMRequest();
+  }
+}
+
+/**
+ * Process the next queued GM request after the current modal closes.
+ * Called from action-tracker.js _baphSignalNextGMRequest() after Approve or Reject.
+ */
+function _baphProcessNextGMRequest() {
+  _baphGMApprovalActive = false;
+  if (_baphGMRequestQueue.length === 0) return;
+  const next = _baphGMRequestQueue.shift();
+  _baphTaskDebugLog(
+    `baphTaskRequest: dequeuing next request ${next.requestId} ` +
+    `(${_baphGMRequestQueue.length} remaining)`
+  );
+  _baphShowGMApprovalForPayload(next);
+}
+
+/* ============================================================
    HOOK: pf1PostReady
 
    - Rebuild in-memory cache from actor flags.
@@ -868,8 +1902,346 @@ Hooks.on('deleteCombat', async (combat, options, userId) => {
 Hooks.once('pf1PostReady', () => {
   _baphTaskRebuildCache();
 
+  /* ── Socket: GM-side adjudication for player-triggered Resolve Task ──
+     Registered on all clients; only the GM client processes messages.
+     Channel: module.baphomet-utils  (requires "socket": true in module.json)
+
+     Payload received from player:
+       combatantId      string   — the Combatant document ID
+       taskId           string   — the task being resolved
+       rollTotal        number   — captured from pf1ActorRollSkill hook
+       requestingUserId string   — the player's User document ID
+
+     Hidden DC is read here on the GM client — never sent to the player.
+  ──────────────────────────────────────────────────────────────────── */
+  game.socket.on(`module.${BAPH_TASK_MODULE_ID}`, async (message) => {
+
+    /* ── baphTaskRequestResponse (v2.20.0) ───────────────────────────
+       GM → player response to a task initiation request.
+       Handled by the requesting player's client (non-GM).
+       Processed before the GM-only early return below.
+    ─────────────────────────────────────────────────────────────────── */
+    if (message?.action === 'baphTaskRequestResponse') {
+      // _baphHandleRequestResponse is a global from action-tracker.js.
+      if (!game.user.isGM && typeof _baphHandleRequestResponse === 'function') {
+        _baphHandleRequestResponse(message.payload ?? {});
+      }
+      return;
+    }
+
+    // All remaining socket actions on this channel require a GM client.
+    if (!game.user.isGM) return;
+
+    /* ── baphTaskRequest (v2.20.0) ───────────────────────────────────
+       Player-initiated task request. GM validates and shows approval modal.
+    ─────────────────────────────────────────────────────────────────── */
+    if (message?.action === 'baphTaskRequest') {
+      _baphHandleTaskRequest(message.payload ?? {});
+
+    /* ── baphTaskResolveAdjudicate ────────────────────────────────────
+       Player-triggered task resolution. GM classifies roll total
+       against hidden DC and writes outcome. (v2.17.2)
+    ─────────────────────────────────────────────────────────────────── */
+    } else if (message?.action === 'baphTaskResolveAdjudicate') {
+      const { combatantId, taskId, rollTotal, requestingUserId } = message.payload ?? {};
+
+      _baphTaskDebugLog(
+        `socket: baphTaskResolveAdjudicate received — ` +
+        `combatant=${combatantId}, task=${taskId}, total=${rollTotal}, from=${requestingUserId}`
+      );
+
+      if (!Number.isFinite(rollTotal)) {
+        _baphTaskDebugLog('socket resolveAdjudicate: rollTotal not finite — rejected');
+        return;
+      }
+
+      if (!game.combat) {
+        _baphTaskDebugLog('socket resolveAdjudicate: no active combat — rejected');
+        return;
+      }
+      const combatant = game.combat.combatants.get(combatantId);
+      if (!combatant?.actor) {
+        _baphTaskDebugLog(`socket resolveAdjudicate: combatant "${combatantId}" not found — rejected`);
+        return;
+      }
+
+      const requestingUser = game.users.get(requestingUserId);
+      if (!requestingUser) {
+        _baphTaskDebugLog(`socket resolveAdjudicate: requesting user "${requestingUserId}" not found — rejected`);
+        return;
+      }
+      const OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+      const actorOwnership = combatant.actor.ownership ?? {};
+      const userLevel      = actorOwnership[requestingUserId] ?? 0;
+      const defaultLevel   = actorOwnership['default'] ?? 0;
+      const effectiveLevel = Math.max(userLevel, defaultLevel);
+      if (!requestingUser.isGM && effectiveLevel < OWNER_LEVEL) {
+        _baphTaskDebugLog(
+          `socket resolveAdjudicate: user "${requestingUserId}" cannot control ` +
+          `"${combatant.name}" — rejected`
+        );
+        return;
+      }
+
+      const tasks = _baphTaskReadActorTasks(combatant.actor);
+      const task  = tasks[taskId];
+      if (!task) {
+        _baphTaskDebugLog(`socket resolveAdjudicate: task "${taskId}" not found on ${combatant.actor.name}`);
+        return;
+      }
+      if (!task.readyToResolve) {
+        _baphTaskDebugLog(`socket resolveAdjudicate: task "${task.taskName}" is not ready to resolve`);
+        return;
+      }
+      if (task.status === 'resolved' || task.status === 'abandoned') {
+        _baphTaskDebugLog(`socket resolveAdjudicate: task "${task.taskName}" already ${task.status}`);
+        return;
+      }
+
+      _baphTaskDebugLog(
+        `socket resolveAdjudicate: adjudicating "${task.taskName}" for ${combatant.actor.name} ` +
+        `(roll total: ${rollTotal})`
+      );
+      await _baphTaskAdjudicate(combatant, taskId, task, rollTotal);
+
+    /* ── baphTaskAidAdjudicate ────────────────────────────────────────
+       Player-triggered aid on another combatant's ready task.
+       GM writes the +2 pending bonus to the target actor's task flags. (v2.18.0)
+    ─────────────────────────────────────────────────────────────────── */
+    } else if (message?.action === 'baphTaskAidAdjudicate') {
+      const {
+        aiderCombatantId, aiderActorId, aiderActorName,
+        targetCombatantId, targetTaskId,
+        requestingUserId, roundAdded,
+        rollTotal,   // received from player client; GM performs DC 10 check
+      } = message.payload ?? {};
+
+      _baphTaskDebugLog(
+        `socket: baphTaskAidAdjudicate received — ` +
+        `aider=${aiderCombatantId}, target=${targetCombatantId}, task=${targetTaskId}, ` +
+        `rollTotal=${rollTotal}, from=${requestingUserId}, round=${roundAdded}`
+      );
+
+      if (!game.combat) {
+        _baphTaskDebugLog('socket aidAdjudicate: no active combat — rejected');
+        return;
+      }
+
+      const aider = game.combat.combatants.get(aiderCombatantId);
+      if (!aider?.actor) {
+        _baphTaskDebugLog(`socket aidAdjudicate: aider "${aiderCombatantId}" not found — rejected`);
+        return;
+      }
+
+      const requestingUser = game.users.get(requestingUserId);
+      if (!requestingUser) {
+        _baphTaskDebugLog(`socket aidAdjudicate: requesting user "${requestingUserId}" not found — rejected`);
+        return;
+      }
+      const OWNER_LEVEL     = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+      const aiderOwnership  = aider.actor.ownership ?? {};
+      const aiderUserLevel  = aiderOwnership[requestingUserId] ?? 0;
+      const aiderDefLevel   = aiderOwnership['default'] ?? 0;
+      const aiderEffLevel   = Math.max(aiderUserLevel, aiderDefLevel);
+      if (!requestingUser.isGM && aiderEffLevel < OWNER_LEVEL) {
+        _baphTaskDebugLog(
+          `socket aidAdjudicate: user "${requestingUserId}" cannot control ` +
+          `aider "${aider.name}" — rejected`
+        );
+        return;
+      }
+
+      const targetCombatant = game.combat.combatants.get(targetCombatantId);
+      if (!targetCombatant?.actor) {
+        _baphTaskDebugLog(`socket aidAdjudicate: target combatant "${targetCombatantId}" not found — rejected`);
+        return;
+      }
+
+      if (aiderCombatantId === targetCombatantId) {
+        _baphTaskDebugLog('socket aidAdjudicate: aider and target are the same combatant — rejected');
+        return;
+      }
+
+      const targetTasks = _baphTaskReadActorTasks(targetCombatant.actor);
+      const targetTask  = targetTasks[targetTaskId];
+      if (!targetTask) {
+        _baphTaskDebugLog(`socket aidAdjudicate: task "${targetTaskId}" not found on ${targetCombatant.actor.name}`);
+        return;
+      }
+      // Eligibility: task must be active (in-progress or ready), not terminal
+      if (targetTask.status !== 'active') {
+        _baphTaskDebugLog(`socket aidAdjudicate: target task "${targetTask.taskName}" is not active (${targetTask.status}) — rejected`);
+        return;
+      }
+
+      // Duplicate check: one successful contribution per helper per pending Resolve attempt
+      const existingContributors = targetTask.successfulAidContributors ?? [];
+      if (existingContributors.includes(aiderCombatantId)) {
+        _baphTaskDebugLog(
+          `socket aidAdjudicate: duplicate successful aid from "${aiderCombatantId}" on ` +
+          `"${targetTask.taskName}" — rejected`
+        );
+        return;
+      }
+
+      // DC 10 comparison on GM side
+      const AID_DC = 10;
+      const aidSucceeded = Number.isFinite(rollTotal) && rollTotal >= AID_DC;
+
+      if (aidSucceeded) {
+        const bonusEntry = {
+          sourceCombatantId: aiderCombatantId,
+          sourceActorId:     aiderActorId,
+          sourceUserId:      requestingUserId,
+          amount:            2,
+          label:             'Aid Another',
+          roundAdded,
+        };
+        const existingBonuses = targetTask.pendingResolutionBonuses ?? [];
+        targetTask.pendingResolutionBonuses  = [...existingBonuses, bonusEntry];
+        targetTask.successfulAidContributors = [...existingContributors, aiderCombatantId];
+        targetTasks[targetTaskId]            = targetTask;
+        await _baphTaskWriteActorTasks(targetCombatant.actor, targetTasks);
+        _baphTaskUpdateCache(targetCombatant.id, targetTasks);
+
+        await ChatMessage.create({
+          content:
+            `<p><strong>${aiderActorName ?? aider.actor.name}</strong> aids ` +
+            `<strong>${targetCombatant.actor.name}</strong>'s ` +
+            `<em>${targetTask.taskName}</em>.</p>` +
+            `<p>Aid check: <strong>${rollTotal}</strong> vs DC ${AID_DC} — ` +
+            `<strong>Success.</strong> Aid queued: +2 to the next resolution roll.</p>`,
+          speaker: { alias: 'Baphomet Tasks' },
+          whisper: [],
+        });
+
+        _baphTaskDebugLog(
+          `socket aidAdjudicate: SUCCESS — +2 aid applied to "${targetTask.taskName}" on ` +
+          `${targetCombatant.actor.name} (from ${aiderActorName ?? aider.actor.name}, ` +
+          `roll ${rollTotal} vs DC ${AID_DC})`
+        );
+      } else {
+        // Failed aid: no bonus, no contributor record added
+        await ChatMessage.create({
+          content:
+            `<p><strong>${aiderActorName ?? aider.actor.name}</strong> attempts to aid ` +
+            `<strong>${targetCombatant.actor.name}</strong>'s ` +
+            `<em>${targetTask.taskName}</em>.</p>` +
+            `<p>Aid check: <strong>${Number.isFinite(rollTotal) ? rollTotal : '?'}</strong> vs DC ${AID_DC} — ` +
+            `<strong>Failure.</strong> No bonus queued. Action spent.</p>`,
+          speaker: { alias: 'Baphomet Tasks' },
+          whisper: [],
+        });
+
+        _baphTaskDebugLog(
+          `socket aidAdjudicate: FAILURE — aid failed for "${targetTask.taskName}" ` +
+          `(from ${aiderActorName ?? aider.actor.name}, roll ${rollTotal} vs DC ${AID_DC})`
+        );
+      }
+
+    /* ── baphTaskReadinessCheck ─────────────────────────────────────
+       Player-driven Continue Task committed public progress.
+       GM reads hidden roundsRequired, compares against the authoritative
+       public roundsCommitted from actor flags, and flips readyToResolve
+       when the threshold is met. Hidden duration never leaves GM-side
+       storage. (v2.20.1)
+    ─────────────────────────────────────────────────────────────────── */
+    } else if (message?.action === 'baphTaskReadinessCheck') {
+      const { combatantId, taskId, requestingUserId } = message.payload ?? {};
+
+      _baphTaskDebugLog(
+        `socket: baphTaskReadinessCheck received — ` +
+        `combatant=${combatantId}, task=${taskId}, from=${requestingUserId}`
+      );
+
+      if (!game.combat) {
+        _baphTaskDebugLog('socket readinessCheck: no active combat — rejected');
+        return;
+      }
+
+      const rcCombatant = game.combat.combatants.get(combatantId);
+      if (!rcCombatant?.actor) {
+        _baphTaskDebugLog(`socket readinessCheck: combatant "${combatantId}" not found — rejected`);
+        return;
+      }
+
+      const rcUser = game.users.get(requestingUserId);
+      if (!rcUser) {
+        _baphTaskDebugLog(`socket readinessCheck: user "${requestingUserId}" not found — rejected`);
+        return;
+      }
+      const RC_OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+      const rcActorOwnership  = rcCombatant.actor.ownership ?? {};
+      const rcUserLevel       = rcActorOwnership[requestingUserId] ?? 0;
+      const rcDefaultLevel    = rcActorOwnership['default'] ?? 0;
+      const rcEffectiveLevel  = Math.max(rcUserLevel, rcDefaultLevel);
+      if (!rcUser.isGM && rcEffectiveLevel < RC_OWNER_LEVEL) {
+        _baphTaskDebugLog(
+          `socket readinessCheck: user "${requestingUserId}" cannot control ` +
+          `"${rcCombatant.name}" — rejected`
+        );
+        return;
+      }
+
+      // Read authoritative public task state directly from actor flags (not payload).
+      const rcTasks = _baphTaskReadActorTasks(rcCombatant.actor);
+      const rcTask  = rcTasks[taskId];
+      if (!rcTask) {
+        _baphTaskDebugLog(`socket readinessCheck: task "${taskId}" not found on ${rcCombatant.actor.name} — rejected`);
+        return;
+      }
+      if (rcTask.status !== 'active') {
+        _baphTaskDebugLog(`socket readinessCheck: task "${rcTask.taskName}" is not active (${rcTask.status}) — no-op`);
+        return;
+      }
+      if (rcTask.readyToResolve) {
+        _baphTaskDebugLog(`socket readinessCheck: task "${rcTask.taskName}" already readyToResolve — no-op`);
+        return;
+      }
+
+      // Read hidden data from GM user flag. Hidden duration never leaves GM-side storage.
+      const rcHiddenAll = _baphTaskReadHiddenAll();
+      const rcHidden    = rcHiddenAll[taskId];
+      if (!rcHidden?.roundsRequired) {
+        _baphTaskDebugLog(
+          `socket readinessCheck WARNING: no hidden data for task "${taskId}" on this GM client — ` +
+          `readyToResolve not evaluated`
+        );
+        console.warn(
+          `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
+          `socket readinessCheck — no hidden data for task "${taskId}". ` +
+          `Was this task created by a different GM user?`
+        );
+        return;
+      }
+
+      if (rcTask.roundsCommitted >= rcHidden.roundsRequired) {
+        rcTask.readyToResolve = true;
+        rcTasks[taskId] = rcTask;
+        await _baphTaskWriteActorTasks(rcCombatant.actor, rcTasks);
+        _baphTaskUpdateCache(rcCombatant.id, rcTasks);
+
+        _baphTaskDebugLog(
+          `socket readinessCheck: "${rcTask.taskName}" is ready to resolve ` +
+          `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
+        );
+        console.log(
+          `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
+          `socket readinessCheck — "${rcTask.taskName}" is ready to resolve ` +
+          `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
+        );
+      } else {
+        _baphTaskDebugLog(
+          `socket readinessCheck: "${rcTask.taskName}" not yet ready ` +
+          `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds) — no-op`
+        );
+      }
+    }
+  });
+
   game.baphometTasks = {
     createTask:   _baphTaskCreate,
+    initiateTask: _baphTaskInitiate,
     getTask:      _baphTaskGet,
     getTasks:     _baphTaskGetAll,
     commitAction: _baphTaskCommit,
@@ -877,6 +2249,7 @@ Hooks.once('pf1PostReady', () => {
     resumeTask:   _baphTaskResume,
     abandonTask:  _baphTaskAbandon,
     resolveTask:  _baphTaskResolve,
+    aidTask:      _baphTaskAid,
   };
 
   console.log(`${BAPH_TASK_MODULE_ID} | task-tracker v1.0: game.baphometTasks API ready`);

@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.16.0
+**Current Version:** 2.20.1
 
 ---
 
@@ -21,7 +21,7 @@ https://raw.githubusercontent.com/Dade512/baphomet-utils/main/module.json
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
 - **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic
-- **Task Tracker** — API-only multi-round task scaffold for skills like Disable Device; no UI yet
+- **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
 - **Roll Card Styler** — Dark leather result bar on all roll cards; nat 20 gold bar and nat 1 blood bar with flavor labels
 - **Custom XP Progression** — Campaign-specific modified slow track overriding PF1e's "Fast" track; integrates organically with character sheet level-up, skill points, feats, and class features
 - **Weather Engine** — Seeded RNG weather generation with 8 Golarion climate zones, integrated with Simple Calendar Reborn; posts daily weather to chat in Croaker's Ledger style
@@ -111,10 +111,142 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 
 ## Changelog
 
+### v2.20.1 — Player Task Readiness Socket
+
+Correction patch for a critical readiness bug exposed by v2.20.0's player-driven Continue Task flow. No new UI; adds a GM-authorized socket path so non-GM clients can trigger readiness evaluation.
+
+- **Root cause:** When a non-GM player clicks Continue Task, `_baphTaskCommit` runs on the player client. The player client cannot read the GM user flag where `roundsRequired` is stored, so `readyToResolve` never flipped true regardless of how many rounds were committed. Public progress accumulated indefinitely.
+- **Fix:** After a non-GM Continue Task commit, the player client emits a `baphTaskReadinessCheck` socket message to the GM. The GM handler reads the authoritative public task state from actor flags and the hidden `roundsRequired` from the GM user flag, then flips `readyToResolve = true` when the threshold is met.
+- **Privacy preserved:** The `baphTaskReadinessCheck` payload contains only combatant/task identity and requesting user — no hidden data. The hidden duration comparison occurs entirely on the GM client.
+- **Cross-client propagation:** The GM's actor flag write triggers the existing `updateActor` hook on all clients, which rebuilds the task cache and re-renders the widget. Player sees Resolve Task appear automatically.
+- **GM commit path unchanged:** When the GM clicks Continue Task, readiness is evaluated synchronously (no socket round-trip). This path is not altered.
+- **Socket path consistent with existing patterns:** `baphTaskReadinessCheck` follows the same GM-gated socket architecture as `baphTaskResolveAdjudicate` and `baphTaskAidAdjudicate`.
+
+### v2.19.2 — Pip Flag Write Authority
+
+Correction patch for the v2.19.1 pip-sync architecture. No new behavior; eliminates console permission noise in multiplayer.
+
+- **Authority gate added to `_writePipFlag`:** The function now checks `combatant.isOwner` before attempting `combatant.setFlag(...)`. Non-owner clients (e.g., a player client observing an NPC's turn reset) silently return without attempting the write.
+- **Root cause:** `_maybeResetForNewTurn()` runs on every client during `renderCombatTracker`. It calls `_writePipFlag()`, which previously attempted `combatant.setFlag()` regardless of document ownership. On a non-GM player client, this produced `User lacks permission to update Combatant` errors for every NPC turn reset.
+- **Behavioral equivalence:** GM clients own all combatants and continue writing pip state for all. Player clients write only for their own combatants. Cross-client sync is unchanged — the GM's write still fires and triggers the `updateCombatant` hook on all clients.
+- **No silent failure logging:** The early return on unauthorized clients emits no error and no UI notification; the absence of permission is expected in this context.
+
+### v2.20.0 — Player-Side Task Initiation
+
+Enables players to request multi-round task initiation from the combat HUD, with GM modal approval preserving the hidden-data privacy model.
+
+- **Request Skill Task button:** Non-GM players who control the active combatant see a "Request Skill Task" button in the task widget area when no task is active. Button is absent when not the active combatant.
+- **Player initiation dialog:** Clicking the button opens an overlay with a registry-driven skill selector (Disable Device for v2.20.0) and a free-text description of the attempt. Submit is disabled until a description is entered.
+- **Socket-routed request:** On submit, the player emits a `baphTaskRequest` socket message containing the combatant ID, skill, description, and a unique request ID — no DC or duration data included.
+- **60-second expiry:** If no GM responds within 60 seconds, the player's request times out with a notification. Stale requests are automatically ignored on the GM side.
+- **GM approval modal:** The first GM to receive the request sees a blocking modal showing the requesting player, character name, skill, player description, and active-combatant validation status. The Approve button is disabled if the combatant is no longer the active turn.
+- **GM hidden inputs:** The modal includes a difficulty preset dropdown (Simple 1d4 / Difficult 2d4 / Custom), a rounds required field with a 🎲 Roll button that auto-rolls the selected preset, and a DC input.
+- **Approval funnels through `initiateTask`:** Approving calls the existing `game.baphometTasks.initiateTask()` path — same action spend (1 action), same first-round commitment (`roundsCommitted: 1`), same hidden-flag storage, same chat message as a GM-created task.
+- **Immediate ready state:** If `roundsRequired ≤ 1`, the task enters Ready to resolve immediately, matching `initiateTask` behavior.
+- **Rejection path:** The GM can reject instead; a whispered chat message is sent to the requesting player and no task is created.
+- **Sequential multi-request handling:** If multiple player requests arrive while a GM modal is active, they are queued and shown in sequence.
+- **Existing GM path unchanged:** The GM task builder (Begin Task widget) remains fully functional for direct GM-initiated tasks.
+- **Privacy preserved:** Hidden DC and `roundsRequired` are never transmitted in any socket message; they exist only on the GM user's flags after task creation.
+
+### v2.19.1 — Cross-Client Action Pip Sync
+
+Corrects a long-standing design limitation where action pip state was purely client-local and not visible across connected clients.
+
+- **Shared pip state:** Each combatant's pip availability (`actions`, `reaction`, `reflexPip`) is now persisted to a Combatant document flag (`flags.baphomet-utils.pipState`) on every spend, reset, or manual toggle.
+- **Cross-client refresh:** All connected clients receive a `updateCombatant` hook event when the flag changes. The hook re-hydrates local pip state and refreshes the combat tracker pip row immediately.
+- **Turn-start reset sync:** Render-based turn resets write the flag after applying condition locks. Remote clients see the fresh full-pip state when the active combatant changes.
+- **Reload resilience:** A client that reloads mid-combat hydrates pip state from the flag rather than starting with stale defaults.
+- **Scope:** Synchronization only — no changes to action economy rules, spending amounts, or task behavior.
+
+### v2.19.0 — Task Initiation UI + GM Task Builder
+
+GM-only front door for initiating supported multi-round Disable Device tasks from the combat UI. No developer console required.
+
+- **Begin Task button:** Appears in the task widget area for GM users when the active combatant has no unresolved task and combat is active.
+- **Task builder overlay:** Compact in-combat form collecting task name, action flavor (disable/arm/sabotage/jury_rig/custom), duration mode (Simple 1d4 / Difficult 2d4 / Manual), and resolution DC.
+- **Secret duration:** Simple mode rolls 1d4 privately on the GM client; Difficult rolls 2d4. Manual accepts a GM-entered positive integer. Actual rounds required stored only in GM hidden flags; never revealed to players.
+- **Initiation costs 1 action:** `initiateTask()` spends exactly 1 PF1.5 action from the task owner before creating the task. If the spend fails (no actions available), no task or hidden metadata is written.
+- **Initial work unit:** Creation counts as the first committed round (`roundsCommitted: 1`). A 1-round task immediately enters Ready to resolve state.
+- **Existing task guard:** Builder button hidden when active combatant already has an unresolved task; `initiateTask()` also defensively rejects duplicate creation.
+- **Full lifecycle integration:** Builder-created tasks work with Continue Task, Aid Task, Resolve Task, and Abandon Task without special-casing.
+- `game.baphometTasks.initiateTask(combatant, options)` added to the public API.
+
+### v2.18.1 — Aid Another Rules Alignment
+
+Rules-alignment patch for Aid Another mechanics. No new subsystems; all v2.18.0 architecture preserved.
+
+- **Aid eligibility expanded:** Aid Task panel now appears for both in-progress tasks (not yet ready) and ready-to-resolve tasks. Previously only ready tasks were eligible.
+- **Aid now requires a skill check:** Clicking Aid spends 1 action and fires a `actor.rollSkill()` check against DC 10 (fixed public DC). Success banks +2; failure banks no bonus. The roll card is visible to all players.
+- **Contributor cadence aligned:** A new `successfulAidContributors` array on each task tracks which helpers have banked aid for the current pending Resolve attempt. Cleared when Resolve fires. Failed Aid attempts do not add to contributors; same helper may retry on remaining actions.
+- **After minor failure:** `successfulAidContributors` is cleared along with `pendingResolutionBonuses`, so the same helper may Aid again before a later retry.
+- `_baphAidTaskRollActive` flag added to suppress the Disable Device warning and skill auto-spend during internal Aid rolls.
+
+### v2.18.0 — Pending Resolution Bonus Support + Aid Another Baseline
+
+Adds Aid Another for ready-to-resolve tasks and the underlying pending-bonus infrastructure.
+
+- Active combatants can spend 1 action to aid an ally's ready-to-resolve task, queuing a +2 pending resolution bonus.
+- `Aid Task` panel appears automatically when eligible ally tasks exist on the active combatant's turn.
+- Multiple allies may contribute separate +2 bonuses to the same task; each aider is limited to one contribution per task per round.
+- Queued aid applies to the resolution roll via the confirmed `bonus` option on `actor.rollSkill()`.
+- Pending aid is consumed after any resolve attempt (success, minor failure, or catastrophic failure); aid must be re-committed for retry after a minor failure.
+- Task abandonment clears all queued aid.
+- Non-GM player aid routes through the GM-authorized socket path (`baphTaskAidAdjudicate`); hidden DC and metadataHidden are never transmitted.
+- Pending aid total is displayed in the task widget as `Assistance queued: +N`.
+
+### v2.17.3 — Abandon Task Control + Task Lifecycle Cleanup
+
+Completes the core task lifecycle with a visible abandon control and lifecycle hardening.
+
+- `Abandon Task` button added to the task widget for active (in-progress or ready) tasks.
+- Abandonment costs 0 actions, fires no skill roll, and posts a brief chat notification.
+- Player-controlled abandon writes directly to the owning actor's flags (no socket required; player owns the actor).
+- Terminal guard added to `abandonTask`: cannot abandon a task that is already resolved or abandoned.
+- `pendingResolutionBonuses` field introduced on all new tasks (also cleared on abandon).
+- Terminal task audit model: resolved/abandoned task records are retained in actor flags for GM audit; widget and all API actions ignore terminal records.
+
+### v2.17.2 — Resolve Task Button + Disable Device Resolution
+
+Adds the final interactive step of the PF1.5 multi-round task loop. Both GM and player-controlled actors can now resolve tasks with full automated outcome classification.
+
+- Added **Resolve Task** button to the task widget when the active task is in `Ready to resolve` state and the user controls the combatant.
+- Clicking Resolve Task spends exactly 1 PF1.5 action and rolls the task's skill check via `actor.rollSkill()` (standard PF1 chat card created).
+- Outcome is automatically classified without exposing the hidden DC:
+  - **Success** — roll meets or exceeds DC; task closes.
+  - **Minor failure** — misses DC by 1–4; task remains ready to resolve next round.
+  - **Catastrophic failure** — misses DC by 5+; task closes; GM adjudicates trap consequence.
+- **GM-direct path:** classification happens locally on the GM client with hidden DC access; one `setFlag` write.
+- **Player-triggered path:** roll fires on the player client; roll total is sent via `game.socket` to the GM client, which performs hidden-DC classification and posts the outcome chat. Hidden DC is never sent to the player.
+- Classification result posted as a `Baphomet Tasks` chat message (DC not revealed in any path).
+- Same-round guard prevents duplicate resolve attempts (`lastResolvedAttemptRound` field).
+- `_baphResolveTaskRollActive` flag suppresses the Disable Device auto-spend warning during resolution rolls.
+- All v2.17.0/v2.17.1 widget and cache-sync behavior preserved.
+
+### v2.17.1 — Continue Task Button + Cache Sync
+Interactive task continuation from the task progress widget.
+
+- Added **Continue Task** button to the task progress widget for the controlling user when the active task is not yet ready to resolve.
+- Clicking the button spends exactly 1 PF1.5 action and commits exactly 1 round of progress via the existing `game.baphometTasks.commitAction()` path.
+- Widget refreshes immediately on the clicking client after a successful continuation.
+- Added `updateActor` hook in `task-tracker.js` so all other connected clients automatically refresh their task cache and widget display when task flags change — no manual refresh required.
+- Button is hidden when the task is in `Ready to resolve` state.
+- All existing hidden-data privacy rules (no `roundsRequired` leak) are preserved.
+
+### v2.17.0 — Read-Only Task Progress Widget
+Read-only task progress display near the floating action panel.
+
+- Added read-only task progress widget that appears adjacent to the action panel when the active combatant has an active task.
+- Widget displays the current active combatant's task name and committed round count without leaking hidden task metadata.
+- Task displays "Ready to resolve" state when `readyToResolve` is true.
+- Widget refreshes on turn advance, combat start, and tracker re-renders via the existing action panel lifecycle.
+- No Continue Task button yet — that is planned for v2.17.1 (Continue Task Button + Cache Sync).
+- No Disable Device automation yet — warning behavior is unchanged.
+
 ### v2.16.0 — "The Ledger Opens a Long Account"
 API-only multi-round task scaffold. No UI, no Disable Device integration, no automatic resolution.
 
 - Added `scripts/task-tracker.js` — new file, loads after `action-tracker.js`.
+
 - Added `game.baphometTasks` — public API for creating and managing multi-round tasks in combat.
 - Public task state stored on actor flags (player-visible). Hidden task duration stored on GM user flags (never exposed to players).
 - All 8 API methods implemented: `createTask`, `getTask`, `getTasks`, `commitAction`, `pauseTask`, `resumeTask`, `abandonTask`, `resolveTask` (stub).

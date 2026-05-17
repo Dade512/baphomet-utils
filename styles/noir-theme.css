@@ -1028,6 +1028,194 @@ dialog.roll-prompt .form-footer button:hover,
 }
 
 /* ============================================================
+   PLAYER TASK REQUEST OVERLAYS — v2.20.0
+   Player request dialog and GM approval modal.
+   Both follow Croaker's Ledger aesthetic, modelled on
+   .baph-task-builder in action-tracker.css.
+   ============================================================ */
+
+/* --- Request Skill Task widget button (player-side) ---
+   Mirrors .baph-task-widget-begin-btn exactly in style. */
+.baph-task-widget-request-btn {
+  display: block;
+  width: 100%;
+  padding: 0.28rem 0.5rem;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-align: center;
+  color: #2a231d;
+  background: #d1c6b4;
+  border: 1px solid #8a7b66;
+  border-top: none;
+  cursor: pointer;
+}
+
+.baph-task-widget-request-btn:hover,
+.baph-task-widget-request-btn:focus {
+  background: #beb09b;
+  outline: none;
+}
+
+.baph-task-widget-request-btn:active {
+  background: #b0a28a;
+}
+
+/* --- Player Request Overlay --- */
+.baph-request-overlay {
+  position: fixed;
+  z-index: 102;
+  width: 16rem;
+  background: #d1c6b4;
+  border: 1px solid #8a7b66;
+  box-shadow: 2px 3px 8px rgba(42, 35, 29, 0.35);
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.8em;
+  color: #2a231d;
+}
+
+/* Position variants — same horizontal anchors as .baph-task-builder */
+.baph-request-overlay-bottom-right { bottom: 11.5rem; right: 0.75rem; }
+.baph-request-overlay-bottom-left  { bottom: 11.5rem; left:  0.75rem; }
+.baph-request-overlay-top-right    { top:    11.5rem; right: 0.75rem; }
+.baph-request-overlay-top-left     { top:    11.5rem; left:  0.75rem; }
+
+/* --- Request overlay header --- */
+.baph-request-overlay-header {
+  padding: 0.2rem 0.5rem;
+  background: #beb09b;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.82em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #2a231d;
+  border-bottom: 1px solid #8a7b66;
+}
+
+/* --- Info / status text --- */
+.baph-request-overlay-info {
+  padding: 0.2rem 0.5rem 0.3rem;
+  font-family: "Alegreya", "Georgia", serif;
+  font-size: 0.8em;
+  color: #5e5246;
+  font-style: italic;
+}
+
+/* --- Textarea for player description --- */
+.baph-request-textarea {
+  resize: vertical;
+  min-height: 3.5rem;
+}
+
+/* --- GM Approval Modal --- */
+.baph-gm-approval {
+  position: fixed;
+  z-index: 102;
+  width: 18rem;
+  background: #d1c6b4;
+  border: 1px solid #8a7b66;
+  box-shadow: 2px 3px 8px rgba(42, 35, 29, 0.35);
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.8em;
+  color: #2a231d;
+}
+
+/* Position variants — same horizontal anchors as .baph-task-builder */
+.baph-gm-approval-bottom-right { bottom: 11.5rem; right: 0.75rem; }
+.baph-gm-approval-bottom-left  { bottom: 11.5rem; left:  0.75rem; }
+.baph-gm-approval-top-right    { top:    11.5rem; right: 0.75rem; }
+.baph-gm-approval-top-left     { top:    11.5rem; left:  0.75rem; }
+
+/* --- GM modal header --- */
+.baph-gm-approval-header {
+  padding: 0.2rem 0.5rem;
+  background: #beb09b;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.82em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #2a231d;
+  border-bottom: 1px solid #8a7b66;
+}
+
+/* --- Read-only request details block --- */
+.baph-gm-approval-details {
+  padding: 0.25rem 0.5rem 0;
+}
+
+.baph-gm-approval-detail-row {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.1rem 0;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.8em;
+}
+
+.baph-gm-approval-detail-label {
+  color: #5e5246;
+  white-space: nowrap;
+}
+
+.baph-gm-approval-detail-value {
+  color: #2a231d;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+/* --- Player description text block --- */
+.baph-gm-approval-description {
+  padding: 0.15rem 0 0.3rem;
+  font-family: "Alegreya", "Georgia", serif;
+  font-size: 0.85em;
+  color: #2a231d;
+  font-style: italic;
+  word-break: break-word;
+}
+
+/* --- GM-only section divider --- */
+.baph-gm-approval-divider {
+  padding: 0.2rem 0.5rem;
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 0.72em;
+  color: #5e5246;
+  border-top: 1px solid #8a7b66;
+  margin-top: 0.15rem;
+}
+
+/* --- Rounds + Roll button inline row --- */
+.baph-gm-approval-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.5rem 0.25rem;
+}
+
+/* --- Roll dice button --- */
+.baph-gm-approval-roll-btn {
+  padding: 0.18rem 0.5rem;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.78em;
+  color: #9e7d43;
+  background: #d1c6b4;
+  border: 1px solid #8a7b66;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.baph-gm-approval-roll-btn:hover,
+.baph-gm-approval-roll-btn:focus {
+  background: #beb09b;
+  outline: none;
+}
+
+.baph-gm-approval-roll-btn:active {
+  background: #b0a28a;
+}
+
+/* ============================================================
    END OF FILE — baphomet-utils noir-theme.css v2.5.1
    "The Ink Holds"
    ============================================================ */

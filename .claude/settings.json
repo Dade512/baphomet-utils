@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit(/module.json)",
+      "Edit(/README.md)",
+      "Edit(/DEV_NOTES.md)",
+      "Edit(/scripts/**)",
+      "Edit(/styles/**)",
+      "Edit(/templates/**)",
+      "Edit(/lang/**)",
+      "Edit(/tools/**)",
+      "Edit(/docs/**)",
+      "Edit(/.claude/**)",
+      "Edit(/SERVER_TESTING_CHECKLIST.md)",
+      "Edit(/RUNTIME_VERIFICATION_REQUIRED.md)",
+      "Edit(/_goal_aborted.md)",
+      "Write(/SERVER_TESTING_CHECKLIST.md)",
+      "Write(/RUNTIME_VERIFICATION_REQUIRED.md)",
+      "Write(/_goal_aborted.md)",
+      "Bash(node tools/validate.mjs)",
+      "Bash(node tools/validate.mjs --incremental)"
+    ],
+    "deny": [
+      "Read(//**/.env)",
+      "Read(//**/.env.*)",
+      "Read(//**/secrets/**)",
+      "Edit(//**/.env)",
+      "Edit(//**/.env.*)",
+      "Edit(//**/secrets/**)",
+      "Write(//**/.env)",
+      "Write(//**/.env.*)",
+      "Write(//**/secrets/**)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "node \"$env:CLAUDE_PROJECT_DIR/tools/validate.mjs\" --incremental; if ($LASTEXITCODE -ne 0) { Write-Error 'Incremental validation failed. Fix validator failures before stopping.'; exit 2 }",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

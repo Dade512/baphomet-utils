@@ -1,0 +1,6 @@
+﻿desktop.ini
+.DS_Store
+*.bat
+_run_validator.bat
+_validator_*.txt
+_goal_aborted.md

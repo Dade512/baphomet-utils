@@ -354,3 +354,533 @@
   left: 2rem;
   top: 5rem;
 }
+
+/* ============================================================
+   TASK PROGRESS WIDGET — v2.17.0
+   Read-only companion display for the active combatant's task.
+   Shares the Croaker's Ledger aesthetic with the action panel.
+
+   Position variants place the widget directly above the action
+   panel (for bottom-* variants) or below it (for top-* variants).
+   Vertical offset: panel base (5rem) + approx panel height (~6rem)
+   + gap (0.5rem) = 11.5rem. Documented here so future panel
+   height changes can be reconciled easily.
+   ============================================================ */
+
+.baph-task-widget {
+  position: fixed;
+  z-index: 100;
+  width: 12.5rem;
+  border: 1.5px solid #9e7d43;
+  border-radius: 3px;
+  background: #d1c6b4;
+  box-shadow: 0 2px 6px rgba(42, 35, 29, 0.45),
+              inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+}
+
+/* --- Widget header label ---
+   Matches .baph-action-panel-header exactly. */
+.baph-task-widget-header {
+  padding: 0.2rem 0.5rem;
+  background: #beb09b;
+  border-bottom: 1px solid #9e7d43;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #2a231d;
+}
+
+/* --- Task name row ---
+   Alegreya for body text per Croaker's Ledger typography rules. */
+.baph-task-widget-name {
+  padding: 0.3rem 0.5rem 0.15rem;
+  font-family: "Alegreya", "Georgia", serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #2a231d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid rgba(158, 125, 67, 0.25);
+}
+
+/* --- Progress line ---
+   IBM Plex Mono for mechanical values per Croaker's Ledger rules.
+   Muted — informational, not interactive. */
+.baph-task-widget-progress {
+  padding: 0.2rem 0.5rem 0.25rem;
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 0.7rem;
+  color: #5e5246;
+}
+
+/* --- Ready-to-resolve state ---
+   Brass accent to distinguish from the muted default. */
+.baph-task-widget-progress.baph-task-widget-ready {
+  color: #6b5c3e;
+  font-weight: 600;
+}
+
+/* --- Continue Task button (v2.17.1) ---
+   Full-width tactical button below the progress line.
+   Visible only to the controlling user on unresolved tasks.
+   Matches the action panel's spend-button typography and hover. */
+.baph-task-widget-continue-btn {
+  display: block;
+  width: 100%;
+  padding: 0.28rem 0.5rem;
+  border: none;
+  border-top: 1px solid rgba(158, 125, 67, 0.3);
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #2a231d;
+  text-align: center;
+  transition: background 0.06s ease;
+}
+
+.baph-task-widget-continue-btn:hover,
+.baph-task-widget-continue-btn:focus {
+  background: #beb09b;
+  outline: none;
+}
+
+.baph-task-widget-continue-btn:active {
+  background: #b0a28a;
+}
+
+/* --- Resolve Task button ---
+   Shown when task.readyToResolve is true and user controls combatant.
+   Uses brass accent text (#6b5c3e) to visually match the 'Ready to resolve'
+   state label and signal this is the final task action. */
+.baph-task-widget-resolve-btn {
+  display: block;
+  width: 100%;
+  padding: 0.28rem 0.5rem;
+  border: none;
+  border-top: 1px solid rgba(158, 125, 67, 0.5);
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b5c3e;
+  text-align: center;
+  transition: background 0.06s ease;
+}
+
+.baph-task-widget-resolve-btn:hover,
+.baph-task-widget-resolve-btn:focus {
+  background: #beb09b;
+  color: #2a231d;
+  outline: none;
+}
+
+.baph-task-widget-resolve-btn:active {
+  background: #b0a28a;
+}
+
+/* --- Position variants ---
+   Same horizontal offsets as .baph-action-panel-* variants. */
+.baph-task-widget-bottom-right {
+  right: 380px;
+  bottom: 11.5rem;
+}
+
+.baph-task-widget-bottom-left {
+  left: 2rem;
+  bottom: 11.5rem;
+}
+
+.baph-task-widget-top-right {
+  right: 380px;
+  top: 11.5rem;
+}
+
+.baph-task-widget-top-left {
+  left: 2rem;
+  top: 11.5rem;
+}
+
+/* --- Pending aid display ---
+   Shown inside the task widget when queued assistance is present.
+   Uses brass accent to signal active tactical state. */
+.baph-task-widget-aid-queued {
+  padding: 0.15rem 0.5rem 0.2rem;
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #9e7d43;
+  border-top: 1px solid rgba(158, 125, 67, 0.35);
+}
+
+/* --- Abandon Task button ---
+   Destructive secondary action. Dried-blood accent signals intent.
+   Kept muted so it does not compete with Continue/Resolve. */
+.baph-task-widget-abandon-btn {
+  display: block;
+  width: 100%;
+  padding: 0.22rem 0.5rem;
+  border: none;
+  border-top: 1px solid rgba(110, 42, 34, 0.35);
+  background: transparent;
+  cursor: pointer;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6e2a22;
+  text-align: center;
+  transition: background 0.06s ease;
+}
+
+.baph-task-widget-abandon-btn:hover,
+.baph-task-widget-abandon-btn:focus {
+  background: rgba(110, 42, 34, 0.12);
+  outline: none;
+}
+
+.baph-task-widget-abandon-btn:active {
+  background: rgba(110, 42, 34, 0.22);
+}
+
+/* ============================================================
+   GM TASK WIDGET — BEGIN TASK BUTTON — v2.19.0
+   Shown inside the task widget when no active task exists.
+   GM-only. Triggers the builder overlay.
+   ============================================================ */
+
+.baph-task-widget-begin-btn {
+  display: block;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  background: transparent;
+  border: none;
+  border-top: 1px solid rgba(158, 125, 67, 0.35);
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9e7d43;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.06s ease;
+}
+
+.baph-task-widget-begin-btn:hover,
+.baph-task-widget-begin-btn:focus {
+  background: #beb09b;
+  outline: none;
+}
+
+.baph-task-widget-begin-btn:active {
+  background: #b0a28a;
+}
+
+/* ============================================================
+   GM TASK BUILDER OVERLAY — v2.19.0
+   Compact form overlay for initiating a supported Disable Device
+   multi-round task. Positioned identically to the task widget.
+   z-index: 101 (above task widget and aid panel at 100).
+   ============================================================ */
+
+.baph-task-builder {
+  position: fixed;
+  z-index: 101;
+  width: 14rem;
+  background: #d1c6b4;
+  border: 1px solid #9e7d43;
+  border-radius: 2px;
+  box-shadow: 1px 1px 6px rgba(0, 0, 0, 0.4);
+  font-size: 0.78rem;
+  color: #2a231d;
+}
+
+/* --- Position variants --- same bottom offsets as task widget --- */
+.baph-task-builder-bottom-right {
+  bottom: 11.5rem;
+  right: 0.75rem;
+}
+
+.baph-task-builder-bottom-left {
+  bottom: 11.5rem;
+  left: 0.75rem;
+}
+
+.baph-task-builder-top-right {
+  top: 11.5rem;
+  right: 0.75rem;
+}
+
+.baph-task-builder-top-left {
+  top: 11.5rem;
+  left: 0.75rem;
+}
+
+/* --- Header --- */
+.baph-task-builder-header {
+  padding: 0.2rem 0.5rem;
+  background: #beb09b;
+  border-bottom: 1px solid #9e7d43;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #2a231d;
+}
+
+/* --- Read-only skill line --- */
+.baph-task-builder-skill-line {
+  padding: 0.2rem 0.5rem 0.1rem;
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 0.66rem;
+  color: #6b5c3e;
+}
+
+/* --- Field labels --- */
+.baph-task-builder-field-label {
+  display: block;
+  padding: 0.25rem 0.5rem 0.05rem;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #5e5246;
+}
+
+/* --- Text inputs --- */
+.baph-task-builder-input {
+  display: block;
+  width: calc(100% - 1rem);
+  margin: 0 0.5rem 0.1rem;
+  padding: 0.2rem 0.35rem;
+  background: #e8e0d0;
+  border: 1px solid #9e7d43;
+  border-radius: 1px;
+  font-family: "Alegreya", "Georgia", serif;
+  font-size: 0.76rem;
+  color: #2a231d;
+  box-sizing: border-box;
+}
+
+.baph-task-builder-input:focus {
+  outline: 1px solid #9e7d43;
+  background: #f0ead8;
+}
+
+/* --- Number inputs --- */
+.baph-task-builder-input-num {
+  width: 5rem;
+}
+
+/* --- Select inputs --- */
+.baph-task-builder-select {
+  display: block;
+  width: calc(100% - 1rem);
+  margin: 0 0.5rem 0.1rem;
+  padding: 0.2rem 0.35rem;
+  background: #e8e0d0;
+  border: 1px solid #9e7d43;
+  border-radius: 1px;
+  font-family: "Alegreya", "Georgia", serif;
+  font-size: 0.76rem;
+  color: #2a231d;
+  box-sizing: border-box;
+}
+
+.baph-task-builder-select:focus {
+  outline: 1px solid #9e7d43;
+}
+
+/* --- Manual rounds group --- hidden/shown via JS --- */
+.baph-task-builder-manual-group {
+  /* toggled via inline style.display */
+}
+
+/* --- Button row --- */
+.baph-task-builder-btn-row {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.35rem 0.5rem 0.4rem;
+  border-top: 1px solid rgba(158, 125, 67, 0.35);
+  margin-top: 0.2rem;
+}
+
+/* --- Shared button base --- */
+.baph-task-builder-btn {
+  flex: 1;
+  padding: 0.22rem 0.4rem;
+  background: transparent;
+  border: 1px solid rgba(158, 125, 67, 0.5);
+  border-radius: 1px;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.06s ease;
+}
+
+/* --- Confirm button (brass accent) --- */
+.baph-task-builder-btn-confirm {
+  color: #9e7d43;
+}
+
+.baph-task-builder-btn-confirm:hover,
+.baph-task-builder-btn-confirm:focus {
+  background: #beb09b;
+  outline: none;
+}
+
+.baph-task-builder-btn-confirm:active {
+  background: #b0a28a;
+}
+
+/* --- Cancel button (muted) --- */
+.baph-task-builder-btn-cancel {
+  color: #5e5246;
+}
+
+.baph-task-builder-btn-cancel:hover,
+.baph-task-builder-btn-cancel:focus {
+  background: #beb09b;
+  outline: none;
+}
+
+.baph-task-builder-btn-cancel:active {
+  background: #b0a28a;
+}
+
+/* ============================================================
+   AID TASK PANEL — v2.18.0
+   Compact floating panel showing allied ready-to-resolve tasks
+   the active combatant can aid. Positioned above the task widget.
+   ============================================================ */
+
+/* --- Panel container --- */
+.baph-aid-panel {
+  position: fixed;
+  z-index: 100;
+  width: 14rem;
+  background: #d1c6b4;
+  border: 1px solid #9e7d43;
+  border-radius: 2px;
+  box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.35);
+  font-size: 0.78rem;
+  color: #2a231d;
+}
+
+/* --- Panel header --- */
+.baph-aid-panel-header {
+  padding: 0.2rem 0.5rem;
+  background: #beb09b;
+  border-bottom: 1px solid #9e7d43;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #2a231d;
+}
+
+/* --- Target row --- */
+.baph-aid-panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25rem 0.5rem;
+  border-top: 1px solid rgba(158, 125, 67, 0.3);
+  gap: 0.4rem;
+}
+
+.baph-aid-panel-row:first-of-type {
+  border-top: none;
+}
+
+/* --- Target label (actor — task name) --- */
+.baph-aid-panel-label {
+  font-family: "Alegreya", "Georgia", serif;
+  font-size: 0.74rem;
+  color: #2a231d;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Already-aided note --- */
+.baph-aid-panel-aided {
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 0.64rem;
+  color: #5e5246;
+  flex-shrink: 0;
+}
+
+/* --- Aid button --- */
+.baph-aid-panel-btn {
+  flex-shrink: 0;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid rgba(158, 125, 67, 0.5);
+  background: transparent;
+  cursor: pointer;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b5c3e;
+  transition: background 0.06s ease;
+}
+
+.baph-aid-panel-btn:hover,
+.baph-aid-panel-btn:focus {
+  background: #beb09b;
+  color: #2a231d;
+  outline: none;
+}
+
+.baph-aid-panel-btn:active {
+  background: #b0a28a;
+}
+
+/* --- Position variants ---
+   Positioned above the task widget (task widget bottom: 11.5rem,
+   typical height ~8rem, so aid panel at bottom: 20rem clears it).
+   Adjust at runtime if widget heights differ in your layout. */
+.baph-aid-panel-bottom-right {
+  right: 380px;
+  bottom: 20rem;
+}
+
+.baph-aid-panel-bottom-left {
+  left: 2rem;
+  bottom: 20rem;
+}
+
+.baph-aid-panel-top-right {
+  right: 380px;
+  top: 20rem;
+}
+
+.baph-aid-panel-top-left {
+  left: 2rem;
+  top: 20rem;
+}
