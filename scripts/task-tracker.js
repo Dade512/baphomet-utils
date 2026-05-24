@@ -870,7 +870,7 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
         `adjudicate SUCCESS — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: +${diff})`
       );
-      console.log(
+      console.debug(
         `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate SUCCESS — ` +
         `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
       );
@@ -883,7 +883,7 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
         `adjudicate MINOR FAILURE — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
       );
-      console.log(
+      console.debug(
         `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate MINOR FAILURE — ` +
         `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
       );
@@ -899,7 +899,7 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
         `adjudicate CATASTROPHIC FAILURE — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
       );
-      console.log(
+      console.debug(
         `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate CATASTROPHIC FAILURE — ` +
         `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
       );
