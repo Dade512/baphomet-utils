@@ -259,7 +259,7 @@ function _baphTaskRebuildCache() {
   _baphTaskDebugLog(
     `cache rebuilt — ${_baphTaskCache.size} combatant(s) indexed`
   );
-  console.log(
+  console.debug(
     `${BAPH_TASK_MODULE_ID} | task-tracker: cache rebuilt — ` +
     `${_baphTaskCache.size} combatant(s) indexed`
   );
@@ -377,7 +377,7 @@ async function _baphTaskCreate(combatantOrId, options = {}) {
     `createTask: created "${taskName}" (${taskId}) on ${combatant.actor.name}, ` +
     `requires ${roundsRequired} round(s), hiddenDataOwner=${game.user.id}`
   );
-  console.log(
+  console.debug(
     `${BAPH_TASK_MODULE_ID} | task-tracker: created task "${taskName}" ` +
     `(${taskId}) on ${combatant.actor.name}`
   );
@@ -610,7 +610,7 @@ async function _baphTaskCommit(combatantOrId, taskId) {
           `commitAction: "${task.taskName}" is ready to resolve ` +
           `(${task.roundsCommitted}/${hidden.roundsRequired} rounds)`
         );
-        console.log(
+        console.debug(
           `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
           `"${task.taskName}" is ready to resolve`
         );
@@ -1606,7 +1606,7 @@ async function _baphTaskInitiate(combatantOrId, options = {}) {
     `roundsRequired=${roundsRequired}, readyToResolve=${readyToResolve}, ` +
     `hiddenDC=${dc}, hiddenDataOwner=${game.user.id}`
   );
-  console.log(
+  console.debug(
     `${BAPH_TASK_MODULE_ID} | task-tracker: initiated task "${trimmedName}" ` +
     `(${taskId}) on ${combatant.actor.name}`
   );
@@ -1676,7 +1676,7 @@ Hooks.on('deleteCombat', async (combat, options, userId) => {
     _baphTaskDebugLog(
       `deleteCombat: paused ${pausedCount} active task(s) with reason 'combat-ended'`
     );
-    console.log(
+    console.debug(
       `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
       `paused ${pausedCount} active task(s) on combat end`
     );
@@ -1686,7 +1686,7 @@ Hooks.on('deleteCombat', async (combat, options, userId) => {
     );
   } else {
     _baphTaskDebugLog('deleteCombat: no active tasks to pause; cache cleared');
-    console.log(
+    console.debug(
       `${BAPH_TASK_MODULE_ID} | task-tracker: no active tasks to pause; cache cleared`
     );
   }
@@ -2223,7 +2223,7 @@ Hooks.once('pf1PostReady', () => {
           `socket readinessCheck: "${rcTask.taskName}" is ready to resolve ` +
           `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
         );
-        console.log(
+        console.debug(
           `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
           `socket readinessCheck — "${rcTask.taskName}" is ready to resolve ` +
           `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`

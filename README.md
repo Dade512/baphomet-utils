@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.20.3
+**Current Version:** 2.20.4
 
 ---
 
@@ -110,6 +110,14 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.20.4 — Task Diagnostic Log Cleanup
+
+Quiets remaining paired task-tracker diagnostic console noise. No mechanical changes — chat output, task state, task authority, sockets, hidden DC handling, actor flags, action economy, and PF1.5 mechanics are unchanged.
+
+- **Diagnostic log levels:** The seven remaining paired `console.log` calls in `scripts/task-tracker.js` (cache rebuild, createTask, commitAction ready-to-resolve, initiateTask, combat-end pause/no-active-task paths, and socket readinessCheck) now emit at `console.debug` instead of `console.log`. Visible at Verbose console level; quiet at default Info verbosity.
+- **Continues the pattern** proven in Pilots 06 (v2.20.2 API-ready message) and 12 (v2.20.3 adjudicate outcomes).
+- **No user-facing changes:** Chat output, button behavior, task state, adjudication outcomes, and all mechanics are identical to v2.20.3.
 
 ### v2.20.3 — Task Adjudicate Diagnostic Log Levels
 
