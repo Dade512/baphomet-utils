@@ -898,3 +898,17 @@
   left: 2rem;
   top: 20rem;
 }
+
+/* Keyboard focus ring for module-owned action/task/aid buttons.
+   :focus-visible limits this to keyboard and programmatic focus;
+   mouse clicks remain outline-free (complementing the existing
+   :focus { outline: none } hover-state rules above). */
+.baph-action-spend-btn:focus-visible,
+.baph-task-widget-continue-btn:focus-visible,
+.baph-task-widget-resolve-btn:focus-visible,
+.baph-task-widget-abandon-btn:focus-visible,
+.baph-task-widget-begin-btn:focus-visible,
+.baph-aid-panel-btn:focus-visible {
+  outline: 2px solid var(--baph-brass, #9e7d43);
+  outline-offset: 2px;
+}
