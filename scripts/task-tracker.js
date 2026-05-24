@@ -870,7 +870,7 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
         `adjudicate SUCCESS — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: +${diff})`
       );
-      console.log(
+      console.debug(
         `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate SUCCESS — ` +
         `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
       );
@@ -878,14 +878,12 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
       // task.status and task.readyToResolve unchanged — stays ready to retry.
       chatContent =
         `<p><strong>Minor Failure</strong> — <strong>${actorName}</strong> does not complete ` +
-        `<em>${taskName}</em>.</p>` +
-        `<p>The task is not complete and remains ready. ` +
-        `Resolve may be retried next round.</p>`;
+        `<em>${taskName}</em>. The task remains ready; Resolve may be retried next round.</p>`;
       _baphTaskDebugLog(
         `adjudicate MINOR FAILURE — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
       );
-      console.log(
+      console.debug(
         `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate MINOR FAILURE — ` +
         `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
       );
@@ -901,7 +899,7 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
         `adjudicate CATASTROPHIC FAILURE — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
       );
-      console.log(
+      console.debug(
         `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate CATASTROPHIC FAILURE — ` +
         `"${taskName}" on ${actorName} (roll ${rollTotal}, DC ${dc})`
       );
@@ -2252,5 +2250,5 @@ Hooks.once('pf1PostReady', () => {
     aidTask:      _baphTaskAid,
   };
 
-  console.log(`${BAPH_TASK_MODULE_ID} | task-tracker v1.0: game.baphometTasks API ready`);
+  console.debug(`${BAPH_TASK_MODULE_ID} | task-tracker v1.0: game.baphometTasks API ready`);
 });

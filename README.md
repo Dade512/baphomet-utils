@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.20.2
+**Current Version:** 2.20.3
 
 ---
 
@@ -110,6 +110,13 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.20.3 — Task Adjudicate Diagnostic Log Levels
+
+Quiets routine task adjudication console noise. No mechanical changes — chat output, task state, and adjudication thresholds are unchanged.
+
+- **Diagnostic log levels:** The three Resolve Task adjudication outcome diagnostics (success, minor failure, catastrophic failure) now emit at `console.debug` instead of `console.log`. Visible at Verbose console level; quiet at default Info verbosity.
+- **No user-facing changes:** Chat output, button behavior, retry rules, aid handling, and adjudication outcome thresholds are identical to v2.20.2.
 
 ### v2.20.2 — Minor-Failure UX Clarity
 
