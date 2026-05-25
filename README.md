@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.20.4
+**Current Version:** 2.20.5
 
 ---
 
@@ -110,6 +110,15 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.20.5 — Resolve Result Chat Consistency
+
+Improves chat output clarity for Resolve Task outcomes. No mechanical changes — outcome thresholds, roll math, aid bonuses, task state, sockets, hidden DC, and action economy are unchanged.
+
+- **Chat format — Success:** Now reads `Success — [Actor] completes [Task].` (single paragraph, outcome label leading). Previously emitted two paragraphs with a redundant "Result: Success." line.
+- **Chat format — Catastrophic Failure:** Now reads `Catastrophic Failure — [Actor] fails [Task].` with the GM instruction on a separate line. Outcome label leads; "Result:" prefix removed.
+- **Minor Failure:** Unchanged — already uses the single-paragraph format from v2.20.2.
+- **No mechanical changes:** Outcome classification, retry rules, aid handling, task state, and all PF1.5 mechanics are identical to v2.20.4.
 
 ### v2.20.4 — Task Diagnostic Log Cleanup
 

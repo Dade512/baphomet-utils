@@ -863,9 +863,8 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
       task.status        = 'resolved';
       task.readyToResolve = false;
       chatContent =
-        `<p><strong>${actorName}</strong> successfully resolves ` +
-        `<em>${taskName}</em>.</p>` +
-        `<p>Result: <strong>Success.</strong></p>`;
+        `<p><strong>Success</strong> — <strong>${actorName}</strong> completes ` +
+        `<em>${taskName}</em>.</p>`;
       _baphTaskDebugLog(
         `adjudicate SUCCESS — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: +${diff})`
@@ -891,10 +890,9 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
       task.status        = 'resolved';
       task.readyToResolve = false;
       chatContent =
-        `<p><strong>${actorName}</strong> catastrophically fails ` +
+        `<p><strong>Catastrophic Failure</strong> — <strong>${actorName}</strong> fails ` +
         `<em>${taskName}</em>.</p>` +
-        `<p>Result: <strong>Catastrophic Failure</strong> — GM: apply trap ` +
-        `consequence manually where appropriate.</p>`;
+        `<p>GM: apply trap consequence manually where appropriate.</p>`;
       _baphTaskDebugLog(
         `adjudicate CATASTROPHIC FAILURE — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
