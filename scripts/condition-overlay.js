@@ -754,13 +754,13 @@ const _decrementProcessed = new Set();
 async function _handleAutoDecrement(combat, priorCombatantId, source) {
   if (!game.user.isGM) return;
   if (!priorCombatantId) {
-    console.log(`${MODULE_ID} | Auto-decrement (${source}): no prior combatant ID, skipping`);
+    console.debug(`${MODULE_ID} | Auto-decrement (${source}): no prior combatant ID, skipping`);
     return;
   }
 
   const dedupeKey = `${combat.id}-${combat.round}-${combat.turn}-${priorCombatantId}`;
   if (_decrementProcessed.has(dedupeKey)) {
-    console.log(`${MODULE_ID} | Auto-decrement (${source}): already processed ${dedupeKey}, skipping duplicate`);
+    console.debug(`${MODULE_ID} | Auto-decrement (${source}): already processed ${dedupeKey}, skipping duplicate`);
     return;
   }
   _decrementProcessed.add(dedupeKey);
@@ -772,12 +772,12 @@ async function _handleAutoDecrement(combat, priorCombatantId, source) {
 
   const combatant = combat.combatants.get(priorCombatantId);
   if (!combatant?.actor) {
-    console.log(`${MODULE_ID} | Auto-decrement (${source}): combatant ${priorCombatantId} has no actor`);
+    console.debug(`${MODULE_ID} | Auto-decrement (${source}): combatant ${priorCombatantId} has no actor`);
     return;
   }
 
   const actor = combatant.actor;
-  console.log(`${MODULE_ID} | Auto-decrement (${source}): processing end-of-turn for ${actor.name}`);
+  console.debug(`${MODULE_ID} | Auto-decrement (${source}): processing end-of-turn for ${actor.name}`);
 
   let decremented = false;
   for (const [key, cond] of Object.entries(CONDITIONS)) {
@@ -788,14 +788,14 @@ async function _handleAutoDecrement(combat, priorCombatantId, source) {
     
     const currentTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
     if (currentTier > 0) {
-      console.log(`${MODULE_ID} | Auto-decrement: ${actor.name} ${cond.name} ${currentTier} → ${currentTier - 1}`);
+      console.debug(`${MODULE_ID} | Auto-decrement: ${actor.name} ${cond.name} ${currentTier} → ${currentTier - 1}`);
       await adjustCondition(actor, key, -1);
       decremented = true;
     }
   }
 
   if (!decremented) {
-    console.log(`${MODULE_ID} | Auto-decrement (${source}): ${actor.name} has no auto-decrement conditions active`);
+    console.debug(`${MODULE_ID} | Auto-decrement (${source}): ${actor.name} has no auto-decrement conditions active`);
   }
 }
 
@@ -814,21 +814,21 @@ function _getPriorCombatantId(combat, updateData) {
 }
 
 Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
-  console.log(`${MODULE_ID} | Hook fired: pf1PostTurnChange`, { prior, current });
+  console.debug(`${MODULE_ID} | Hook fired: pf1PostTurnChange`, { prior, current });
   
   const priorId = prior?.combatantId ?? prior?.id ?? prior?.combatant?.id ?? null;
   _handleAutoDecrement(combat, priorId, 'pf1PostTurnChange');
 });
 
 Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
-  console.log(`${MODULE_ID} | Hook fired: combatTurn`, { turn: combat.current?.turn, round: combat.current?.round });
+  console.debug(`${MODULE_ID} | Hook fired: combatTurn`, { turn: combat.current?.turn, round: combat.current?.round });
   
   const priorId = _getPriorCombatantId(combat, updateData);
   _handleAutoDecrement(combat, priorId, 'combatTurn');
 });
 
 Hooks.on('combatRound', (combat, updateData, updateOptions) => {
-  console.log(`${MODULE_ID} | Hook fired: combatRound`, { turn: combat.current?.turn, round: combat.current?.round });
+  console.debug(`${MODULE_ID} | Hook fired: combatRound`, { turn: combat.current?.turn, round: combat.current?.round });
 
   // v2.7: guard against transient undefined combat.turns.
   const turns = combat?.turns;

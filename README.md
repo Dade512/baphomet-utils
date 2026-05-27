@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.20.5
+**Current Version:** 2.20.6
 
 ---
 
@@ -110,6 +110,14 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.20.6 — Condition Overlay Diagnostic Cleanup
+
+Quiets routine condition-overlay diagnostics by moving per-turn condition logging from `console.log` to `console.debug`. No condition behavior, mechanics, user-facing text, API/schema, hooks, or CSS changed.
+
+- **Diagnostic log levels:** Converted 9 routine per-turn condition overlay diagnostic logs (`_handleAutoDecrement` guard/processing/decrement paths and three combat hook fired messages) to `console.debug`. Visible at Verbose console level; silent at default Info verbosity.
+- **Preserved:** Init/API `console.log` banners (lines 641, 668–671) and the existing `console.warn` (Token HUD column guard) are unchanged.
+- **No mechanical or user-facing changes:** Condition application, removal, auto-decrement behavior, hook registration, actor flags, settings, UI rendering, CSS, and all PF1.5 mechanics are identical to v2.20.5.
 
 ### v2.20.5 — Resolve Result Chat Consistency
 
