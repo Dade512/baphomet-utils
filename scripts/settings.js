@@ -1,6 +1,27 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.7
+   BAPHOMET UTILS — SETTINGS v1.8
    Central module settings registration.
+
+   v1.8 (module v2.20.8 — "Background Skills Settings Foundation"):
+   - backgroundSkillsEnabled registered. World scope, default false.
+     Master toggle for Background Skills tracking mode (OFF by default).
+     Advisory only — does NOT enable PF1 native Background Skills
+     (use pf1.allowBackgroundSkills in PF1 Variant Rules for that).
+   - backgroundSkillKeys registered. World scope, CSV string.
+     GM-editable list of PF1 skill keys treated as background skills.
+     Default: all 13 native PF1 background-skill keys
+     (apr,art,crf,han,ken,kge,khi,kno,lin,lor,prf,pro,slt).
+     Artistry (art) and Lore (lor) are native PF1 background-only
+     arbitrary skills (pf1.config.backgroundOnlySkills — Pilot 36);
+     their sub-skill actor data paths are UNVERIFIED.
+     Phase B registers them but does not read actors.
+   - backgroundBudgetLevel1 registered. World scope, default 4.
+     Background rank budget at level 1 (campaign deviation from RAW 2).
+   - backgroundBudgetPerLevel registered. World scope, default 2.
+     Background rank budget per level after level 1 (matches RAW).
+   - backgroundSkillKeysMigrated228 migration flag registered.
+     One-time correction from the Pilot 35 provisional default
+     (per→prf, art/lor added). Runs once on GM ready.
 
    v1.7 (module v2.15.0 — "Disable Device Task Prep"):
    - skillAutoAllowlist default updated: dev removed.
@@ -213,7 +234,62 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.7 registered`);
+  /* ----------------------------------------------------------
+     BACKGROUND SKILLS — SETTINGS FOUNDATION (v2.20.8)
+
+     Four world settings for the Background Skills optional system
+     (Pathfinder Unchained / PF1.5). Advisory/tracking only in MVP:
+     no actor reads, no actor writes, no enforcement, no migration.
+
+     Artistry (art) and Lore (lor) are native PF1 background-only
+     arbitrary skills (pf1.config.backgroundOnlySkills — Pilot 36).
+     Their sub-skill actor data paths are UNVERIFIED; Phase B registers
+     them in the key list but does not read actors.
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'backgroundSkillsEnabled', {
+    name: 'Background Skills Mode',
+    hint: 'Enables the baphomet-utils Background Skills budget tracker for this world. Advisory layer only — does NOT enable PF1 native Background Skills (use the PF1 system Variant Rules setting pf1.allowBackgroundSkills for that). When active, budget settings below apply. Enable alongside pf1.allowBackgroundSkills to track the campaign level-1 deviation (4 ranks at level 1 instead of PF1 native 2). Default OFF.',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(SETTINGS_MODULE_ID, 'backgroundSkillKeys', {
+    name: 'Background Skill Keys',
+    hint: 'Comma-separated PF1 skill keys treated as background skills. Default: all 13 native PF1 background-skill keys (apr, art, crf, han, ken, kge, khi, kno, lin, lor, prf, pro, slt). Artistry (art) and Lore (lor) are native PF1 background-only arbitrary skills — sub-skill actor data paths UNVERIFIED, Phase B does not read actors. Perception (per) is NOT a background skill.',
+    scope: 'world',
+    config: true,
+    type: String,
+    default: 'apr,art,crf,han,ken,kge,khi,kno,lin,lor,prf,pro,slt'
+  });
+
+  game.settings.register(SETTINGS_MODULE_ID, 'backgroundBudgetLevel1', {
+    name: 'Background Skill Budget — Level 1',
+    hint: 'Number of background skill ranks granted at level 1. Campaign default: 4 (RAW is 2). These ranks do not receive the Intelligence modifier.',
+    scope: 'world',
+    config: true,
+    type: Number,
+    default: 4
+  });
+
+  game.settings.register(SETTINGS_MODULE_ID, 'backgroundBudgetPerLevel', {
+    name: 'Background Skill Budget — Per Level',
+    hint: 'Number of background skill ranks granted per level after level 1. Default: 2 (matches RAW). These ranks do not receive the Intelligence modifier.',
+    scope: 'world',
+    config: true,
+    type: Number,
+    default: 2
+  });
+
+  game.settings.register(SETTINGS_MODULE_ID, 'backgroundSkillKeysMigrated228', {
+    scope: 'world',
+    config: false,
+    type: Boolean,
+    default: false
+  });
+
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.8 registered`);
 });
 
 /* ----------------------------------------------------------
@@ -334,4 +410,42 @@ Hooks.once('ready', async () => {
   }
 
   await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated215', true);
+});
+
+/* ----------------------------------------------------------
+   v2.20.8 MIGRATION — Background Skill Keys Correction
+
+   Runs once on the first GM ready after updating to v2.20.8.
+   Detects the Pilot 35 provisional default (per=Perception, no
+   art/lor) and replaces it with the corrected Pilot 37 default.
+
+   Safety: only replaces the exact Pilot 35 provisional string.
+   Any GM-customized backgroundSkillKeys is left completely untouched.
+   The migration flag (backgroundSkillKeysMigrated228) is written
+   regardless so this block never runs a second time.
+   ---------------------------------------------------------- */
+
+const _BG_KEYS_P35_DEFAULT = 'apr,crf,han,ken,kge,khi,kno,lin,per,pro,slt';
+const _BG_KEYS_P37_CORRECT = 'apr,art,crf,han,ken,kge,khi,kno,lin,lor,prf,pro,slt';
+
+Hooks.once('ready', async () => {
+  if (!game.user.isGM) return;
+
+  if (game.settings.get(SETTINGS_MODULE_ID, 'backgroundSkillKeysMigrated228')) return;
+
+  const current = game.settings.get(SETTINGS_MODULE_ID, 'backgroundSkillKeys');
+
+  if (current === _BG_KEYS_P35_DEFAULT) {
+    await game.settings.set(SETTINGS_MODULE_ID, 'backgroundSkillKeys', _BG_KEYS_P37_CORRECT);
+    console.log(
+      `%c ${SETTINGS_MODULE_ID} | v2.20.8 migration: backgroundSkillKeys corrected (per→prf; art,lor added) `,
+      'background: #6e2a22; color: #e8dfd0; font-weight: bold; padding: 2px 6px;'
+    );
+  } else {
+    console.log(
+      `${SETTINGS_MODULE_ID} | v2.20.8 migration: backgroundSkillKeys already customized — no change ("${current}")`
+    );
+  }
+
+  await game.settings.set(SETTINGS_MODULE_ID, 'backgroundSkillKeysMigrated228', true);
 });

@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.20.6
+**Current Version:** 2.20.8
 
 ---
 
@@ -110,6 +110,15 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.20.8 — Background Skills Settings Foundation
+
+Adds the settings foundation for PF1.5 Background Skills as a configurable, advisory world-level feature. This release registers Background Skills mode, the native PF1 background skill key list, and the campaign's rank budget settings. No actor data, skill ranks, enforcement, migrations, sheets, styles, or roll behavior are changed.
+
+- Added world settings for Background Skills Mode, Background Skill Keys, Level 1 budget, and Per-Level budget.
+- Corrected the native PF1 background skill list to include `art`, `lor`, and `prf`, and exclude `per`.
+- Preserves the PF1.5 campaign budget of 4 ranks at level 1 and 2 ranks per level.
+- Advisory/settings foundation only; no actor writes, no enforcement, no migration, and no UI beyond Foundry settings.
 
 ### v2.20.6 — Condition Overlay Diagnostic Cleanup
 
