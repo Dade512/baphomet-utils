@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.20.8
+**Current Version:** 2.20.9
 
 ---
 
@@ -110,6 +110,14 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.20.9 — Background Skills Native Budget Alignment
+
+Realigns the Background Skills rank budget to **PF1 native math**. PF1 already computes background ranks as `HD × 2` (so a level-2 character correctly shows 4 available background ranks). This release retires the earlier "4 ranks at level 1" house-rule deviation and matches native behavior. Settings/metadata only — no actor data, skill ranks, enforcement, sheets, or roll behavior are changed.
+
+- `backgroundBudgetLevel1` default changed `4 → 2` to match PF1 native (`backgroundSkillsPerLevel = 2`).
+- Added a safe one-time **world-setting** migration: if `backgroundBudgetLevel1` is still the v2.20.8 default of `4`, it realigns to `2` on first GM ready; GM-customized values are left untouched. Touches the module's world setting only — never actor data.
+- Perception remains **not** a Background Skill; it is a class skill for everyone by table rule (manual player toggle, no automation).
 
 ### v2.20.8 — Background Skills Settings Foundation
 

@@ -1,6 +1,15 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.8
+   BAPHOMET UTILS — SETTINGS v1.9
    Central module settings registration.
+
+   v1.9 (module v2.20.9 — "Background Skills Native Budget Alignment"):
+   - backgroundBudgetLevel1 default changed 4 → 2 to match PF1 native
+     Background Skills math (HD × backgroundSkillsPerLevel = 2/level).
+     The earlier 4-at-level-1 house rule is retired.
+   - backgroundBudgetMigrated209 flag registered. One-time world-setting
+     migration: if backgroundBudgetLevel1 is still the v2.20.8 default 4,
+     set it to 2 on first GM ready. GM-customized values are untouched.
+     Touches the module world setting ONLY — never actor data.
 
    v1.8 (module v2.20.8 — "Background Skills Settings Foundation"):
    - backgroundSkillsEnabled registered. World scope, default false.
@@ -266,11 +275,11 @@ Hooks.once('init', () => {
 
   game.settings.register(SETTINGS_MODULE_ID, 'backgroundBudgetLevel1', {
     name: 'Background Skill Budget — Level 1',
-    hint: 'Number of background skill ranks granted at level 1. Campaign default: 4 (RAW is 2). These ranks do not receive the Intelligence modifier.',
+    hint: 'Background skill ranks granted at level 1. Default: 2 — matches PF1 native Background Skills math (HD × backgroundSkillsPerLevel, where backgroundSkillsPerLevel = 2). These ranks do not receive the Intelligence modifier. (v2.20.8 used 4 as a house-rule deviation; v2.20.9 realigns to PF1 native.)',
     scope: 'world',
     config: true,
     type: Number,
-    default: 4
+    default: 2
   });
 
   game.settings.register(SETTINGS_MODULE_ID, 'backgroundBudgetPerLevel', {
@@ -289,7 +298,14 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.8 registered`);
+  game.settings.register(SETTINGS_MODULE_ID, 'backgroundBudgetMigrated209', {
+    scope: 'world',
+    config: false,
+    type: Boolean,
+    default: false
+  });
+
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.9 registered`);
 });
 
 /* ----------------------------------------------------------
@@ -448,4 +464,43 @@ Hooks.once('ready', async () => {
   }
 
   await game.settings.set(SETTINGS_MODULE_ID, 'backgroundSkillKeysMigrated228', true);
+});
+
+/* ----------------------------------------------------------
+   v2.20.9 MIGRATION — Background Budget Native Alignment
+
+   Runs once on the first GM ready after updating to v2.20.9.
+   Detects the v2.20.8 default backgroundBudgetLevel1 = 4 and
+   realigns it to PF1 native 2 (HD × backgroundSkillsPerLevel).
+
+   Safety: only changes the value if it is still exactly the
+   v2.20.8 default (4). Any GM-customized value is left untouched.
+   This touches the module's own world setting ONLY — never actor
+   data. The migration flag (backgroundBudgetMigrated209) is written
+   regardless so this block never runs a second time.
+   ---------------------------------------------------------- */
+
+const _BG_BUDGET_L1_V228_DEFAULT = 4;
+const _BG_BUDGET_L1_NATIVE       = 2;
+
+Hooks.once('ready', async () => {
+  if (!game.user.isGM) return;
+
+  if (game.settings.get(SETTINGS_MODULE_ID, 'backgroundBudgetMigrated209')) return;
+
+  const current = game.settings.get(SETTINGS_MODULE_ID, 'backgroundBudgetLevel1');
+
+  if (current === _BG_BUDGET_L1_V228_DEFAULT) {
+    await game.settings.set(SETTINGS_MODULE_ID, 'backgroundBudgetLevel1', _BG_BUDGET_L1_NATIVE);
+    console.log(
+      `%c ${SETTINGS_MODULE_ID} | v2.20.9 migration: backgroundBudgetLevel1 realigned 4 → 2 (PF1 native) `,
+      'background: #6e2a22; color: #e8dfd0; font-weight: bold; padding: 2px 6px;'
+    );
+  } else {
+    console.log(
+      `${SETTINGS_MODULE_ID} | v2.20.9 migration: backgroundBudgetLevel1 already customized — no change ("${current}")`
+    );
+  }
+
+  await game.settings.set(SETTINGS_MODULE_ID, 'backgroundBudgetMigrated209', true);
 });
