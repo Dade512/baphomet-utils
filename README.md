@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.20.9
+**Current Version:** 2.21.0
 
 ---
 
@@ -110,6 +110,14 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.21.0 — Perception Class-Skill Audit Helper
+
+Adds a read-only GM helper for the PF1.5 table rule that **Perception is a class skill for everyone**. Call `game.baphometSkills.auditPerception()` (GM-only) to whisper yourself a summary of any character actors whose Perception class-skill box is unchecked, so you can fix them on the sheet manually. Read-only — no actor data is written, nothing is auto-toggled, and nothing is enforced.
+
+- New `game.baphometSkills.auditPerception()` API (GM-only, read-only): reports characters with Perception not set as a class skill (`system.skills.per.cs === false`).
+- Posts a GM-whispered chat summary and returns the result for macro use.
+- No actor writes, no automation, no enforcement.
 
 ### v2.20.9 — Background Skills Native Budget Alignment
 
