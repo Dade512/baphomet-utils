@@ -3409,8 +3409,14 @@ function _diagHandleAttackDialogRender(app, element) {
      MODULE DESIGN PATTERN — NOT NATIVE PF1
 
      Confirmed selector from v2.13.5 live diagnostics:
-       button[name="attack_full"]  → Full Attack button (remove)
-       button[name="attack_single"] → Single Attack button (leave)
+       button[name="attack_full"]   -> Full Attack button (remove only
+                                      when attack_single is also present)
+       button[name="attack_single"] -> Single Attack button (leave)
+
+     PF1 reuses name="attack_full" for the generic "Use" submit
+     button on non-attack spell/action dialogs. Save/template spells
+     such as Fireball and Burning Hands need that button to create
+     their normal chat card, so never remove attack_full by itself.
 
      Runs whenever pf15ModeEnabled is true, independent of
      debug logging. Fails silently if the setting is not yet
@@ -3418,8 +3424,9 @@ function _diagHandleAttackDialogRender(app, element) {
      ---------------------------------------------------------- */
   try {
     if (game.settings.get?.(AT_MODULE_ID, 'pf15ModeEnabled')) {
+      const singleAttackBtn = root.querySelector('button[name="attack_single"]');
       const fullAttackBtn = root.querySelector('button[name="attack_full"]');
-      if (fullAttackBtn) {
+      if (singleAttackBtn && fullAttackBtn) {
         fullAttackBtn.remove();
         _debugLog('PF1.5 mode: removed Full Attack button from AttackDialog');
       }

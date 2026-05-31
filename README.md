@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.21.0
+**Current Version:** 2.21.1
 
 ---
 
@@ -110,6 +110,10 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.21.1 — Restore Use Button for Non-Attack Spells
+
+Hotfix. The PF1.5 Full-Attack suppression was removing every `button[name="attack_full"]` from the attack dialog — but PF1 reuses that name for the sole **"Use"** (cast) button on non-attack spells (save spells, buffs, utility). This silently broke casting for Fireball, Fire Breath, Burning Hands, Bull's Strength, Enlarge Person, and similar spells (the dialog had no submit button). The suppression now only removes the Full Attack button when a Single Attack button is also present, so genuine attack actions still lose Full Attack while every other spell keeps its Use button.
 
 ### v2.21.0 — Perception Class-Skill Audit Helper
 
