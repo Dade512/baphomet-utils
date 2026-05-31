@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.21.1
+**Current Version:** 2.22.0
 
 ---
 
@@ -110,6 +110,13 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.22.0 — Attack & Spell Auto-Spend
+
+Wires attacks and spells into the PF1.5 three-action economy, both **off by default**. When enabled, the active combatant's attack spends 1 action pip; a spell spends pips equal to its **casting time** (standard 2 / full-round 3 / swift 1 — by casting time, not spell level); an **off-turn attack (AoO) spends the reaction pip** instead of an action. Built on PF1's `pf1PreActionUse` hook, which fires once per action-use — so iterative/multi-roll resolutions can't over-spend. With both settings off, behavior is identical to v2.21.1.
+
+- New `autoAttackSpend` (default OFF) and `autoSpellSpend` (default OFF) world settings.
+- MAP/swing tracking, Cleave 0-cost handling, Vital Strike, and feat multi-attack interactions are intentionally deferred to a later milestone.
 
 ### v2.21.1 — Restore Use Button for Non-Attack Spells
 

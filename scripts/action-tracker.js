@@ -1662,6 +1662,151 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
 });
 
 /* ============================================================
+   LIVE ATTACK & SPELL AUTO-SPEND — v2.22.0 (Phase B)
+   ══════════════════════════════════════════════════════════
+
+   Hook: pf1PreActionUse(actionUse) — fires ONCE per action-use
+   (one Strike, one cast), for both attacks and spells. Using this
+   pre-hook (NOT pf1AttackRoll, which fires per iterative roll)
+   means a single Strike/cast spends exactly once — no iterative
+   dedupe gymnastics. Pilot 45 confirmed the cadence + field paths.
+
+   MODULE DESIGN PATTERN — NOT NATIVE PF1.
+
+   OBSERVE-ONLY: this handler NEVER returns false. Returning false
+   from pf1PreActionUse CANCELS the action in PF1 — auto-spend must
+   never block an action, only decrement pips.
+
+   Gated behind 'autoAttackSpend' / 'autoSpellSpend' (default OFF).
+   Cost:
+     - attack/weapon item → 1 action (1 Strike = 1 action).
+     - spell item → action.activation.unchained.cost
+       (standard 2 / full-round 3 / swift 1), NOT spell.level.
+   Reaction: an off-turn action-use (acting actor is not the active
+   combatant — confirmed via activeCombatantMatch=false in Pilot 45)
+   is an AoO: spend 1 reaction on the acting actor's own combatant,
+   no action, no swing.
+
+   Deferred (see GOAL_v2.22.0 Out of Scope): swing-counter / MAP
+   penalty injection, Cleave 0-cost gating, Vital Strike (2 actions),
+   Magus Spellstrike, feat multi-attack adjudication.
+   ============================================================ */
+
+// In-memory dedupe (mirrors the skill dedupe). 500ms window.
+const _actionUseSpendDedupeSet = new Set();
+
+function _isActionUseSpendDuped(actor, actionUse) {
+  const actId  = actionUse?.action?.id ?? actionUse?.action?.data?.id ?? '?';
+  const itemId = actionUse?.item?.id ?? actionUse?.item?.name ?? '?';
+  const key = `${actor?.id}:${itemId}:${actId}`;
+  if (_actionUseSpendDedupeSet.has(key)) return true;
+  _actionUseSpendDedupeSet.add(key);
+  setTimeout(() => _actionUseSpendDedupeSet.delete(key), 500);
+  return false;
+}
+
+/**
+ * Find the combatant for an actor in the current combat, whether or
+ * not it is the active combatant. Used for off-turn reaction spends.
+ * (_getActiveCombatantForActor returns only the *active* match.)
+ */
+function _getCombatantForActor(actor) {
+  if (!actor || !game.combat) return null;
+  return game.combat.combatants.find((c) => c.actor?.id === actor.id) ?? null;
+}
+
+/**
+ * Derive the PF1.5 action cost of an action-use.
+ * Attacks: 1. Spells: action.activation.unchained.cost (casting time),
+ * with a chained-type fallback. Never reads spell.level.
+ */
+function _deriveActionUseCost(actionUse) {
+  const item = actionUse?.item;
+  if (item?.type !== 'spell') return 1; // attacks/weapons: 1 Strike = 1 action
+
+  const act = actionUse?.action;
+  const actData = act?.data ?? act?.system ?? act ?? {};
+  const uc = actData?.activation?.unchained?.cost ?? act?.activation?.unchained?.cost;
+  if (typeof uc === 'number' && uc >= 1) return uc;
+
+  // Fallback by chained casting-time type if unchained.cost is absent.
+  const t = actData?.activation?.type ?? act?.activation?.type;
+  if (t === 'round') return 3;                      // full-round
+  if (t === 'swift' || t === 'immediate') return 1; // swift / quickened
+  return 2;                                         // standard default
+}
+
+/**
+ * Live pf1PreActionUse handler — attack & spell auto-spend.
+ * OBSERVE-ONLY. Never returns false.
+ */
+Hooks.on('pf1PreActionUse', (actionUse) => {
+  try {
+    const item  = actionUse?.item;
+    const actor = actionUse?.actor ?? item?.actor;
+    if (!item || !actor || !game.combat?.active) return;
+
+    const isSpell  = item.type === 'spell';
+    const isAttack = item.type === 'attack' || item.type === 'weapon';
+    if (!isSpell && !isAttack) return; // only attacks and spells
+
+    const settingOn = isSpell
+      ? game.settings.get(AT_MODULE_ID, 'autoSpellSpend')
+      : game.settings.get(AT_MODULE_ID, 'autoAttackSpend');
+    if (!settingOn) {
+      _debugLog(`auto-spend: ${item.type} setting OFF — no spend for "${item.name}"`);
+      return;
+    }
+
+    if (_isActionUseSpendDuped(actor, actionUse)) {
+      _debugLog(`auto-spend: duplicate action-use for "${item.name}" — skipping`);
+      return;
+    }
+
+    const cost = _deriveActionUseCost(actionUse);
+    const activeCombatant = _getActiveCombatantForActor(actor);
+
+    if (activeCombatant) {
+      // On-turn: spend the action cost (all-or-nothing).
+      if (!_canUserControlCombatant(activeCombatant)) {
+        _debugLog(`auto-spend: user cannot control "${actor.name}" — no spend`);
+        return;
+      }
+      const spent = _spendActionForCombatant(
+        activeCombatant.id, cost, isSpell ? `spell-${item.name}` : `attack-${item.name}`
+      );
+      if (spent) {
+        _debugLog(`auto-spend: spent ${cost} action(s) for "${actor.name}" [${item.type}: ${item.name}]`);
+      } else {
+        _debugLog(`auto-spend: insufficient actions (${cost} needed) for "${actor.name}" [${item.name}]`);
+        ui.notifications?.warn?.(`${actor.name}: not enough actions for ${item.name} (needs ${cost}).`);
+      }
+      // NOTE: swing-counter / MAP tracking deferred (GOAL_v2.22.0 Out of Scope).
+    } else {
+      // Off-turn → reaction (AoO). Only attacks consume a reaction.
+      if (!isAttack) {
+        _debugLog(`auto-spend: off-turn spell by "${actor.name}" — not charged (no active-turn action)`);
+        return;
+      }
+      const own = _getCombatantForActor(actor);
+      if (!own) {
+        _debugLog(`auto-spend: off-turn attack but "${actor.name}" not in combat — no spend`);
+        return;
+      }
+      if (!_canUserControlCombatant(own)) {
+        _debugLog(`auto-spend: cannot control "${actor.name}" — no reaction spend`);
+        return;
+      }
+      const r = game.baphometActions?.spendReaction?.(own.id);
+      _debugLog(`auto-spend: off-turn attack (AoO) by "${actor.name}" — reaction ${r ? 'spent' : 'unavailable'} (no action, no swing)`);
+    }
+  } catch (e) {
+    _debugLog('auto-spend (pf1PreActionUse) error: ' + e.message);
+  }
+  return undefined; // NEVER cancel the action
+});
+
+/* ============================================================
    FLOATING ACTION SPEND PANEL — v1.15
    ══════════════════════════════════════════════════════════
 

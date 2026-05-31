@@ -1,6 +1,13 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.9
+   BAPHOMET UTILS — SETTINGS v1.10
    Central module settings registration.
+
+   v1.10 (module v2.22.0 — "Attack & Spell Auto-Spend"):
+   - autoAttackSpend activated (was a FUTURE scaffold). World scope,
+     default false. Live attack auto-spend via pf1PreActionUse.
+   - autoSpellSpend registered. World scope, default false. Spell
+     auto-spend via pf1PreActionUse; cost from casting time
+     (standard 2 / full-round 3 / swift 1), NOT spell.level.
 
    v1.9 (module v2.20.9 — "Background Skills Native Budget Alignment"):
    - backgroundBudgetLevel1 default changed 4 → 2 to match PF1 native
@@ -98,17 +105,28 @@ Hooks.once('init', () => {
   });
 
   /* ----------------------------------------------------------
-     ATTACK ROLL AUTO-SPEND — FUTURE
-     
-     Deferred from v2.10.0/v2.11.0. pf1AttackRoll hook confirmed
-     shape is (ItemAction, D20RollPF, Object). Dedupe behavior
-     must be designed before wiring — unclear whether the hook
-     fires once per attack action, once per iterative roll, or
-     once per damage/card event.
+     ATTACK & SPELL AUTO-SPEND — LIVE as of v2.22.0 (Phase B)
+
+     Hook: pf1PreActionUse(actionUse) — fires once per action-use
+     (one Strike, one cast), so no iterative dedupe is needed.
+     Pilot 45 confirmed: attacks (item.type attack/weapon) and
+     spells (item.type spell) both surface here; spell cost reads
+     action.activation.unchained.cost (standard 2 / full-round 3 /
+     swift 1); off-turn uses spend a reaction, not an action.
+     Both default OFF. Handler lives in scripts/action-tracker.js.
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'autoAttackSpend', {
-    name: 'Auto-Spend on Attack Roll [FUTURE]',
-    hint: 'Not active yet. When enabled, will automatically spend 1 action pip when an attack roll is made in combat. Deferred pending dedupe design.',
+    name: 'Auto-Spend on Attack',
+    hint: 'When enabled, an attack by the active combatant spends 1 action pip; an off-turn attack (AoO) spends the reaction pip instead. Default OFF — enable deliberately.',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(SETTINGS_MODULE_ID, 'autoSpellSpend', {
+    name: 'Auto-Spend on Spell Cast',
+    hint: 'When enabled, casting a spell by the active combatant spends action pips equal to its casting time (standard = 2, full-round = 3, swift/quickened = 1). Cost is by casting time, not spell level. Default OFF — enable deliberately.',
     scope: 'world',
     config: true,
     type: Boolean,
@@ -305,7 +323,7 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.9 registered`);
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.10 registered`);
 });
 
 /* ----------------------------------------------------------
