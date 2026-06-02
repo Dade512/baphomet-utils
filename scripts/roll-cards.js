@@ -147,6 +147,93 @@ function _injectNatLabel(messageEl, natType) {
   diceResult.insertAdjacentElement('afterend', label);
 }
 
+/* ============================================================
+   CRITICAL ROLL CARD FLOURISH — v2.23.0
+   MODULE DESIGN PATTERN — NOT NATIVE PF1. Presentation only.
+
+   Gated behind the 'critCardFlourish' world setting (default OFF).
+   OFF = nothing below runs → today's plain-label behavior is
+   byte-for-byte unchanged. The flourish CSS lives in
+   styles/noir-theme.css, scoped to body.baph-crit-flourish-on.
+
+   Phase-A findings driving this:
+   - v13 chat log is `ol.chat-log` (NO `#chat-log` id) → CSS must
+     scope to `.message`/`.chat-message`, never `#chat-log`.
+   - PF1 ATTACK cards (`.chat-attack`) have no `.dice-roll` /
+     `.dice-total` / `data-natural`; their d20 sits in `.lil-roll`
+     (koboldworks-pf1-little-helper), so the base detection never
+     sees them. PF1 instead marks them `.natural-20` / `.natural-1`.
+     // ⚠️ marker source little-helper/PF1 — confirmed present live.
+   - The flourish detects via headline-accurate signals only:
+     `data-natural` for standard cards, `.natural-20`/`.natural-1`
+     for attack cards. Deliberately NOT the loose tooltip-d20 scan,
+     so a loud flourish never fires on an incidental non-headline d20.
+   ============================================================ */
+
+/**
+ * Headline-accurate crit detection for the flourish.
+ * Attack cards: PF1's authoritative .natural-20 / .natural-1 markers.
+ * Standard cards: the headline d20 (data-natural / .natural span).
+ * Returns 'nat20' | 'nat1' | null.
+ */
+function _detectHeadlineCrit(messageEl) {
+  const atk = messageEl.querySelector('.chat-attack');
+  if (atk) {
+    if (atk.querySelector('.natural-20')) return 'nat20';
+    if (atk.querySelector('.natural-1'))  return 'nat1';
+    return null;
+  }
+  const dt = messageEl.querySelector('.dice-total[data-natural]');
+  if (dt) {
+    const n = parseInt(dt.dataset.natural, 10);
+    if (n === 20) return 'nat20';
+    if (n === 1)  return 'nat1';
+  }
+  const ns = messageEl.querySelector('.dice-total .natural');
+  if (ns) {
+    const v = parseInt(ns.textContent?.trim(), 10);
+    if (v === 20) return 'nat20';
+    if (v === 1)  return 'nat1';
+  }
+  return null;
+}
+
+/**
+ * Inject the flourish label on cards that don't already have one.
+ * Standard cards already get `.baph-nat-label` via _injectNatLabel;
+ * this covers ATTACK cards (no `.dice-result`) by anchoring after
+ * the last attack block. Reuses the exact existing label classes/text.
+ */
+function _injectFlourishLabel(messageEl, natType) {
+  if (messageEl.querySelector('.baph-nat-label')) return;
+  const anchor = messageEl.querySelector('.dice-result.baph-styled')
+              || [...messageEl.querySelectorAll('.chat-attack')].pop()
+              || messageEl.querySelector('.chat-card')
+              || messageEl.querySelector('.message-content');
+  if (!anchor) return;
+  const label = document.createElement('div');
+  label.classList.add('baph-nat-label');
+  if (natType === 'nat20') {
+    label.classList.add('baph-nat20-label');
+    label.textContent = '⚔ Critical Success';
+  } else {
+    label.classList.add('baph-nat1-label');
+    label.textContent = '✖ Critical Failure';
+  }
+  anchor.insertAdjacentElement('afterend', label);
+}
+
+/**
+ * Toggle the body marker class that scopes all flourish CSS.
+ * Called on ready and (via the setting's onChange) on toggle.
+ */
+function _setFlourishBodyClass() {
+  try {
+    const on = game.settings.get(RC_MODULE_ID, 'critCardFlourish');
+    document.body.classList.toggle('baph-crit-flourish-on', !!on);
+  } catch { /* settings not ready — noop */ }
+}
+
 /* ----------------------------------------------------------
    MAIN HOOK — renderChatMessageHTML (v1.2)
 
@@ -165,26 +252,41 @@ Hooks.on('renderChatMessageHTML', (message, html, data) => {
   const el = _baphNormalizeHtml(html);
   if (!el) return;
 
-  // Only process roll messages
-  if (!el.querySelector('.dice-roll')) return;
-
-  // Apply the dark result bar styling (no DOM wrapping)
-  _applyResultBar(el);
-
-  // Detect nat and apply classes + label
-  const natType = _detectNatResult(el);
-  if (natType === 'nat20') {
-    el.classList.add('baph-nat20');
-    _injectNatLabel(el, 'nat20');
-  } else if (natType === 'nat1') {
-    el.classList.add('baph-nat1');
-    _injectNatLabel(el, 'nat1');
+  // EXISTING behavior — standard roll cards only (.dice-roll present).
+  // Unchanged, so the OFF state stays byte-for-byte today's behavior.
+  if (el.querySelector('.dice-roll')) {
+    _applyResultBar(el);
+    const natType = _detectNatResult(el);
+    if (natType === 'nat20') {
+      el.classList.add('baph-nat20');
+      _injectNatLabel(el, 'nat20');
+    } else if (natType === 'nat1') {
+      el.classList.add('baph-nat1');
+      _injectNatLabel(el, 'nat1');
+    }
   }
+
+  // v2.23.0 CRITICAL ROLL CARD FLOURISH — setting-gated, additive.
+  // Only runs when 'critCardFlourish' is ON, so OFF changes nothing above.
+  // Extends crit detection to ATTACK cards (no .dice-roll) via PF1 markers,
+  // tags the card with a headline-accurate `.baph-nat-flourish` marker, and
+  // injects the label on attack cards that don't already have one.
+  try {
+    if (game.settings.get(RC_MODULE_ID, 'critCardFlourish')) {
+      const flourishNat = _detectHeadlineCrit(el);
+      if (flourishNat) {
+        el.classList.add(flourishNat === 'nat20' ? 'baph-nat20' : 'baph-nat1');
+        el.classList.add('baph-nat-flourish');
+        _injectFlourishLabel(el, flourishNat);
+      }
+    }
+  } catch { /* settings not ready — noop */ }
 });
 
 /* ----------------------------------------------------------
    READY
    ---------------------------------------------------------- */
 Hooks.once('ready', () => {
-  console.log(`${RC_MODULE_ID} | Roll Card Styler v1.2 ready`);
+  _setFlourishBodyClass(); // scope flourish CSS via body.baph-crit-flourish-on
+  console.log(`${RC_MODULE_ID} | Roll Card Styler v1.3 ready`);
 });

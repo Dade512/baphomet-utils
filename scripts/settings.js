@@ -1,6 +1,11 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.10
+   BAPHOMET UTILS — SETTINGS v1.11
    Central module settings registration.
+
+   v1.11 (module v2.23.0 — "Critical Roll Card Flourish"):
+   - critCardFlourish registered. World scope, default false.
+     Gates the nat-20/nat-1 chat-card flourish (presentation only;
+     CSS in styles/noir-theme.css). OFF = today's plain-label behavior.
 
    v1.10 (module v2.22.0 — "Attack & Spell Auto-Spend"):
    - autoAttackSpend activated (was a FUTURE scaffold). World scope,
@@ -31,8 +36,8 @@
      arbitrary skills (pf1.config.backgroundOnlySkills — Pilot 36);
      their sub-skill actor data paths are UNVERIFIED.
      Phase B registers them but does not read actors.
-   - backgroundBudgetLevel1 registered. World scope, default 4.
-     Background rank budget at level 1 (campaign deviation from RAW 2).
+   - backgroundBudgetLevel1 registered. World scope, default 4 in v2.20.8.
+     Originally represented a campaign deviation later dropped in v2.20.9.
    - backgroundBudgetPerLevel registered. World scope, default 2.
      Background rank budget per level after level 1 (matches RAW).
    - backgroundSkillKeysMigrated228 migration flag registered.
@@ -275,7 +280,7 @@ Hooks.once('init', () => {
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'backgroundSkillsEnabled', {
     name: 'Background Skills Mode',
-    hint: 'Enables the baphomet-utils Background Skills budget tracker for this world. Advisory layer only — does NOT enable PF1 native Background Skills (use the PF1 system Variant Rules setting pf1.allowBackgroundSkills for that). When active, budget settings below apply. Enable alongside pf1.allowBackgroundSkills to track the campaign level-1 deviation (4 ranks at level 1 instead of PF1 native 2). Default OFF.',
+    hint: 'Enables the baphomet-utils Background Skills budget tracker for this world. Advisory layer only — does NOT enable PF1 native Background Skills (use the PF1 system Variant Rules setting pf1.allowBackgroundSkills for that). When active, budget settings below apply. Current canon matches PF1 native Background Skills: 2 ranks per level, including level 1. Default OFF.',
     scope: 'world',
     config: true,
     type: Boolean,
@@ -309,6 +314,27 @@ Hooks.once('init', () => {
     default: 2
   });
 
+  /* ----------------------------------------------------------
+     CRITICAL ROLL CARD FLOURISH — v2.23.0 (presentation only)
+
+     Gates the nat-20 / nat-1 chat-card flourish (color wash,
+     decaying/swell glow, dramatized label). Default OFF — OFF is
+     byte-for-byte today's plain-label behavior. All styling lives
+     in styles/noir-theme.css; roll-cards.js sets the body marker
+     class and (when ON) extends crit detection to PF1 attack cards.
+     No change to crit confirmation, damage, or roll resolution.
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'critCardFlourish', {
+    name: 'Critical Roll Card Flourish',
+    hint: 'When enabled, a natural 20 or natural 1 makes the chat card flourish — a gold celebratory pulse on a crit, a slow bruise-purple swell on a fumble — with a dramatized label. Presentation only; does not change crit confirmation, damage, or resolution. Respects reduced-motion. Default OFF.',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: false,
+    // Toggle the body marker that scopes the flourish CSS (see roll-cards.js).
+    onChange: (value) => { try { document.body.classList.toggle('baph-crit-flourish-on', !!value); } catch (e) { /* noop */ } }
+  });
+
   game.settings.register(SETTINGS_MODULE_ID, 'backgroundSkillKeysMigrated228', {
     scope: 'world',
     config: false,
@@ -323,7 +349,7 @@ Hooks.once('init', () => {
     default: false
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.10 registered`);
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.11 registered`);
 });
 
 /* ----------------------------------------------------------

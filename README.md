@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.22.0
+**Current Version:** 2.23.0
 
 ---
 
@@ -111,6 +111,15 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 
 ## Changelog
 
+### v2.23.0 — Critical Roll Card Flourish (Nat 20 / Nat 1)
+
+Adds an optional **player-feedback flourish** when a natural 20 or natural 1 is rolled — a bright gold celebratory pulse on a crit, a slow bruise-purple swell on a fumble, with a dramatized label. **Presentation only** — no change to crit confirmation, damage, or roll resolution. Off by default.
+
+- New `critCardFlourish` world setting (default **OFF**). OFF leaves today's plain-label behavior unchanged.
+- Inward, self-contained glow (no outward spread that would clip or smear in the v13 chat sidebar).
+- Fires on **all d20 roll types**, including PF1 **attack** cards (detected via PF1's `natural-20`/`natural-1` markers — the base detection only reaches standard roll cards).
+- **Respects `prefers-reduced-motion`**: a static wash + label + steady glow, no pulsing.
+
 ### v2.22.0 — Attack & Spell Auto-Spend
 
 Wires attacks and spells into the PF1.5 three-action economy, both **off by default**. When enabled, the active combatant's attack spends 1 action pip; a spell spends pips equal to its **casting time** (standard 2 / full-round 3 / swift 1 — by casting time, not spell level); an **off-turn attack (AoO) spends the reaction pip** instead of an action. Built on PF1's `pf1PreActionUse` hook, which fires once per action-use — so iterative/multi-roll resolutions can't over-spend. With both settings off, behavior is identical to v2.21.1.
@@ -132,9 +141,9 @@ Adds a read-only GM helper for the PF1.5 table rule that **Perception is a class
 
 ### v2.20.9 — Background Skills Native Budget Alignment
 
-Realigns the Background Skills rank budget to **PF1 native math**. PF1 already computes background ranks as `HD × 2` (so a level-2 character correctly shows 4 available background ranks). This release retires the earlier "4 ranks at level 1" house-rule deviation and matches native behavior. Settings/metadata only — no actor data, skill ranks, enforcement, sheets, or roll behavior are changed.
+Realigns the Background Skills rank budget to **PF1 native math** (`HD × 2`), which is now also the campaign canon per `Homebrew_Master_File.md` §12: 2 background ranks per level, including level 1. Settings/metadata only — no actor data, skill ranks, enforcement, sheets, or roll behavior are changed.
 
-- `backgroundBudgetLevel1` default changed `4 → 2` to match PF1 native (`backgroundSkillsPerLevel = 2`).
+- `backgroundBudgetLevel1` default changed `4 → 2` to match PF1 native (`backgroundSkillsPerLevel = 2`) and current campaign canon.
 - Added a safe one-time **world-setting** migration: if `backgroundBudgetLevel1` is still the v2.20.8 default of `4`, it realigns to `2` on first GM ready; GM-customized values are left untouched. Touches the module's world setting only — never actor data.
 - Perception remains **not** a Background Skill; it is a class skill for everyone by table rule (manual player toggle, no automation).
 
@@ -144,7 +153,7 @@ Adds the settings foundation for PF1.5 Background Skills as a configurable, advi
 
 - Added world settings for Background Skills Mode, Background Skill Keys, Level 1 budget, and Per-Level budget.
 - Corrected the native PF1 background skill list to include `art`, `lor`, and `prf`, and exclude `per`.
-- Preserves the PF1.5 campaign budget of 4 ranks at level 1 and 2 ranks per level.
+- Originally preserved the then-current PF1.5 campaign budget of 4 ranks at level 1 and 2 ranks per level; superseded by v2.20.9 and current canon, which use 2 ranks per level including level 1.
 - Advisory/settings foundation only; no actor writes, no enforcement, no migration, and no UI beyond Foundry settings.
 
 ### v2.20.6 — Condition Overlay Diagnostic Cleanup

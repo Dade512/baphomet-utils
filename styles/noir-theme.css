@@ -744,6 +744,201 @@
 }
 
 /* ============================================================
+   CRITICAL ROLL CARD FLOURISH — v2.23.0 (presentation only)
+   ══════════════════════════════════════════════════════════
+   Player-feedback popup on nat-20 / nat-1. Gated by the body
+   marker `baph-crit-flourish-on` (set from the critCardFlourish
+   setting in scripts/roll-cards.js). OFF = none of this applies →
+   today's plain-label behavior is byte-for-byte unchanged.
+
+   INWARD technique (Phase A): the v13 chat scroll container
+   (div.overflow) is overflow-x:hidden / overflow-y:auto, so an
+   OUTWARD glow clips and smears onto neighbor cards. All glow here
+   is INSET box-shadow + text-shadow (local to the card / its text).
+   Scoped to `.message` — the v13 chat log is `ol.chat-log`, there
+   is NO `#chat-log` id, so #chat-log selectors are never used.
+
+   DELIBERATE non-palette colors: the crit gold/bruise are a
+   player-dopamine popup, a different job than the tarnished-brass
+   world chrome. Defined as local flourish vars so they never leak
+   into the --baph-brass chrome tokens. Documented, not drift.
+   ============================================================ */
+
+:root {
+  --baph-crit-gold:      #f2c14e;  /* bright celebratory "Vegas" gold (deliberate, NOT chrome) */
+  --baph-crit-bruise:    #4a2740;  /* dried-bruise purple (not black, not royal) */
+}
+
+/* dramatize the existing (already-uppercase) label when the flourish is on */
+body.baph-crit-flourish-on .message.baph-nat-flourish .baph-nat-label {
+  font-size: 0.82em;
+  letter-spacing: 0.16em;
+}
+
+/* Glow + bloom overlays — ride ABOVE PF1's opaque interior chrome on
+   .action-card attack cards (a parent inset shadow paints BEHIND children,
+   so it gets buried under .card-header / table thead / opaque result boxes).
+   Two pseudo-elements, both inset:0, pointer-events:none so the Attack button
+   stays clickable:
+     ::before = CENTER BLOOM (radial flash). opacity:0 at rest → ZERO
+                readability cost on the numbers once the flash decays; only
+                visible mid-animation. nat-20 only (failure doesn't bloom).
+     ::after  = RIM glow (inset box-shadow) + persistent resting presence.
+   Per-color values live in the nat20/nat1 rules below. */
+body.baph-crit-flourish-on .message.baph-nat-flourish {
+  position: relative;
+}
+body.baph-crit-flourish-on .message.baph-nat-flourish::before,
+body.baph-crit-flourish-on .message.baph-nat-flourish::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;        /* taste call — drop to 0 if odd on PF1 square panels */
+  pointer-events: none;
+  z-index: 1;
+}
+body.baph-crit-flourish-on .message.baph-nat-flourish::before {
+  opacity: 0;                /* invisible at rest; the bloom animation drives it */
+}
+
+/* ---------- SUCCESS · Natural 20 — bright, fast, celebratory ---------- */
+/* Frame on the OUTER <li>.message; glow on its ::after overlay (above).
+   border-color !important beats Chat Portrait's inline user-color border:
+   chat-portrait writes li.message.style.borderColor when its setting is on —
+   a normal inline style, so author-!important wins. Widths are untouched by
+   it, which is why only the color was being lost. */
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat20 {
+  border: 1px solid var(--baph-crit-gold);
+  border-left: 3px solid var(--baph-crit-gold);
+  border-color: var(--baph-crit-gold) !important;
+  border-radius: 3px;
+}
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat20::after {
+  box-shadow: inset 0 0 0 1.5px rgba(242, 193, 78, 0.70),
+              inset 0 0 22px rgba(242, 193, 78, 0.55);
+}
+/* nat-20 center bloom: bright "Vegas" gold core fading to transparent so it
+   never permanently sits on the numbers. Driven by baph-crit20-bloom below. */
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat20::before {
+  background: radial-gradient(ellipse at center,
+              rgba(255, 226, 138, 0.92) 0%,
+              rgba(242, 193, 78, 0.55) 38%,
+              rgba(242, 193, 78, 0) 76%);
+}
+/* Bonus wash on simple (non-action-card) cards where .message-content
+   is the visible surface — skill checks, saves, ability checks. */
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat20 .message-content {
+  background: linear-gradient(180deg, rgba(242, 193, 78, 0.18), rgba(201, 145, 42, 0.10));
+  border-radius: 3px;
+}
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat20 .baph-nat-label {
+  color: var(--baph-parchment-bright, #e8dfd0);
+  -webkit-text-stroke: 0.5px var(--baph-ink-primary, #2a231d);
+  text-shadow: 0 0 6px rgba(242, 193, 78, 0.9), 0 0 2px rgba(242, 193, 78, 0.7);
+}
+
+/* ---------- FAILURE · Natural 1 — dark mirror of the crit ---------- */
+/* Bruise frame on the <li>.message; bruise BLOOM on ::before + rim pulse on
+   ::after, mirroring nat-20 but in dried-bruise/wound tones and slower, so it
+   reads as ominous rather than celebratory. */
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat1 {
+  border: 1px solid var(--baph-crit-bruise);
+  border-left: 3px solid var(--baph-crit-bruise);
+  border-color: var(--baph-crit-bruise) !important;
+  border-radius: 3px;
+}
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat1::after {
+  box-shadow: inset 0 0 0 1.5px rgba(74, 39, 64, 0.68),
+              inset 0 0 22px rgba(74, 39, 64, 0.55);
+}
+/* nat-1 center bloom: a saturated wound-bruise core (visible against the card
+   where flat #4a2740 would vanish) fading to transparent — clears off the
+   numbers at rest. Driven by baph-crit1-bloom below. */
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat1::before {
+  background: radial-gradient(ellipse at center,
+              rgba(138, 48, 72, 0.90) 0%,
+              rgba(74, 39, 64, 0.62) 40%,
+              rgba(74, 39, 64, 0) 78%);
+}
+/* Bonus wash on simple (non-action-card) cards. */
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat1 .message-content {
+  background: linear-gradient(180deg, rgba(74, 39, 64, 0.30), rgba(44, 26, 40, 0.22));
+  border-radius: 3px;
+}
+body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat1 .baph-nat-label {
+  color: var(--baph-blood-bright, #8b3028);
+  -webkit-text-stroke: 0.5px var(--baph-parchment-bright, #e8dfd0);
+  text-shadow: 0 0 5px rgba(74, 39, 64, 0.8);
+}
+
+/* ---------- Motion (only when the user has not asked to reduce it) ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  /* Nat-20: a jackpot. Center bloom flares (::before) over decaying rim pulses
+     (::after) — ~1.8–2s so it still registers after the dice land. */
+  body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat20::before {
+    animation: baph-crit20-bloom 2s ease-out 1 both;
+  }
+  body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat20::after {
+    animation: baph-crit20-pulse 1.8s ease-out 1 both;
+  }
+  body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat20 .baph-nat-label {
+    animation: baph-crit20-label 1.8s ease-out 1 both;
+  }
+  /* Nat-1: dark mirror of the crit. Bruise bloom (::before) over a heavy
+     double-throb rim pulse (::after) — slower (~2.4s) so it reads as ominous,
+     not celebratory. */
+  body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat1::before {
+    animation: baph-crit1-bloom 2.4s ease-out 1 both;
+  }
+  body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat1::after {
+    animation: baph-crit1-swell 2.4s ease-in-out 1 both;
+  }
+}
+
+@keyframes baph-crit20-pulse {
+  0%   { box-shadow: inset 0 0 0 2px rgba(242, 193, 78, 1.0),   inset 0 0 40px rgba(242, 193, 78, 0.95); }
+  16%  { box-shadow: inset 0 0 0 1px rgba(242, 193, 78, 0.45),  inset 0 0 12px rgba(242, 193, 78, 0.30); }
+  34%  { box-shadow: inset 0 0 0 2px rgba(242, 193, 78, 0.85),  inset 0 0 30px rgba(242, 193, 78, 0.72); }
+  52%  { box-shadow: inset 0 0 0 1px rgba(242, 193, 78, 0.45),  inset 0 0 11px rgba(242, 193, 78, 0.26); }
+  70%  { box-shadow: inset 0 0 0 1.5px rgba(242, 193, 78, 0.70), inset 0 0 22px rgba(242, 193, 78, 0.52); }
+  100% { box-shadow: inset 0 0 0 1.5px rgba(242, 193, 78, 0.70), inset 0 0 22px rgba(242, 193, 78, 0.55); }
+}
+/* Center bloom: punch in fast, shimmer, then fully clear (opacity 0) so the
+   result numbers are unobstructed at rest. Scale capped at 1.0 — never >1, or
+   it bleeds past the card and the v13 chat scroll clips/smears it. */
+@keyframes baph-crit20-bloom {
+  0%   { opacity: 0;    transform: scale(0.94); }
+  10%  { opacity: 1;    transform: scale(1.0); }
+  30%  { opacity: 0.45; transform: scale(1.0); }
+  50%  { opacity: 0.85; transform: scale(1.0); }
+  72%  { opacity: 0.30; transform: scale(1.0); }
+  100% { opacity: 0;    transform: scale(1.0); }
+}
+@keyframes baph-crit20-label {
+  0%   { text-shadow: 0 0 12px rgba(242, 193, 78, 1), 0 0 4px rgba(242, 193, 78, 0.9); }
+  100% { text-shadow: 0 0 6px rgba(242, 193, 78, 0.9), 0 0 2px rgba(242, 193, 78, 0.7); }
+}
+@keyframes baph-crit1-swell {
+  0%   { box-shadow: inset 0 0 0 2px rgba(74, 39, 64, 0.95),   inset 0 0 34px rgba(74, 39, 64, 0.88); }
+  22%  { box-shadow: inset 0 0 0 1px rgba(74, 39, 64, 0.45),   inset 0 0 12px rgba(74, 39, 64, 0.32); }
+  48%  { box-shadow: inset 0 0 0 2px rgba(74, 39, 64, 0.80),   inset 0 0 28px rgba(74, 39, 64, 0.66); }
+  74%  { box-shadow: inset 0 0 0 1px rgba(74, 39, 64, 0.50),   inset 0 0 14px rgba(74, 39, 64, 0.34); }
+  100% { box-shadow: inset 0 0 0 1.5px rgba(74, 39, 64, 0.68), inset 0 0 22px rgba(74, 39, 64, 0.55); }
+}
+/* Bruise bloom: swells in (a touch slower than gold — a bruise forming),
+   throbs once, fully clears (opacity 0) so the numbers are unobstructed at
+   rest. Scale capped at 1.0 to avoid outward bleed past the card. */
+@keyframes baph-crit1-bloom {
+  0%   { opacity: 0;    transform: scale(0.96); }
+  18%  { opacity: 0.95; transform: scale(1.0); }
+  44%  { opacity: 0.40; transform: scale(1.0); }
+  64%  { opacity: 0.75; transform: scale(1.0); }
+  100% { opacity: 0;    transform: scale(1.0); }
+}
+/* prefers-reduced-motion: reduce → no @keyframes applied above; the static
+   wash + inset glow + dramatized label remain. That IS the reduced fallback. */
+
+/* ============================================================
    15. HOTBAR & UI CONTROLS
    ============================================================ */
 #hotbar {
