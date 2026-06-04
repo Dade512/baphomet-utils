@@ -15,6 +15,13 @@ _run_validator.bat
 _validator_*.txt
 _goal_aborted.md
 
+# Agent council files + session notes (local only)
+AGENTS.md
+GEMINI.md
+.agents/
+RESUME_NEXT_SESSION.md
+TEST_PASS_v2.23.1.md
+
 # Reference docs (local only)
 docs/
 
