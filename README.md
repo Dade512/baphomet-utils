@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.23.1
+**Current Version:** 2.23.2
 
 ---
 
@@ -110,6 +110,14 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.23.2 — Post-Migration Polish (inner-class fixes + readability)
+
+CSS-only follow-up to v2.23.1's root re-points: live v13 DOM probes found some *inner* selectors under those roots were also renamed or removed in the v13 jump. No JS, no mechanical change; the v2.23.0 crit flourish is untouched.
+
+- **Combat tracker inner classes** — dropped the dead `#combat .token-resource` / `.resource-bar` rules (that node no longer renders on the combatant row in v13) and re-pointed `#scene-controls .control-tool` → `.control` (v13 rename).
+- **Chat sender name** — re-pointed the dead `.message-header .alias` rule → `h4.message-sender` (v13 renamed the sender element, so the old rule had silently stopped applying). The name now reads bold dark-ink and grows to fill the header bar, with the date/timestamps pinned to the right.
+- **Critical-roll label** — bumped the "CRITICAL SUCCESS / FAILURE" label text ~1.5× for readability (label text only; the flourish glow/bloom/animation is untouched).
 
 ### v2.23.1 — v13 Dead-ID Selector-Rot Cleanup (#chat-log, #combat-tracker, #controls)
 
