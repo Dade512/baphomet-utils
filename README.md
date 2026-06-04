@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.23.0
+**Current Version:** 2.23.1
 
 ---
 
@@ -110,6 +110,14 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.23.1 — v13 Dead-ID Selector-Rot Cleanup (#chat-log, #combat-tracker, #controls)
+
+CSS-only cleanup of theme rules scoped to ids Foundry **renamed in v13**, so they had silently stopped applying. No JS, no mechanical change; the v2.23.0 crit flourish is untouched.
+
+- **Chat theming revived** — re-pointed `#chat-log` → `.chat-log` (v13 chat log is `ol.chat-log`), switching the dormant Croaker's Ledger chat styling back on.
+- **Combat tracker** re-pointed `#combat-tracker` → `#combat`; **scene controls** re-pointed `#controls` → `#scene-controls` (both roots confirmed live). Inner row/tool classes are flagged for a GM eyeball next session.
+- **Removed** the old `#chat-log`-scoped nat-20 gold-bar / nat-1 blood-bar treatment — dead in v13 and superseded by the v2.23.0 flourish (its outward box-shadow was the smear-prone kind the flourish deliberately avoids).
 
 ### v2.23.0 — Critical Roll Card Flourish (Nat 20 / Nat 1)
 

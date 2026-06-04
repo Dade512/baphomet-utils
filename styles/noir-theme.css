@@ -544,7 +544,11 @@
   background: var(--baph-parchment-mid);
 }
 
-#chat-log .message {
+/* v2.23.1: re-pointed #chat-log → .chat-log — v13 renamed the chat log
+   id to a class (live DOM: `ol.chat-log`, no `#chat-log` id), leaving this
+   Croaker's Ledger chat theming dormant since the upgrade. Root selector
+   only; rule intent unchanged. */
+.chat-log .message {
   background: var(--baph-parchment-bright);
   border: 1px solid var(--baph-leather-mid);
   border-left: 3px solid var(--baph-leather-mid);
@@ -553,7 +557,7 @@
   box-shadow: 0 1px 3px rgba(42, 35, 29, 0.12);
 }
 
-#chat-log .message .message-header {
+.chat-log .message .message-header {
   background: var(--baph-parchment-dark);
   color: var(--baph-ink-secondary);
   font-family: var(--baph-font-heading);
@@ -562,48 +566,48 @@
   letter-spacing: 0.03em;
 }
 
-#chat-log .message .message-header .alias {
+.chat-log .message .message-header .alias {
   color: var(--baph-ink-primary);
   font-weight: 700;
 }
 
-#chat-log .message .message-content {
+.chat-log .message .message-content {
   color: var(--baph-ink-primary);
   font-family: var(--baph-font-body);
 }
 
 /* Whisper — dried blood border, like a sealed order */
-#chat-log .message.whisper {
+.chat-log .message.whisper {
   border-left-color: var(--baph-blood);
   background: color-mix(in srgb, var(--baph-parchment-bright) 88%, var(--baph-blood) 12%);
 }
 
 /* Roll results — base styling (without our bar) */
-#chat-log .dice-total {
+.chat-log .dice-total {
   color: var(--baph-ink-primary);
   font-family: var(--baph-font-mono);
   font-weight: bold;
   font-size: 1.2em;
 }
 
-#chat-log .dice-total.success {
+.chat-log .dice-total.success {
   color: var(--baph-brass-readable);
 }
 
-#chat-log .dice-total.failure {
+.chat-log .dice-total.failure {
   color: var(--baph-blood);
 }
 
 /* Dice formula text */
-#chat-log .dice-formula {
+.chat-log .dice-formula {
   color: var(--baph-ink-secondary);
   font-family: var(--baph-font-mono);
   font-size: 0.85em;
 }
 
 /* Roll tooltip/flavor */
-#chat-log .message .flavor-text,
-#chat-log .message .message-flavor {
+.chat-log .message .flavor-text,
+.chat-log .message .message-flavor {
   color: var(--baph-ink-secondary);
   font-family: var(--baph-font-body);
   font-style: italic;
@@ -686,41 +690,12 @@
   display: contents !important;  /* collapses the wrapper, preserves children */
 }
 
-/* --- NAT 20 — gold bar ---
-   Brass left-rail on the message card.
-   The dice-result bar goes full gold. Text goes near-black. */
-#chat-log .message.baph-nat20 {
-  border-left: 3px solid var(--baph-brass-bright, #b8943e);
-  box-shadow: 0 1px 6px rgba(184, 148, 62, 0.25);
-}
-
-#chat-log .message.baph-nat20 .dice-result.baph-styled {
-  background: var(--baph-brass, #9e7d43);
-  border-top: 1px solid var(--baph-brass-bright, #b8943e);
-  border-bottom: 1px solid var(--baph-leather-dark, #6b5c4a);
-  box-shadow: inset 0 1px 0 rgba(232, 223, 208, 0.35),
-              inset 0 -1px 3px rgba(42, 35, 29, 0.4);
-}
-
-#chat-log .message.baph-nat20 .dice-result.baph-styled .dice-total {
-  color: var(--baph-ink-primary, #2a231d) !important;
-}
-
-/* --- NAT 1 — blood bar --- */
-#chat-log .message.baph-nat1 {
-  border-left: 3px solid var(--baph-blood, #6e2a22);
-}
-
-#chat-log .message.baph-nat1 .dice-result.baph-styled {
-  background: var(--baph-blood, #6e2a22);
-  border-top: 1px solid var(--baph-blood-bright, #8b3028);
-  border-bottom: 1px solid rgba(42, 35, 29, 0.6);
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5);
-}
-
-#chat-log .message.baph-nat1 .dice-result.baph-styled .dice-total {
-  color: var(--baph-parchment-bright, #e8dfd0) !important;
-}
+/* v2.23.1: the old #chat-log-scoped crit-bar treatment (NAT 20 gold bar /
+   NAT 1 blood bar + .message border-left + OUTER box-shadow) was DELETED.
+   It was dead in v13 (#chat-log id gone) AND is superseded by the v2.23.0
+   flourish below, which owns crit presentation with an INWARD technique.
+   The outward .message box-shadow was exactly the smear-prone kind the
+   flourish deliberately avoids. Re-add richer bar fills later if desired. */
 
 /* --- Nat flavor labels ---
    Small stamped text beneath the result bar. */
@@ -959,18 +934,24 @@ body.baph-crit-flourish-on .message.baph-nat-flourish.baph-nat1 .baph-nat-label 
   background: var(--baph-parchment-mid);
 }
 
-#controls {
+/* v2.23.1: re-pointed #controls → #scene-controls — v13 renamed the control
+   bar to ASIDE#scene-controls (class .faded-ui), confirmed live in Phase A.
+   Root id swapped. ⚠️ The inner `.control-tool` class is UNVERIFIED against
+   the live v13 control bar (v13 may have renamed it) — GM eyeball next
+   session; tweak/revert is a fast follow-up. */
+#scene-controls {
   background: var(--baph-leather-dark);
   border-right: 2px solid var(--baph-leather-mid);
 }
 
-#controls .control-tool {
+/* ⚠️ .control-tool inner class unverified vs live v13 DOM — confirm next session */
+#scene-controls .control-tool {
   color: var(--baph-parchment-dark);
   transition: color 0.15s;
 }
 
-#controls .control-tool:hover,
-#controls .control-tool.active {
+#scene-controls .control-tool:hover,
+#scene-controls .control-tool.active {
   color: var(--baph-brass-bright);
 }
 
@@ -1130,48 +1111,56 @@ dialog.roll-prompt .form-footer button:hover,
 /* ============================================================
    17. COMBAT TRACKER
    ============================================================ */
-#combat-tracker {
+/* v2.23.1: re-pointed #combat-tracker → #combat — v13 renamed the tracker to
+   SECTION#combat (class .combat-sidebar), confirmed live in Phase A. Root id
+   swapped. ⚠️ The inner row classes below (.combat-tracker-header, .combatant,
+   .token-name/.token-initiative/.token-resource, .resource-bar) are PF1's
+   pre-v13 tracker classes and are UNVERIFIED against the live v13 tracker
+   (rendering combatant rows needs an active encounter). GM eyeball next
+   session; if v13 renamed any inner class, that rule is a fast follow-up. */
+#combat {
   background: var(--baph-parchment-mid);
 }
 
-#combat-tracker .combat-tracker-header {
+/* ⚠️ inner row classes below unverified vs live v13 tracker — confirm next session */
+#combat .combat-tracker-header {
   background: var(--baph-leather-mid);
   color: var(--baph-parchment-bright);
   border-bottom: 2px solid var(--baph-leather-dark);
 }
 
-#combat-tracker .combatant {
+#combat .combatant {
   background: var(--baph-parchment-mid);
   border-bottom: 1px solid var(--baph-parchment-dark);
   color: var(--baph-ink-primary);
   transition: background 0.1s;
 }
 
-#combat-tracker .combatant:hover {
+#combat .combatant:hover {
   background: var(--baph-parchment-light);
 }
 
-#combat-tracker .combatant.active {
+#combat .combatant.active {
   background: color-mix(in srgb, var(--baph-parchment-mid) 85%, var(--baph-brass) 15%);
   border-left: 3px solid var(--baph-brass);
 }
 
-#combat-tracker .combatant .token-name .name {
+#combat .combatant .token-name .name {
   color: var(--baph-ink-primary);
   font-family: var(--baph-font-body);
 }
 
-#combat-tracker .combatant .token-initiative .initiative {
+#combat .combatant .token-initiative .initiative {
   color: var(--baph-ink-primary);
   font-family: var(--baph-font-mono);
   font-weight: 700;
 }
 
-#combat-tracker .combatant .token-resource .resource-bar {
+#combat .combatant .token-resource .resource-bar {
   background: var(--baph-leather-mid);
 }
 
-#combat-tracker .combatant .token-resource .resource-bar div {
+#combat .combatant .token-resource .resource-bar div {
   background: var(--baph-blood);
 }
 
