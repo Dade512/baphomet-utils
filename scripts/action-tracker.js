@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.20
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.21
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
@@ -10,6 +10,28 @@
              per PF2-style reaction economy).
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.21 Changes (R6 TWF PENALTY + OFF-HAND GUARD):
+   - Added pf1PreAttackRoll advisory hook for PF1.5 Two-Weapon
+     Fighting attack penalties. It reads globalThis.baphometTWF,
+     adds the selected per-hand penalty to rollConfig.secondaryPenalty
+     as a plain signed-number string, and never returns false.
+     Surface + format confirmed by live probe P-2: secondaryPenalty
+     is a plain numeric string; flavor brackets parse to NaN and
+     break the roll. Attacks bypass pf1PreD20Roll.
+   - Documented and migrated the existing TWF off-hand action-cost
+     guard: off-hand bonus swings ride the main-hand Strike, roll
+     normally, and spend no extra action. The guard now reads the
+     unified globalThis.baphometTWF.offhand bridge instead of the
+     retired loose off-hand flag. No loose _baphTWFOffhandActive
+     reference remains in this file.
+   - Paired with the in-world "Two-Weapon Fighting" macro, which
+     computes the per-hand penalty (tier from @bFlags; light vs.
+     one-handed from weaponSubtype) and sets globalThis.baphometTWF.
+     Verified live: 1 action total, -2/-2 on both swings for base
+     TWF with two light weapons.
+   - Module release version (module.json) and git tag unchanged —
+     Michael owns release.
 
    v1.20 Changes (DISABLE DEVICE TASK PREP):
    - SKILL_ACTION_COSTS: dev (Disable Device) removed entirely.
@@ -1736,6 +1758,20 @@ function _deriveActionUseCost(actionUse) {
   return 2;                                         // standard default
 }
 
+// PF1.5 TWF attack penalty (R6). Advisory-only: ADDS the two-weapon to-hit penalty to the
+// native secondary-attack field; NEVER returns false. Dormant unless the TWF Strike macro has
+// set globalThis.baphometTWF.active. The macro computes the per-hand penalty (tier + light);
+// this hook just applies the right one. Surface + format verified by live probe P-2 (2026-06-07):
+// rollConfig.secondaryPenalty is a plain signed-number string; brackets -> NaN -> breaks the roll.
+Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
+  const twf = globalThis.baphometTWF;
+  if (!twf?.active) return;                                  // only during a TWF Strike
+  const pen = twf.offhand ? twf.offPenalty : twf.mainPenalty;
+  if (!pen || pen === "0") return;
+  const base = Number(rollConfig.secondaryPenalty) || 0;     // add, don't clobber (baseline "0")
+  rollConfig.secondaryPenalty = String(base + Number(pen));
+});
+
 /**
  * Live pf1PreActionUse handler — attack & spell auto-spend.
  * OBSERVE-ONLY. Never returns false.
@@ -1749,6 +1785,17 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     const isSpell  = item.type === 'spell';
     const isAttack = item.type === 'attack' || item.type === 'weapon';
     if (!isSpell && !isAttack) return; // only attacks and spells
+
+    // PF1.5 TWF off-hand: the off-hand bonus swing rides on the main-hand
+    // Strike action and must NOT cost its own action. The PF1.5 Two-Weapon
+    // Strike macro sets globalThis.baphometTWF.offhand (try/finally-scoped)
+    // around the off-hand use(), so this swing still rolls but spends nothing.
+    // Mirrors the _baphResolveTaskRollActive suppression pattern.
+    // OBSERVE-ONLY: returns early, never returns false.
+    if (isAttack && globalThis.baphometTWF?.offhand) {
+      _debugLog(`auto-spend: TWF off-hand swing for "${actor.name}" — rides on main-hand Strike, no action spent`);
+      return;
+    }
 
     const settingOn = isSpell
       ? game.settings.get(AT_MODULE_ID, 'autoSpellSpend')

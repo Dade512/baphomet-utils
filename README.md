@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.23.2
+**Current Version:** 2.23.3
 
 ---
 
@@ -110,6 +110,16 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.23.3 — R6 TWF Light-Offhand Penalty Prep
+
+Adds the R6 Two-Weapon Fighting attack-penalty groundwork for PF1.5. The off-hand bonus swing rides on its triggering Strike instead of charging a separate action, and an advisory roll hook applies the two-weapon to-hit penalty. Live-verified for the two-light-weapon baseline only.
+
+- Adds the R6 TWF penalty hook groundwork for PF1.5 two-weapon fighting (advisory `pf1PreAttackRoll` hook; never cancels a roll).
+- Supports the verified light-offhand baseline where two light weapons apply **−2/−2** (main-hand and off-hand swing) at a total cost of 1 action.
+- Keeps off-hand bonus swings attached to their triggering Strike instead of charging a separate action.
+- Preserves broader R6 / MAP edge cases as future probes; no full MAP swing-counter implementation is included.
+- No actor data migration, PF1 system edits, or enforcement migration.
 
 ### v2.23.2 — Post-Migration Polish (inner-class fixes + readability)
 
