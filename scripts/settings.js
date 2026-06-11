@@ -6,6 +6,9 @@
    - critCardFlourish registered. World scope, default false.
      Gates the nat-20/nat-1 chat-card flourish (presentation only;
      CSS in styles/noir-theme.css). OFF = today's plain-label behavior.
+   - hiddenTaskStore registered. Client scope, config hidden.
+     Stores active-GM-only hidden task data by world id; replaces the
+     legacy replicated GM User flag after task-tracker migration.
 
    v1.10 (module v2.22.0 — "Attack & Spell Auto-Spend"):
    - autoAttackSpend activated (was a FUTURE scaffold). World scope,
@@ -264,6 +267,26 @@ Hooks.once('init', () => {
     config: true,
     type: Boolean,
     default: false
+  });
+
+  /* ----------------------------------------------------------
+     HIDDEN TASK STORE — A-017 confidentiality fix
+
+     Client-scope, config-hidden storage for active-GM hidden task
+     records. Shape:
+       { schemaVersion: 1, worlds: { [game.world.id]: { tasks: {} } } }
+
+     This setting is intentionally not world/user scope: hidden task
+     metadata must not replicate to player clients.
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'hiddenTaskStore', {
+    scope: 'client',
+    config: false,
+    type: Object,
+    default: {
+      schemaVersion: 1,
+      worlds: {}
+    }
   });
 
   /* ----------------------------------------------------------

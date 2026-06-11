@@ -11,15 +11,13 @@
 
    Storage model:
      Public task state  → combatant.actor flags       (player-visible)
-     Hidden task data   → game.user flags (GM only)   (never exposed)
+     Hidden task data   → client-scope hiddenTaskStore (active GM only)
 
    Hidden data policy:
-     roundsRequired and metadataHidden are stored only on the GM user
-     who creates the task (game.user at creation time). This is acceptable
-     for the current single-GM campaign workflow. No multi-GM authority
-     election or hidden-data migration is implemented in v2.16.0.
-     If a different GM user later needs to resolve a hidden task, that
-     is future work and should be designed deliberately.
+     roundsRequired and metadataHidden are stored only in the active GM's
+     client-scope setting, partitioned by game.world.id. They are never
+     written to replicated User, Actor, Combatant, Scene, world-setting,
+     socket, or ChatMessage surfaces.
 
      readyToResolve is ONLY set by the GM client that can read hidden
      data (game.user.isGM and the hiddenData entry exists). Non-GM
@@ -30,8 +28,8 @@
    In-memory cache:
      Map<combatantId, Record<taskId, PublicTaskObject>>
      Rebuilt on pf1PostReady. Updated on every own API write.
-     No updateActor listener in v2.16.0 (deferred to v2.17.1 when
-     the Continue Task button enables player-client writes).
+     Hidden data is hydrated into a separate active-GM-only in-memory map
+     from the client-scope store after one-time legacy User-flag migration.
 
    API entry point: game.baphometTasks
    All public methods accept Combatant objects as the first argument.
@@ -63,7 +61,11 @@
 
 const BAPH_TASK_MODULE_ID    = 'baphomet-utils';
 const BAPH_TASK_FLAG_PUBLIC  = 'tasks';          // actor flag key
-const BAPH_TASK_FLAG_HIDDEN  = 'hiddenTaskData'; // GM user flag key
+const BAPH_TASK_FLAG_HIDDEN  = 'hiddenTaskData'; // legacy GM user flag key, migrated/scrubbed
+const BAPH_TASK_SETTING_HIDDEN_STORE = 'hiddenTaskStore';
+const BAPH_TASK_HIDDEN_SCHEMA_VERSION = 1;
+const BAPH_TASK_MISSING_HIDDEN_WARNING =
+  'Hidden task data is not available on this GM client — task cannot be adjudicated here.';
 
 /* ----------------------------------------------------------
    _baphResolveTaskRollActive
@@ -104,6 +106,7 @@ var _baphAidTaskRollActive = false;
    ---------------------------------------------------------- */
 
 const _baphTaskCache = new Map();
+const _baphHiddenTaskMap = new Map();
 
 /* ============================================================
    INTERNAL HELPERS
@@ -173,27 +176,253 @@ async function _baphTaskWriteActorTasks(actor, tasks) {
 }
 
 /* ----------------------------------------------------------
-   GM user flag I/O
-   Returns {} for non-GM clients — intentional. Any code path
-   that needs roundsRequired must verify game.user.isGM before
-   calling _baphTaskReadHiddenAll.
+   Active-GM hidden-data store
+
+   Hidden task data lives in one client-scope setting:
+     hiddenTaskStore = {
+       schemaVersion: 1,
+       worlds: { [game.world.id]: { tasks: { [taskId]: hiddenEntry } } }
+     }
+
+   The store is per browser profile and per machine. It is intentionally
+   never written to replicated Foundry documents. Reads hydrate an
+   in-memory map; writes clone the full setting value, update only the
+   current world bucket, and persist the complete store.
    ---------------------------------------------------------- */
 
+function _baphTaskCurrentWorldId() {
+  const worldId = game.world?.id;
+  return (typeof worldId === 'string' && worldId.trim()) ? worldId : null;
+}
+
+function _baphTaskReadHiddenStoreRoot() {
+  let raw = {};
+  try {
+    raw = game.settings.get(BAPH_TASK_MODULE_ID, BAPH_TASK_SETTING_HIDDEN_STORE) ?? {};
+  } catch (err) {
+    console.error(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: hiddenTaskStore read failed`,
+      err
+    );
+    return null;
+  }
+
+  const cloned = foundry.utils.deepClone(raw);
+  return {
+    schemaVersion: BAPH_TASK_HIDDEN_SCHEMA_VERSION,
+    worlds: (cloned?.worlds && typeof cloned.worlds === 'object') ? cloned.worlds : {},
+  };
+}
+
+function _baphTaskGetHiddenWorldTasks(root, worldId) {
+  const bucket = root?.worlds?.[worldId];
+  const tasks = bucket?.tasks;
+  return (tasks && typeof tasks === 'object') ? foundry.utils.deepClone(tasks) : {};
+}
+
+function _baphTaskIsActiveGMClient() {
+  return game.user?.isGM && game.user === game.users?.activeGM;
+}
+
+function _baphTaskWarnNoActiveGM(context) {
+  const message = 'No GM is connected — a hidden-DC task cannot be processed right now.';
+  _baphTaskDebugLog(`${context}: rejected — no active GM client`);
+  ui.notifications?.warn?.(message);
+}
+
+function _baphTaskWarnInactiveGM(context) {
+  const activeName = game.users?.activeGM?.name ?? 'none';
+  const message = 'Hidden task data is handled only by the active GM client.';
+  _baphTaskDebugLog(`${context}: rejected — current GM is not activeGM (active: ${activeName})`);
+  ui.notifications?.warn?.(message);
+}
+
+function _baphTaskEnsureActiveGMClient(context) {
+  if (!game.user?.isGM) return false;
+  if (!game.users?.activeGM) {
+    _baphTaskWarnNoActiveGM(context);
+    return false;
+  }
+  if (!_baphTaskIsActiveGMClient()) {
+    _baphTaskWarnInactiveGM(context);
+    return false;
+  }
+  return true;
+}
+
+function _baphTaskEnsureHiddenStoreContext(context) {
+  if (!game.user?.isGM) {
+    console.error(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: ${context} called by non-GM — aborting`
+    );
+    return false;
+  }
+  if (!_baphTaskCurrentWorldId()) {
+    const message = 'Hidden task data unavailable: current world id is missing.';
+    _baphTaskDebugLog(`${context}: rejected — game.world.id unavailable`);
+    ui.notifications?.warn?.(message);
+    return false;
+  }
+  return true;
+}
+
 function _baphTaskReadHiddenAll() {
-  if (!game.user.isGM) return {};
-  return foundry.utils.deepClone(
-    game.user.getFlag(BAPH_TASK_MODULE_ID, BAPH_TASK_FLAG_HIDDEN) ?? {}
-  );
+  if (!game.user?.isGM) return {};
+  return foundry.utils.deepClone(Object.fromEntries(_baphHiddenTaskMap.entries()));
 }
 
 async function _baphTaskWriteHiddenAll(data) {
-  if (!game.user.isGM) {
+  if (!_baphTaskEnsureHiddenStoreContext('_baphTaskWriteHiddenAll')) return false;
+
+  const worldId = _baphTaskCurrentWorldId();
+  const root = _baphTaskReadHiddenStoreRoot();
+  if (!root) return false;
+
+  const clonedData = foundry.utils.deepClone(data ?? {});
+  const nextRoot = foundry.utils.deepClone(root);
+  nextRoot.schemaVersion = BAPH_TASK_HIDDEN_SCHEMA_VERSION;
+  nextRoot.worlds = (nextRoot.worlds && typeof nextRoot.worlds === 'object') ? nextRoot.worlds : {};
+  nextRoot.worlds[worldId] = { tasks: clonedData };
+
+  try {
+    await game.settings.set(BAPH_TASK_MODULE_ID, BAPH_TASK_SETTING_HIDDEN_STORE, nextRoot);
+  } catch (err) {
     console.error(
-      `${BAPH_TASK_MODULE_ID} | task-tracker: _baphTaskWriteHiddenAll called by non-GM — aborting`
+      `${BAPH_TASK_MODULE_ID} | task-tracker: hiddenTaskStore write failed`,
+      err
     );
+    ui.notifications?.warn?.('Hidden task data could not be saved; task operation refused.');
+    return false;
+  }
+
+  _baphHiddenTaskMap.clear();
+  for (const [taskId, hiddenEntry] of Object.entries(clonedData)) {
+    _baphHiddenTaskMap.set(taskId, foundry.utils.deepClone(hiddenEntry));
+  }
+  return true;
+}
+
+function _baphTaskHydrateHiddenStore() {
+  _baphHiddenTaskMap.clear();
+  if (!game.user?.isGM) return;
+
+  const worldId = _baphTaskCurrentWorldId();
+  if (!worldId) {
+    _baphTaskDebugLog('hidden store hydrate skipped: game.world.id unavailable');
     return;
   }
-  await game.user.setFlag(BAPH_TASK_MODULE_ID, BAPH_TASK_FLAG_HIDDEN, data);
+
+  const root = _baphTaskReadHiddenStoreRoot();
+  if (!root) return;
+
+  const tasks = _baphTaskGetHiddenWorldTasks(root, worldId);
+  for (const [taskId, hiddenEntry] of Object.entries(tasks)) {
+    _baphHiddenTaskMap.set(taskId, foundry.utils.deepClone(hiddenEntry));
+  }
+  _baphTaskDebugLog(`hidden store hydrated — ${_baphHiddenTaskMap.size} hidden task entrie(s)`);
+}
+
+async function _baphTaskMigrateLegacyHiddenStore() {
+  if (!_baphTaskEnsureActiveGMClient('hidden store migration')) return;
+  if (!_baphTaskEnsureHiddenStoreContext('hidden store migration')) return;
+
+  const legacy = foundry.utils.deepClone(
+    game.user.getFlag(BAPH_TASK_MODULE_ID, BAPH_TASK_FLAG_HIDDEN) ?? {}
+  );
+  if (!legacy || typeof legacy !== 'object' || Object.keys(legacy).length === 0) return;
+
+  const worldId = _baphTaskCurrentWorldId();
+  const root = _baphTaskReadHiddenStoreRoot();
+  if (!root) return;
+
+  const currentTasks = _baphTaskGetHiddenWorldTasks(root, worldId);
+  const mergedTasks = { ...currentTasks, ...legacy };
+  const nextRoot = foundry.utils.deepClone(root);
+  nextRoot.schemaVersion = BAPH_TASK_HIDDEN_SCHEMA_VERSION;
+  nextRoot.worlds = (nextRoot.worlds && typeof nextRoot.worlds === 'object') ? nextRoot.worlds : {};
+  nextRoot.worlds[worldId] = { tasks: mergedTasks };
+
+  try {
+    await game.settings.set(BAPH_TASK_MODULE_ID, BAPH_TASK_SETTING_HIDDEN_STORE, nextRoot);
+  } catch (err) {
+    console.error(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: hiddenTaskStore migration write failed; legacy flag retained`,
+      err
+    );
+    ui.notifications?.warn?.('Hidden task migration failed; old hidden-data flag was not scrubbed.');
+    return;
+  }
+
+  const verifyRoot = _baphTaskReadHiddenStoreRoot();
+  const verifyTasks = verifyRoot ? _baphTaskGetHiddenWorldTasks(verifyRoot, worldId) : {};
+  const copiedAll = Object.keys(legacy).every((taskId) => verifyTasks[taskId] != null);
+  if (!copiedAll) {
+    console.error(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: hiddenTaskStore migration verification failed; legacy flag retained`
+    );
+    ui.notifications?.warn?.('Hidden task migration failed verification; old hidden-data flag was not scrubbed.');
+    return;
+  }
+
+  try {
+    await game.user.unsetFlag(BAPH_TASK_MODULE_ID, BAPH_TASK_FLAG_HIDDEN);
+  } catch (err) {
+    console.error(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: legacy hidden-data flag scrub failed`,
+      err
+    );
+    ui.notifications?.warn?.('Hidden task migration copied data, but old hidden-data flag could not be scrubbed.');
+    return;
+  }
+
+  const scrubbed = game.user.getFlag(BAPH_TASK_MODULE_ID, BAPH_TASK_FLAG_HIDDEN) === undefined;
+  _baphTaskDebugLog(
+    `hidden store migration complete — migrated ${Object.keys(legacy).length} task(s), ` +
+    `legacy scrubbed=${scrubbed}`
+  );
+}
+
+async function _baphTaskClearCurrentWorldHiddenStore() {
+  if (!_baphTaskEnsureActiveGMClient('clearHiddenTaskStore')) return false;
+  if (!_baphTaskEnsureHiddenStoreContext('clearHiddenTaskStore')) return false;
+  return _baphTaskWriteHiddenAll({});
+}
+
+function _baphTaskHasHiddenEntry(taskId) {
+  return _baphHiddenTaskMap.has(taskId);
+}
+
+function _baphTaskAssertNoSecrets(value, label = 'task payload') {
+  const forbiddenKeys = new Set(['dc', 'roundsRequired', 'trapName', 'metadataHidden']);
+  const found = [];
+
+  const visit = (node, path) => {
+    if (!node || typeof node !== 'object') return;
+    for (const [key, child] of Object.entries(node)) {
+      const childPath = path ? `${path}.${key}` : key;
+      if (forbiddenKeys.has(key)) found.push(childPath);
+      visit(child, childPath);
+    }
+  };
+
+  visit(value, '');
+  if (found.length > 0) {
+    throw new Error(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: forbidden hidden field(s) in ${label}: ${found.join(', ')}`
+    );
+  }
+  return value;
+}
+
+function _baphTaskEmitSocket(action, payload) {
+  const message = { action, payload };
+  _baphTaskAssertNoSecrets(message, `socket.${action}`);
+  game.socket.emit(`module.${BAPH_TASK_MODULE_ID}`, message);
+}
+
+async function _baphTaskCreateChatMessage(data) {
+  _baphTaskAssertNoSecrets(data, 'ChatMessage.create');
+  return ChatMessage.create(data);
 }
 
 /* ----------------------------------------------------------
@@ -274,12 +503,13 @@ function _baphTaskRebuildCache() {
    createTask(combatant, options)
 
    Create a new multi-round task on a combatant's actor.
-   GM only. roundsRequired and metadataHidden go to GM user flags.
+   GM only. roundsRequired and metadataHidden go to the active GM's
+   client-scope hiddenTaskStore.
    All player-visible fields go to actor flags.
 
-   Hidden data is stored on the GM user who calls createTask.
-   In a single-GM campaign this is always the same user.
-   Multi-GM scenarios are not handled in v2.16.0.
+   Hidden data is stored on the active GM client that calls createTask.
+   If another GM machine later tries to adjudicate without that local
+   hidden entry, the task fails closed instead of guessing.
 
    @param {Combatant|string} combatant
    @param {object}  options
@@ -298,6 +528,8 @@ async function _baphTaskCreate(combatantOrId, options = {}) {
     ui.notifications.warn('Baphomet Tasks: only the GM can create tasks.');
     return false;
   }
+  if (!_baphTaskEnsureActiveGMClient('createTask')) return false;
+  if (!_baphTaskEnsureHiddenStoreContext('createTask')) return false;
 
   const combatant = _baphTaskResolveCombatant(combatantOrId);
   if (!combatant) {
@@ -360,15 +592,16 @@ async function _baphTaskCreate(combatantOrId, options = {}) {
     successfulAidContributors:    [],  // cleared on each Resolve attempt
   };
 
-  const actorTasks = _baphTaskReadActorTasks(combatant.actor);
-  actorTasks[taskId] = publicTask;
-  await _baphTaskWriteActorTasks(combatant.actor, actorTasks);
-
-  // ── Hidden task data (GM user flags — never on actor flags) ──────
+  // ── Hidden task data (client-scope active-GM store — never on actor flags) ──────
   // roundsRequired and metadataHidden are strictly private.
   const hiddenAll = _baphTaskReadHiddenAll();
   hiddenAll[taskId] = { taskId, roundsRequired, metadataHidden };
-  await _baphTaskWriteHiddenAll(hiddenAll);
+  const hiddenWritten = await _baphTaskWriteHiddenAll(hiddenAll);
+  if (!hiddenWritten) return false;
+
+  const actorTasks = _baphTaskReadActorTasks(combatant.actor);
+  actorTasks[taskId] = publicTask;
+  await _baphTaskWriteActorTasks(combatant.actor, actorTasks);
 
   // ── Cache ──────────────────────────────────────────────────────────
   _baphTaskUpdateCache(combatant.id, actorTasks);
@@ -621,8 +854,9 @@ async function _baphTaskCommit(combatantOrId, taskId) {
       _baphTaskDebugLog(
         `commitAction WARNING: no hidden data for task "${taskId}" on this GM client. ` +
         `readyToResolve not evaluated. ` +
-        `Check game.user.flags['${BAPH_TASK_MODULE_ID}'].hiddenTaskData.`
+        `Check the active GM client's hiddenTaskStore.`
       );
+      ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
       console.warn(
         `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
         `no hidden data found for task "${taskId}" on this GM client. ` +
@@ -642,18 +876,23 @@ async function _baphTaskCommit(combatantOrId, taskId) {
   // public committed progress meets the threshold.
   // GM clients skip this — they already evaluated readiness synchronously above.
   if (!game.user.isGM) {
+    if (!game.users?.activeGM) {
+      _baphTaskDebugLog(
+        `commitAction: no active GM for readiness check — progress saved for "${task.taskName}"`
+      );
+      ui.notifications?.warn?.('Progress saved. Readiness will update when the GM is online.');
+      return true;
+    }
+
     _baphTaskDebugLog(
       `commitAction: emitting readiness-check request — ` +
       `task "${task.taskName}", roundsCommitted=${task.roundsCommitted}`
     );
-    game.socket.emit(`module.${BAPH_TASK_MODULE_ID}`, {
-      action:  'baphTaskReadinessCheck',
-      payload: {
-        combatantId:        combatant.id,
-        taskId,
-        roundsCommitted:    task.roundsCommitted,
-        requestingUserId:   game.user.id,
-      },
+    _baphTaskEmitSocket('baphTaskReadinessCheck', {
+      combatantId:        combatant.id,
+      taskId,
+      roundsCommitted:    task.roundsCommitted,
+      requestingUserId:   game.user.id,
     });
   }
 
@@ -766,7 +1005,7 @@ async function _baphTaskResume(combatantOrId, taskId) {
    Mark task as 'abandoned'. Does not consume an action.
    Requires GM or combatant owner.
    Actor flag data is preserved for GM audit — not deleted.
-   Hidden data on GM user flags is also preserved.
+   Hidden data in the active GM client store is also preserved.
 
    @param {Combatant|string} combatant
    @param {string}           taskId
@@ -807,7 +1046,7 @@ async function _baphTaskAbandon(combatantOrId, taskId) {
   await _baphTaskWriteActorTasks(combatant.actor, tasks);
   _baphTaskUpdateCache(combatant.id, tasks);
 
-  await ChatMessage.create({
+  await _baphTaskCreateChatMessage({
     content:
       `<p><strong>${actorName}</strong> abandons <em>${taskName}</em>.</p>` +
       `<p>Task abandoned — no further progress possible.</p>`,
@@ -854,6 +1093,18 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
   const dc        = hidden?.metadataHidden?.dc ?? null;
   const actorName = combatant.actor.name;
   const taskName  = task.taskName;
+
+  if (!_baphTaskHasHiddenEntry(taskId)) {
+    _baphTaskDebugLog(
+      `adjudicate refused: no hidden data for task "${taskId}" on this GM client`
+    );
+    ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
+    console.warn(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: adjudicate refused — ` +
+      `no hidden data for task "${taskId}" on this GM client.`
+    );
+    return;
+  }
 
   if (dc !== null && Number.isFinite(rollTotal)) {
     const diff = rollTotal - dc;
@@ -903,7 +1154,7 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
       );
     }
 
-    await ChatMessage.create({
+    await _baphTaskCreateChatMessage({
       content: chatContent,
       speaker: { alias: 'Baphomet Tasks' },
       whisper: [],
@@ -921,6 +1172,8 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
       `classification skipped (dc=${dc}, rollTotal=${rollTotal}). ` +
       `Was this task created on a different GM client?`
     );
+    ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
+    return;
   }
 
   // Consume pending aid bonuses and successful contributor records after every Resolve attempt.
@@ -1057,7 +1310,18 @@ async function _baphTaskResolve(combatantOrId, taskId) {
     return false;
   }
 
-  // Gate 9: spend 1 action
+  // Gate 9: player-triggered resolve requires a live active GM before spending.
+  if (!game.user.isGM && !game.users?.activeGM) {
+    _baphTaskDebugLog(
+      `resolveTask rejected: no active GM available for hidden adjudication of "${task.taskName}"`
+    );
+    ui.notifications?.warn?.(
+      "No GM is connected — a hidden-DC task can't be resolved right now. Try again when the GM is online."
+    );
+    return false;
+  }
+
+  // Gate 10: spend 1 action
   const spent = _spendActionForCombatant(combatant.id, 1, `resolve-${task.skillKey}`);
   if (!spent) {
     _baphTaskDebugLog(
@@ -1123,14 +1387,11 @@ async function _baphTaskResolve(combatantOrId, taskId) {
         `resolveTask: emitting GM adjudication request — ` +
         `task "${task.taskName}", rollTotal=${capturedTotal}`
       );
-      game.socket.emit(`module.${BAPH_TASK_MODULE_ID}`, {
-        action:  'baphTaskResolveAdjudicate',
-        payload: {
-          combatantId:        combatant.id,
-          taskId,
-          rollTotal:          capturedTotal,
-          requestingUserId:   game.user.id,
-        },
+      _baphTaskEmitSocket('baphTaskResolveAdjudicate', {
+        combatantId:        combatant.id,
+        taskId,
+        rollTotal:          capturedTotal,
+        requestingUserId:   game.user.id,
       });
     } else {
       // Roll total not captured — socket not emitted; GM must adjudicate manually.
@@ -1331,12 +1592,12 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
       await _baphTaskWriteActorTasks(targetCombatant.actor, targetTasks);
       _baphTaskUpdateCache(targetCombatant.id, targetTasks);
 
-      await ChatMessage.create({
+      await _baphTaskCreateChatMessage({
         content:
           `<p><strong>${aider.actor.name}</strong> aids ` +
           `<strong>${targetCombatant.actor.name}</strong>'s ` +
           `<em>${targetTask.taskName}</em>.</p>` +
-          `<p>Aid check: <strong>${capturedAidTotal}</strong> vs DC ${AID_DC} — ` +
+          `<p>Aid check: <strong>${capturedAidTotal}</strong> — ` +
           `<strong>Success.</strong> Aid queued: +2 to the next resolution roll.</p>`,
         speaker: { alias: 'Baphomet Tasks' },
         whisper: [],
@@ -1348,12 +1609,12 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
       );
     } else {
       // Failed Aid: action spent, no bonus banked.
-      await ChatMessage.create({
+      await _baphTaskCreateChatMessage({
         content:
           `<p><strong>${aider.actor.name}</strong> attempts to aid ` +
           `<strong>${targetCombatant.actor.name}</strong>'s ` +
           `<em>${targetTask.taskName}</em>.</p>` +
-          `<p>Aid check: <strong>${capturedAidTotal ?? '?'}</strong> vs DC ${AID_DC} — ` +
+          `<p>Aid check: <strong>${capturedAidTotal ?? '?'}</strong> — ` +
           `<strong>Failure.</strong> No bonus queued. Action spent.</p>`,
         speaker: { alias: 'Baphomet Tasks' },
         whisper: [],
@@ -1375,18 +1636,15 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
     );
 
     if (capturedAidTotal !== null && Number.isFinite(capturedAidTotal)) {
-      game.socket.emit(`module.${BAPH_TASK_MODULE_ID}`, {
-        action:  'baphTaskAidAdjudicate',
-        payload: {
-          aiderCombatantId:  aider.id,
-          aiderActorId:      aider.actor.id,
-          aiderActorName:    aider.actor.name,
-          targetCombatantId: targetCombatant.id,
-          targetTaskId,
-          requestingUserId:  game.user.id,
-          roundAdded:        game.combat.round,
-          rollTotal:         capturedAidTotal,  // GM uses this for DC 10 check
-        },
+      _baphTaskEmitSocket('baphTaskAidAdjudicate', {
+        aiderCombatantId:  aider.id,
+        aiderActorId:      aider.actor.id,
+        aiderActorName:    aider.actor.name,
+        targetCombatantId: targetCombatant.id,
+        targetTaskId,
+        requestingUserId:  game.user.id,
+        roundAdded:        game.combat.round,
+        rollTotal:         capturedAidTotal,  // GM uses this for public Aid threshold check
       });
     } else {
       // Roll total not captured — skip socket; action was spent but no bonus queued.
@@ -1431,7 +1689,7 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
    On spend success:
      - Creates task with roundsCommitted=1, lastCommittedRound=startRound
      - readyToResolve=true when roundsRequired<=1
-     - Stores roundsRequired+dc in GM user hidden flags (never on actor)
+     - Stores roundsRequired+dc in the active GM's client-scope hiddenTaskStore (never on actor)
      - Posts public chat (no hidden data revealed)
      - Calls _renderActionPanel() to refresh UI
 
@@ -1452,6 +1710,8 @@ async function _baphTaskInitiate(combatantOrId, options = {}) {
     ui.notifications?.warn?.('Baphomet Tasks: only the GM can initiate tasks.');
     return false;
   }
+  if (!_baphTaskEnsureActiveGMClient('initiateTask')) return false;
+  if (!_baphTaskEnsureHiddenStoreContext('initiateTask')) return false;
 
   // Gate 2: active combat
   if (!game.combat) {
@@ -1575,14 +1835,15 @@ async function _baphTaskInitiate(combatantOrId, options = {}) {
     successfulAidContributors: [],
   };
 
-  const actorTasks = _baphTaskReadActorTasks(combatant.actor);
-  actorTasks[taskId] = publicTask;
-  await _baphTaskWriteActorTasks(combatant.actor, actorTasks);
-
   // Hidden data: roundsRequired and DC never go on actor flags.
   const hiddenAll = _baphTaskReadHiddenAll();
   hiddenAll[taskId] = { taskId, roundsRequired, metadataHidden: { dc } };
-  await _baphTaskWriteHiddenAll(hiddenAll);
+  const hiddenWritten = await _baphTaskWriteHiddenAll(hiddenAll);
+  if (!hiddenWritten) return false;
+
+  const actorTasks = _baphTaskReadActorTasks(combatant.actor);
+  actorTasks[taskId] = publicTask;
+  await _baphTaskWriteActorTasks(combatant.actor, actorTasks);
 
   _baphTaskUpdateCache(combatant.id, actorTasks);
 
@@ -1590,7 +1851,7 @@ async function _baphTaskInitiate(combatantOrId, options = {}) {
   const stateLabel = readyToResolve
     ? 'Task begun and ready to resolve.'
     : 'Task begun. Work in progress.';
-  await ChatMessage.create({
+  await _baphTaskCreateChatMessage({
     content:
       `<p><strong>${combatant.actor.name}</strong> begins ` +
       `<em>${trimmedName}</em>.</p>` +
@@ -1895,7 +2156,9 @@ function _baphProcessNextGMRequest() {
    documents and flags are accessible.
    ============================================================ */
 
-Hooks.once('pf1PostReady', () => {
+Hooks.once('pf1PostReady', async () => {
+  await _baphTaskMigrateLegacyHiddenStore();
+  _baphTaskHydrateHiddenStore();
   _baphTaskRebuildCache();
 
   /* ── Socket: GM-side adjudication for player-triggered Resolve Task ──
@@ -1925,8 +2188,9 @@ Hooks.once('pf1PostReady', () => {
       return;
     }
 
-    // All remaining socket actions on this channel require a GM client.
+    // All remaining socket actions on this channel require the active GM client.
     if (!game.user.isGM) return;
+    if (game.user !== game.users?.activeGM) return;
 
     /* ── baphTaskRequest (v2.20.0) ───────────────────────────────────
        Player-initiated task request. GM validates and shows approval modal.
@@ -2100,12 +2364,12 @@ Hooks.once('pf1PostReady', () => {
         await _baphTaskWriteActorTasks(targetCombatant.actor, targetTasks);
         _baphTaskUpdateCache(targetCombatant.id, targetTasks);
 
-        await ChatMessage.create({
+        await _baphTaskCreateChatMessage({
           content:
             `<p><strong>${aiderActorName ?? aider.actor.name}</strong> aids ` +
             `<strong>${targetCombatant.actor.name}</strong>'s ` +
             `<em>${targetTask.taskName}</em>.</p>` +
-            `<p>Aid check: <strong>${rollTotal}</strong> vs DC ${AID_DC} — ` +
+            `<p>Aid check: <strong>${rollTotal}</strong> — ` +
             `<strong>Success.</strong> Aid queued: +2 to the next resolution roll.</p>`,
           speaker: { alias: 'Baphomet Tasks' },
           whisper: [],
@@ -2118,12 +2382,12 @@ Hooks.once('pf1PostReady', () => {
         );
       } else {
         // Failed aid: no bonus, no contributor record added
-        await ChatMessage.create({
+        await _baphTaskCreateChatMessage({
           content:
             `<p><strong>${aiderActorName ?? aider.actor.name}</strong> attempts to aid ` +
             `<strong>${targetCombatant.actor.name}</strong>'s ` +
             `<em>${targetTask.taskName}</em>.</p>` +
-            `<p>Aid check: <strong>${Number.isFinite(rollTotal) ? rollTotal : '?'}</strong> vs DC ${AID_DC} — ` +
+            `<p>Aid check: <strong>${Number.isFinite(rollTotal) ? rollTotal : '?'}</strong> — ` +
             `<strong>Failure.</strong> No bonus queued. Action spent.</p>`,
           speaker: { alias: 'Baphomet Tasks' },
           whisper: [],
@@ -2195,7 +2459,7 @@ Hooks.once('pf1PostReady', () => {
         return;
       }
 
-      // Read hidden data from GM user flag. Hidden duration never leaves GM-side storage.
+      // Read hidden data from the active GM client store. Hidden duration never leaves GM-side storage.
       const rcHiddenAll = _baphTaskReadHiddenAll();
       const rcHidden    = rcHiddenAll[taskId];
       if (!rcHidden?.roundsRequired) {
@@ -2203,6 +2467,7 @@ Hooks.once('pf1PostReady', () => {
           `socket readinessCheck WARNING: no hidden data for task "${taskId}" on this GM client — ` +
           `readyToResolve not evaluated`
         );
+        ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
         console.warn(
           `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
           `socket readinessCheck — no hidden data for task "${taskId}". ` +
@@ -2246,6 +2511,7 @@ Hooks.once('pf1PostReady', () => {
     abandonTask:  _baphTaskAbandon,
     resolveTask:  _baphTaskResolve,
     aidTask:      _baphTaskAid,
+    clearHiddenTaskStore: _baphTaskClearCurrentWorldHiddenStore,
   };
 
   console.debug(`${BAPH_TASK_MODULE_ID} | task-tracker v1.0: game.baphometTasks API ready`);

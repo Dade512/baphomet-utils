@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.23.3
+**Current Version:** 2.23.4
 
 ---
 
@@ -105,11 +105,17 @@ const task = game.baphometTasks.getTask(combatant, taskId);
 const all  = game.baphometTasks.getTasks(combatant);
 ```
 
-Player-visible task state is stored on actor flags. Hidden duration (`roundsRequired`) and GM notes are stored on the GM user's flags and never exposed to players. See DEV_NOTES.md for the full storage model.
+Player-visible task state is stored on actor flags. Hidden duration (`roundsRequired`) and GM notes are stored in the active GM client's hidden task store and never exposed to players. The hidden store is per machine/browser profile and per world: clearing browser storage, switching browser profiles, or adjudicating from a different GM machine can make active hidden task data unavailable. In that case hidden-DC task adjudication fails closed instead of guessing.
 
 ---
 
 ## Changelog
+
+### v2.23.4 — A-017 Hidden Task Data Re-Home
+
+Moves hidden multi-round task data out of replicated GM User flags and into the active GM client's hidden task store. The store is client-scope, config-hidden, and partitioned by `game.world.id`; legacy `hiddenTaskData` User flags are migrated and scrubbed by the active GM on load after the new copy verifies. Hidden task socket handling is active-GM-only, and Resolve refuses before spending if no GM is connected.
+
+Warning: hidden task data is intentionally per machine/browser profile. Clearing browser storage, switching browser profiles, or moving active-GM duty to another machine can make current hidden task data unavailable; task adjudication then fails closed and must be recovered manually.
 
 ### v2.23.3 — R6 TWF Light-Offhand Penalty Prep
 
@@ -228,8 +234,8 @@ Improves the player-facing experience after a minor Resolve failure. No mechanic
 
 Correction patch for a critical readiness bug exposed by v2.20.0's player-driven Continue Task flow. No new UI; adds a GM-authorized socket path so non-GM clients can trigger readiness evaluation.
 
-- **Root cause:** When a non-GM player clicks Continue Task, `_baphTaskCommit` runs on the player client. The player client cannot read the GM user flag where `roundsRequired` is stored, so `readyToResolve` never flipped true regardless of how many rounds were committed. Public progress accumulated indefinitely.
-- **Fix:** After a non-GM Continue Task commit, the player client emits a `baphTaskReadinessCheck` socket message to the GM. The GM handler reads the authoritative public task state from actor flags and the hidden `roundsRequired` from the GM user flag, then flips `readyToResolve = true` when the threshold is met.
+- **Root cause:** When a non-GM player clicks Continue Task, `_baphTaskCommit` runs on the player client. The player client cannot read the GM-private hidden store where `roundsRequired` is stored, so `readyToResolve` never flipped true regardless of how many rounds were committed. Public progress accumulated indefinitely.
+- **Fix:** After a non-GM Continue Task commit, the player client emits a `baphTaskReadinessCheck` socket message to the GM. The active GM handler reads the authoritative public task state from actor flags and the hidden `roundsRequired` from the client-scope hidden store, then flips `readyToResolve = true` when the threshold is met.
 - **Privacy preserved:** The `baphTaskReadinessCheck` payload contains only combatant/task identity and requesting user — no hidden data. The hidden duration comparison occurs entirely on the GM client.
 - **Cross-client propagation:** The GM's actor flag write triggers the existing `updateActor` hook on all clients, which rebuilds the task cache and re-renders the widget. Player sees Resolve Task appear automatically.
 - **GM commit path unchanged:** When the GM clicks Continue Task, readiness is evaluated synchronously (no socket round-trip). This path is not altered.
@@ -254,12 +260,12 @@ Enables players to request multi-round task initiation from the combat HUD, with
 - **60-second expiry:** If no GM responds within 60 seconds, the player's request times out with a notification. Stale requests are automatically ignored on the GM side.
 - **GM approval modal:** The first GM to receive the request sees a blocking modal showing the requesting player, character name, skill, player description, and active-combatant validation status. The Approve button is disabled if the combatant is no longer the active turn.
 - **GM hidden inputs:** The modal includes a difficulty preset dropdown (Simple 1d4 / Difficult 2d4 / Custom), a rounds required field with a 🎲 Roll button that auto-rolls the selected preset, and a DC input.
-- **Approval funnels through `initiateTask`:** Approving calls the existing `game.baphometTasks.initiateTask()` path — same action spend (1 action), same first-round commitment (`roundsCommitted: 1`), same hidden-flag storage, same chat message as a GM-created task.
+- **Approval funnels through `initiateTask`:** Approving calls the existing `game.baphometTasks.initiateTask()` path — same action spend (1 action), same first-round commitment (`roundsCommitted: 1`), same hidden-store storage, same chat message as a GM-created task.
 - **Immediate ready state:** If `roundsRequired ≤ 1`, the task enters Ready to resolve immediately, matching `initiateTask` behavior.
 - **Rejection path:** The GM can reject instead; a whispered chat message is sent to the requesting player and no task is created.
 - **Sequential multi-request handling:** If multiple player requests arrive while a GM modal is active, they are queued and shown in sequence.
 - **Existing GM path unchanged:** The GM task builder (Begin Task widget) remains fully functional for direct GM-initiated tasks.
-- **Privacy preserved:** Hidden DC and `roundsRequired` are never transmitted in any socket message; they exist only on the GM user's flags after task creation.
+- **Privacy preserved:** Hidden DC and `roundsRequired` are never transmitted in any socket message; they exist only in the active GM client's hidden task store after task creation.
 
 ### v2.19.1 — Cross-Client Action Pip Sync
 
@@ -277,7 +283,7 @@ GM-only front door for initiating supported multi-round Disable Device tasks fro
 
 - **Begin Task button:** Appears in the task widget area for GM users when the active combatant has no unresolved task and combat is active.
 - **Task builder overlay:** Compact in-combat form collecting task name, action flavor (disable/arm/sabotage/jury_rig/custom), duration mode (Simple 1d4 / Difficult 2d4 / Manual), and resolution DC.
-- **Secret duration:** Simple mode rolls 1d4 privately on the GM client; Difficult rolls 2d4. Manual accepts a GM-entered positive integer. Actual rounds required stored only in GM hidden flags; never revealed to players.
+- **Secret duration:** Simple mode rolls 1d4 privately on the GM client; Difficult rolls 2d4. Manual accepts a GM-entered positive integer. Actual rounds required are stored only in the active GM client's hidden store; never revealed to players.
 - **Initiation costs 1 action:** `initiateTask()` spends exactly 1 PF1.5 action from the task owner before creating the task. If the spend fails (no actions available), no task or hidden metadata is written.
 - **Initial work unit:** Creation counts as the first committed round (`roundsCommitted: 1`). A 1-round task immediately enters Ready to resolve state.
 - **Existing task guard:** Builder button hidden when active combatant already has an unresolved task; `initiateTask()` also defensively rejects duplicate creation.
@@ -361,7 +367,7 @@ API-only multi-round task scaffold. No UI, no Disable Device integration, no aut
 - Added `scripts/task-tracker.js` — new file, loads after `action-tracker.js`.
 
 - Added `game.baphometTasks` — public API for creating and managing multi-round tasks in combat.
-- Public task state stored on actor flags (player-visible). Hidden task duration stored on GM user flags (never exposed to players).
+- Public task state stored on actor flags (player-visible). Hidden task duration stored in the active GM client's hidden store (never exposed to players).
 - All 8 API methods implemented: `createTask`, `getTask`, `getTasks`, `commitAction`, `pauseTask`, `resumeTask`, `abandonTask`, `resolveTask` (stub).
 - `commitAction` enforces 9 sequential gates including same-round double-spend protection.
 - Combat end (`deleteCombat`) pauses all active tasks with reason `combat-ended` instead of silently abandoning them.
@@ -593,13 +599,13 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 
 1. **Task creation (GM console):** Start combat. Run `await game.baphometTasks.createTask(game.combat.combatant, { skillKey: 'dvs', taskType: 'disable-device', taskName: 'Test Task', roundsRequired: 2, metadataHidden: { dc: 15 } })`. Confirm taskId is returned.
 2. **Actor flags written:** After createTask, open F12 → run `game.combat.combatant.actor.getFlag('baphomet-utils', 'tasks')`. Confirm the task appears with correct public fields. Confirm `roundsRequired` is absent.
-3. **GM user flags written:** Run `game.user.getFlag('baphomet-utils', 'hiddenTaskData')`. Confirm the hidden entry exists with `roundsRequired: 2` and `metadataHidden`.
+3. **GM hidden store written:** Run `game.settings.get('baphomet-utils', 'hiddenTaskStore')`. Under `worlds[game.world.id].tasks[taskId]`, confirm the hidden entry exists with `roundsRequired: 2` and `metadataHidden`.
 4. **commitAction advances progress:** Run `await game.baphometTasks.commitAction(game.combat.combatant, taskId)`. Confirm returns `true`. Re-read actor flags — `roundsCommitted` should be 1, `lastCommittedRound` should equal `game.combat.round`. Confirm 1 action pip is spent in the tracker.
 5. **readyToResolve set on threshold:** After 2 commits (advance a round between them), confirm `readyToResolve: true` on the actor flag.
 6. **Same-round guard:** Run `commitAction` twice in the same round. Second call should return `false` and log a warning.
 7. **Non-active combatant guard:** Try commitAction on a combatant that is NOT the current active. Should return `false`.
 8. **Pause / resume cycle:** `pauseTask` → confirm status `paused`. `commitAction` on paused task → returns `false`. `resumeTask` → confirm status `active`. `commitAction` → succeeds.
-9. **Abandon preserves data:** `abandonTask` → status `abandoned`. Actor flags still have the task entry. Hidden GM user flags unchanged.
+9. **Abandon preserves data:** `abandonTask` → status `abandoned`. Actor flags still have the task entry. Hidden GM client-store data unchanged.
 10. **deleteCombat pause:** Start combat, create a task, end combat. Re-read actor flags — task should be `status: 'paused'`, `pausedReason: 'combat-ended'`. GM notification should appear.
 11. **Non-GM sanitization:** Log in as a player who owns a combatant. Run `game.baphometTasks.getTask(...)`. Confirm returned object has no `roundsRequired` or `metadataHidden`.
 12. **resolveTask stub:** Run `game.baphometTasks.resolveTask(...)`. Should return `false` and log a stub message. No rolls fired.
