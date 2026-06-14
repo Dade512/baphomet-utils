@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.24
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.25
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
@@ -13,6 +13,25 @@
              a round stays spent until the next round begins.
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.25 Changes (AoO / COMBAT REFLEXES ATTACK SPENDS THE JADE POOL):
+   - Attack dialog gains an "AoO (Combat Reflexes)" checkbox in the
+     Miscellaneous row, injected by _diagHandleAttackDialogRender only
+     when app.actor has the Combat Reflexes feat. Its state bridges to
+     pf1PreActionUse via globalThis.baphometAoO (mirrors the baphometTWF
+     bridge): reset per dialog open, cleared after the hook consumes it.
+   - New game.baphometActions.spendCombatReflex(combatantId): spends one
+     available green jade AoO pip (mirrors spendReaction).
+   - pf1PreActionUse off-turn (AoO) branch: when the attack is flagged AoO
+     AND the actor has Combat Reflexes AND a jade pip is available, spend a
+     jade pip; otherwise fall back to the blue reaction (Michael's ruling),
+     warning if neither is available. Unflagged behavior is unchanged.
+   - Rides the existing autoAttackSpend setting (no new setting).
+   - FIX (v2.24.0 regression): _maybeResetReactionsForNewRound now ADOPTS the
+     current round on a client's first observation (round marker null) instead
+     of resetting, so a mid-round reload/reconnect no longer refills reaction/AoO
+     pips already spent this round (pip state is hydrated from the combatant
+     flags). Only a genuine round change refreshes pips.
 
    v1.24 Changes (PER-ROUND REACTION / AoO RESET):
    - Reaction and Combat Reflexes (AoO) pips are now a PER-ROUND resource.
@@ -649,6 +668,11 @@ function _resetReactionReflexForRound(combatantId, combatant) {
 function _maybeResetReactionsForNewRound(combat) {
   const round = combat?.round ?? 0;
   if (round === _reactionResetRound) return;
+  // v1.25 fix: first observation on this client (fresh/reloaded client mid-combat) — ADOPT the
+  // current round WITHOUT resetting, so a mid-round reload/reconnect does not refill reaction/AoO
+  // pips already spent this round (pip state is hydrated from the combatant flags in _initState).
+  // Only a genuine round CHANGE refreshes pips.
+  if (_reactionResetRound === null) { _reactionResetRound = round; return; }
   _reactionResetRound = round;
   for (const combatant of combat.combatants) {
     if (!combatant?.actor) continue;
@@ -1090,6 +1114,18 @@ Hooks.once('ready', () => {
       const state = _getState(combatantId);
       if (!state || !state.reaction[0]) return false;
       state.reaction[0] = false;
+      _refreshPipRow(combatantId);
+      _writePipFlag(combatantId);
+      return true;
+    },
+    // v1.25: spend one available Combat Reflexes (jade) AoO pip. Mirrors
+    // spendReaction. Returns true only if a jade pip was actually spent.
+    spendCombatReflex: (combatantId) => {
+      const state = _getState(combatantId);
+      if (!state) return false;
+      const idx = state.reflexPip.findIndex(p => p);
+      if (idx === -1) return false;
+      state.reflexPip[idx] = false;
       _refreshPipRow(combatantId);
       _writePipFlag(combatantId);
       return true;
@@ -1970,8 +2006,19 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         _debugLog(`auto-spend: cannot control "${actor.name}" — no reaction spend`);
         return;
       }
-      const r = game.baphometActions?.spendReaction?.(own.id);
-      _debugLog(`auto-spend: off-turn attack (AoO) by "${actor.name}" — reaction ${r ? 'spent' : 'unavailable'} (no action, no swing)`);
+      // v1.25: prefer the green Combat Reflexes (jade) pool when the attack
+      // was flagged "AoO (Combat Reflexes)" on the dialog and the actor has
+      // the feat; fall back to the blue reaction when no jade is left.
+      const aooFlag = globalThis.baphometAoO;
+      const wantsCR = !!(aooFlag?.active && aooFlag.actorId === actor.id) && _combatReflexCount(actor) > 0;
+      if (aooFlag) globalThis.baphometAoO = null; // one-shot: consume the flag
+      if (wantsCR && game.baphometActions?.spendCombatReflex?.(own.id)) {
+        _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — Combat Reflexes (jade) pip spent`);
+      } else {
+        const r = game.baphometActions?.spendReaction?.(own.id);
+        if (wantsCR && !r) ui.notifications?.warn?.(`${actor.name}: no Combat Reflexes AoO or reaction left.`);
+        _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — ${wantsCR ? 'no jade → ' : ''}reaction ${r ? 'spent' : 'unavailable'} (no action, no swing)`);
+      }
     }
   } catch (e) {
     _debugLog('auto-spend (pf1PreActionUse) error: ' + e.message);
@@ -3750,6 +3797,31 @@ function _diagHandleAttackDialogRender(app, element) {
       }
     }
   } catch { /* settings not yet registered or other safe failure — noop */ }
+
+  /* ----------------------------------------------------------
+     v1.25: AoO (Combat Reflexes) checkbox in the Miscellaneous row.
+     Injected only when the acting actor has the feat. Its state bridges
+     to pf1PreActionUse via globalThis.baphometAoO so a flagged off-turn
+     attack spends a green jade pip (see spendCombatReflex + the off-turn
+     branch). Runs regardless of debugLogging, like the suppression above.
+     ---------------------------------------------------------- */
+  try {
+    const aooActor = app.actor;
+    const hasCR = !!aooActor?.items?.some(i => i.type === 'feat' && (i.name || '').toLowerCase().includes('combat reflexes'));
+    const flagsGroup = root.querySelector('.form-group.stacked.flags');
+    if (hasCR && flagsGroup && !flagsGroup.querySelector('.baph-aoo-cb')) {
+      globalThis.baphometAoO = { active: false, actorId: aooActor.id };  // reset stale flag per dialog open
+      const label = document.createElement('label');
+      label.classList.add('checkbox');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.classList.add('baph-aoo-cb');
+      cb.addEventListener('change', () => { globalThis.baphometAoO = { active: cb.checked, actorId: aooActor.id }; });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' AoO (Combat Reflexes)'));
+      flagsGroup.appendChild(label);
+    }
+  } catch(err) { _debugLog('AoO checkbox injection failed', err); }
 
   /* ----------------------------------------------------------
      DIAGNOSTIC LOGGING — debug-gated

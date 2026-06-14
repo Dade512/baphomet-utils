@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.24.0
+**Current Version:** 2.25.0
 
 ---
 
@@ -110,6 +110,13 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.25.0 — AoO / Combat Reflexes attack spends the jade pool (+ Attack-dialog checkbox)
+
+Adds an "AoO (Combat Reflexes)" checkbox to the PF1 Attack dialog's Miscellaneous row, shown only when the attacking creature has the Combat Reflexes feat. When checked, an off-turn attack (an attack of opportunity) spends a **green Combat-Reflexes (jade) pip** instead of the blue reaction — so players no longer have to manually correct which pip was used. Falls back to the blue reaction if no jade is left. Rides the existing **Attack Auto-Spend** setting (off by default). Also fixes a v2.24.0 reload bug.
+
+- **AoO checkbox + jade spend:** the checkbox bridges to the attack auto-spend hook (`globalThis.baphometAoO`); a flagged off-turn AoO spends one jade pip via the new `game.baphometActions.spendCombatReflex`. Unchecked behavior is unchanged (off-turn → reaction). No jade left → falls back to the reaction (then a notification if neither is available).
+- **Fix (v2.24.0 regression):** a mid-round client reload/reconnect no longer refills reaction/AoO pips already spent that round. The per-round reset now adopts the current round on a client's first render (state is restored from the combatant flags) and only refreshes on a genuine round change.
 
 ### v2.24.0 — Combat Tracker Pip Tray — own-line single-row layout + Dex-scaled Combat Reflexes AoO pips
 
