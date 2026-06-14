@@ -1,15 +1,50 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.21
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.24
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
-   DISPLAY:  ◆ ◆ ◆ | ◇ [◇]   (3 actions + 1 reaction [+ Combat Reflexes])
+   DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
+             AoO pips = Dexterity modifier; single row on its own line)
    LOCATION: Injected BELOW combatant name row in Combat Tracker sidebar
-   BEHAVIOR: Manual click-to-spend. Auto-reset on the START of the
-             combatant's OWN next turn (reactions spent during other
-             creatures' turns persist until this combatant acts again,
-             per PF2-style reaction economy).
+   BEHAVIOR: Manual click-to-spend. ACTION pips reset at the START of the
+             combatant's OWN turn (you get 3 actions on your turn). The
+             REACTION and Combat Reflexes (AoO) pips are a PER-ROUND
+             resource: they reset at the start of a NEW ROUND, NOT on the
+             combatant's own turn (PF1.5 ruling). An AoO spent earlier in
+             a round stays spent until the next round begins.
              Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
              baphomet-utils condition buffs to auto-lock pips.
+
+   v1.24 Changes (PER-ROUND REACTION / AoO RESET):
+   - Reaction and Combat Reflexes (AoO) pips are now a PER-ROUND resource.
+     They reset at the start of a NEW ROUND (combat.round advances), for
+     ALL combatants, via _maybeResetReactionsForNewRound() in the
+     renderCombatTracker hook (render-based; guarded by _reactionResetRound
+     so it fires once per round across many renders).
+   - Action pips still reset on the combatant's OWN turn. Previously
+     _maybeResetForNewTurn reset reaction/reflex on the own turn too, so
+     AoOs spent earlier in a round wrongly refreshed when the spender's
+     turn came up in the SAME round. They now persist until the next round.
+   - Full incapacitation (Paralyzed) still zeroes reaction/reflex at reset.
+
+   v1.23 Changes (PIP TRAY — OWN LINE, SINGLE ROW + DEX-SCALED COMBAT REFLEXES):
+   - The pip tray now occupies its OWN full-width line below the v13
+     combatant row, as a single horizontal row:
+       [3 action pips]  [1 reaction pip]  [Combat Reflexes pips x Dex mod]
+     Root cause of the prior squeeze: v13's combatant <li> is a
+     non-wrapping flex ROW and the legacy "#combat-tracker .combatant
+     { flex-direction: column }" rule matched nothing in v13, so the
+     tray collapsed inline. action-tracker.css v1.9 wraps the combatant
+     row and gives the tray flex-basis:100%. The .baph-pip-separator is
+     no longer emitted; pips are grouped (.baph-pip-actions /
+     .baph-pip-reactions) with a gap between groups.
+   - Combat Reflexes now SCALES: reflexPip length = the actor's Dexterity
+     modifier (floored at 0), rendered as jade AoO pips after the blue
+     reaction (PF1: total AoO = 1 base + Dex mod). _combatReflexCount(actor)
+     reads actor.system.abilities.dex.mod (path confirmed live). The count
+     is reconciled on init, turn reset, condition lock, and render sync.
+   - No change to the 3-action spend math, condition reading, turn-reset
+     timing, ownership gating, cross-client sync, or any automation.
+   - Module release version (module.json) and git tag owned by Michael.
 
    v1.21 Changes (R6 TWF PENALTY + OFF-HAND GUARD):
    - Added pf1PreAttackRoll advisory hook for PF1.5 Two-Weapon
@@ -401,17 +436,25 @@ const pipState = new Map();
 // Stored as: { actions: [bool,bool,bool], reaction: [bool], reflexPip: [bool], resetForRound: number|null }
 const PIP_FLAG_KEY = 'pipState';
 
-function _initState(combatantId, hasCombatReflex) {
+function _initState(combatantId) {
   // Hydrate from the shared combatant flag if it exists (cross-client reload support).
   // getFlag is synchronous — reads from the document's in-memory data.
   const combatant = game.combat?.combatants?.get(combatantId);
+  const actor = combatant?.actor;
   const saved = combatant?.getFlag('baphomet-utils', PIP_FLAG_KEY) ?? null;
+
+  // v1.23: Combat Reflexes pips scale to the actor's Dex modifier. Reconcile
+  // any saved reflexPip array to the current count, preserving spent state.
+  const reflexCount = _combatReflexCount(actor);
+  const reflexPip = Array.isArray(saved?.reflexPip)
+    ? Array.from({ length: reflexCount }, (_, i) => saved.reflexPip[i] ?? true)
+    : Array(reflexCount).fill(true);
 
   pipState.set(combatantId, {
     actions:         (saved?.actions  && saved.actions.length  === 3) ? [...saved.actions]  : [true, true, true],
     reaction:        (saved?.reaction && saved.reaction.length === 1)  ? [...saved.reaction] : [true],
-    combatReflex:    hasCombatReflex,
-    reflexPip:       saved?.reflexPip ? [...saved.reflexPip] : (hasCombatReflex ? [true] : []),
+    combatReflex:    reflexCount > 0,
+    reflexPip,
     conditionLocked: 0,
     _resetForRound:  saved?.resetForRound ?? null,
   });
@@ -426,7 +469,10 @@ function _resetState(combatantId) {
   if (!state) return;
   state.actions = [true, true, true];
   state.reaction = [true];
-  if (state.combatReflex) state.reflexPip = [true];
+  // v1.23: recompute Combat Reflexes pips from current Dex mod.
+  const reflexCount = _combatReflexCount(game.combat?.combatants?.get(combatantId)?.actor);
+  state.combatReflex = reflexCount > 0;
+  state.reflexPip = Array(reflexCount).fill(true);
   state.conditionLocked = 0;
   // _resetForRound is metadata, not pip state — DO NOT touch it here.
   // It's owned by the render-based reset logic.
@@ -547,6 +593,71 @@ function _hasCombatReflexes(actor) {
   );
 }
 
+/**
+ * v1.23: number of Combat Reflexes attack-of-opportunity pips a combatant
+ * should have — the actor's Dexterity modifier (PF1: AoOs = 1 base + Dex
+ * mod; the base is the blue reaction pip, these jade pips are the extra
+ * AoOs). Returns 0 when the feat is absent or the Dex modifier is <= 0.
+ * Dex path confirmed live: actor.system.abilities.dex.mod.
+ *
+ * @param {Actor} actor
+ * @returns {number}
+ */
+function _combatReflexCount(actor) {
+  if (!_hasCombatReflexes(actor)) return 0;
+  const dexMod = actor?.system?.abilities?.dex?.mod;
+  return Number.isFinite(dexMod) ? Math.max(0, dexMod) : 0;
+}
+
+/* ----------------------------------------------------------
+   PER-ROUND REACTION / AoO RESET — v1.24
+
+   Reaction + Combat Reflexes pips are a per-round resource:
+   they refresh at the start of a NEW ROUND, not on each
+   combatant's own turn. Render-based (mirrors the v1.6
+   turn-reset approach) and guarded by a module-level round
+   marker so it fires exactly once per round across renders.
+   ---------------------------------------------------------- */
+
+// Last round for which reaction/reflex pips were refreshed (module-global).
+let _reactionResetRound = null;
+
+/**
+ * Refresh one combatant's reaction + Combat Reflexes pips to full for a
+ * new round, recomputing the AoO count from current Dex mod. Respects
+ * full incapacitation (Paralyzed -> no reactions/AoOs).
+ */
+function _resetReactionReflexForRound(combatantId, combatant) {
+  const state = _getState(combatantId);
+  if (!state) return;
+  state.reaction = [true];
+  const reflexCount = _combatReflexCount(combatant?.actor);
+  state.combatReflex = reflexCount > 0;
+  state.reflexPip = Array(reflexCount).fill(true);
+  const { fullyIncapacitated } = _readConditionActionLoss(combatant?.actor);
+  if (fullyIncapacitated) {
+    state.reaction = [false];
+    state.reflexPip = state.reflexPip.map(() => false);
+  }
+  _writePipFlag(combatantId);
+}
+
+/**
+ * When combat.round has advanced, refresh reaction + Combat Reflexes pips
+ * for every combatant once. Idempotent within a round via _reactionResetRound.
+ */
+function _maybeResetReactionsForNewRound(combat) {
+  const round = combat?.round ?? 0;
+  if (round === _reactionResetRound) return;
+  _reactionResetRound = round;
+  for (const combatant of combat.combatants) {
+    if (!combatant?.actor) continue;
+    if (!_getState(combatant.id)) _initState(combatant.id);
+    _resetReactionReflexForRound(combatant.id, combatant);
+  }
+  _debugLog(`Per-round reaction/AoO reset for round ${round}`);
+}
+
 /* ----------------------------------------------------------
    APPLY CONDITION LOCKS
    Auto-lock pips at turn start based on conditions.
@@ -561,7 +672,7 @@ function _applyConditionLocks(combatantId, actor) {
   if (fullyIncapacitated) {
     state.actions = [false, false, false];
     state.reaction = [false];
-    if (state.combatReflex) state.reflexPip = [false];
+    state.reflexPip = state.reflexPip.map(() => false);
     state.conditionLocked = 3;
     return;
   }
@@ -601,10 +712,10 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   // Mark first to prevent any chance of re-entry (defensive).
   state._resetForRound = round;
 
-  // Reset pip availability + apply fresh condition locks.
+  // v1.24: reset ONLY the action pips for the new turn. Reaction + Combat
+  // Reflexes (AoO) pips are a per-ROUND resource, refreshed at round start
+  // by _maybeResetReactionsForNewRound — NOT on the combatant's own turn.
   state.actions = [true, true, true];
-  state.reaction = [true];
-  if (state.combatReflex) state.reflexPip = [true];
   state.conditionLocked = 0;
 
   if (combatant?.actor) {
@@ -634,6 +745,12 @@ function _buildPipRow(combatantId, isOwner) {
   row.classList.add('baph-action-tracker');
   row.dataset.combatantId = combatantId;
 
+  // v1.22: two sub-rows — actions on top, reactions (+ Combat Reflexes) below.
+  const actionsRow = document.createElement('div');
+  actionsRow.classList.add('baph-pip-actions');
+  const reactionsRow = document.createElement('div');
+  reactionsRow.classList.add('baph-pip-reactions');
+
   // --- Action pips (3) ---
   state.actions.forEach((available, idx) => {
     const pip = document.createElement('button');
@@ -660,13 +777,8 @@ function _buildPipRow(combatantId, isOwner) {
       pip.disabled = true;
     }
 
-    row.appendChild(pip);
+    actionsRow.appendChild(pip);
   });
-
-  // --- Separator ---
-  const sep = document.createElement('div');
-  sep.classList.add('baph-pip-separator');
-  row.appendChild(sep);
 
   // --- Reaction pip ---
   state.reaction.forEach((available, idx) => {
@@ -689,7 +801,7 @@ function _buildPipRow(combatantId, isOwner) {
       pip.disabled = true;
     }
 
-    row.appendChild(pip);
+    reactionsRow.appendChild(pip);
   });
 
   // --- Combat Reflexes pip ---
@@ -714,9 +826,13 @@ function _buildPipRow(combatantId, isOwner) {
         pip.disabled = true;
       }
 
-      row.appendChild(pip);
+      reactionsRow.appendChild(pip);
     });
   }
+
+  // v1.22: assemble the two sub-rows into the tray.
+  row.appendChild(actionsRow);
+  row.appendChild(reactionsRow);
 
   // Only block what's strictly needed.
   // - mousedown: triggers Foundry's _onCombatantMouseDown (opens actor sheet)
@@ -814,6 +930,10 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
   const combat = game.combat;
   if (!combat) return;
 
+  // v1.24: per-ROUND reaction + Combat Reflexes (AoO) refresh. Runs once
+  // when combat.round advances; action pips reset separately on own turn.
+  _maybeResetReactionsForNewRound(combat);
+
   const root = _baphNormalizeHtml(html);
   if (!root) return;
 
@@ -831,15 +951,16 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 
     // Ensure state exists
     if (!_getState(combatantId)) {
-      _initState(combatantId, _hasCombatReflexes(combatant.actor));
+      _initState(combatantId);
     }
 
-    // Sync Combat Reflexes if feat changed mid-combat
+    // v1.23: sync Combat Reflexes pip count if the feat or Dex mod changed mid-combat.
     const state = _getState(combatantId);
-    const currentHasCR = _hasCombatReflexes(combatant.actor);
-    if (state.combatReflex !== currentHasCR) {
-      state.combatReflex = currentHasCR;
-      state.reflexPip = currentHasCR ? [true] : [];
+    const reflexCount = _combatReflexCount(combatant.actor);
+    if (state.combatReflex !== (reflexCount > 0) || state.reflexPip.length !== reflexCount) {
+      state.combatReflex = reflexCount > 0;
+      const prev = state.reflexPip;
+      state.reflexPip = Array.from({ length: reflexCount }, (_, i) => prev[i] ?? true);
     }
 
     // v1.6: render-based turn-start reset.
@@ -894,6 +1015,7 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 
 Hooks.on('deleteCombat', (combat) => {
   for (const c of combat.combatants) pipState.delete(c.id);
+  _reactionResetRound = null;
 });
 
 Hooks.on('deleteCombatant', (combatant) => {
@@ -908,7 +1030,7 @@ Hooks.on('createCombatant', (combatant) => {
 Hooks.on('combatStart', (combat) => {
   for (const combatant of combat.combatants) {
     if (!combatant.actor) continue;
-    _initState(combatant.id, _hasCombatReflexes(combatant.actor));
+    _initState(combatant.id);
   }
 
   // The first active combatant gets their condition locks applied
@@ -921,6 +1043,10 @@ Hooks.on('combatStart', (combat) => {
     const state = _getState(firstCombatant.id);
     if (state) state._resetForRound = combat.round ?? 1;
   }
+
+  // v1.24: mark this round as already reaction-refreshed (init set reactions
+  // available), so the first render does not redundantly reset them.
+  _reactionResetRound = combat.round ?? 1;
 });
 
 /* ----------------------------------------------------------
@@ -936,7 +1062,7 @@ Hooks.once('ready', () => {
         actionsRemaining: state.actions.filter(a => a).length,
         actionsTotal: 3,
         reactionAvailable: state.reaction[0],
-        combatReflexAvailable: state.combatReflex ? state.reflexPip[0] : null,
+        combatReflexAvailable: state.combatReflex ? state.reflexPip.filter(p => p).length : null,
         conditionLocked: state.conditionLocked
       };
     },

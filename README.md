@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.23.4
+**Current Version:** 2.24.0
 
 ---
 
@@ -110,6 +110,16 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.24.0 — Combat Tracker Pip Tray — own-line single-row layout + Dex-scaled Combat Reflexes AoO pips
+
+Reworks the per-combatant action-economy pip tray in the combat tracker. The pips now sit on their **own full-width line** below the combatant (fixing a v13 layout regression that squeezed them off the row), as a single horizontal row: 3 gold action pips, the blue reaction pip, then **jade Combat-Reflexes (AoO) pips equal to the creature's Dexterity modifier** when it has the feat. Reaction and AoO pips are now a **per-round** resource — they refresh at the start of a new round, not on the combatant's own turn (action pips still reset on your turn). Display + reset-timing only; spend math, conditions, automation, and the task subsystems are unchanged.
+
+- **Own-line single-row layout:** replaced the dead `#combat-tracker .combatant` v13 selector; the combatant row now wraps and the pip tray takes a full-width line below name/initiative, in both the sidebar and popout trackers.
+- **Dex-scaled Combat Reflexes:** a combatant with the feat shows jade AoO pips = `actor.system.abilities.dex.mod` (≥ 0), after the blue reaction (PF1: total AoO = 1 base + Dex mod).
+- **Per-round reaction/AoO reset:** reaction + jade pips spent during a round persist through the spender's own turn and refresh only at the start of the next round. Action pips still reset per-turn. Full incapacitation (Paralyzed) zeroes reaction/AoO at the round reset.
+- **Colors:** reaction `#48cae4` (blue), Combat Reflexes `#00a86b` (jade), kept distinct.
+- AoO pips do **not** auto-spend yet (manual toggle); attaching AoO auto-spend to the green pool is the planned next milestone.
 
 ### v2.23.4 — A-017 Hidden Task Data Re-Home
 

@@ -1,7 +1,22 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.7
+   ECHOES OF BAPHOMET — ACTION TRACKER CSS v1.9
    Gaslamp Gothic | Croaker's Ledger edition.
    Burnt brass, cold iron, dried blood — on PARCHMENT.
+
+   v1.9 Changes (PIP TRAY — OWN LINE, SINGLE ROW + JADE COMBAT REFLEXES):
+   - The pip tray occupies its OWN full-width line below the v13 combatant
+     row, as a SINGLE horizontal row. The legacy "#combat-tracker
+     .combatant" column rule matched nothing in v13 (combatant <li> is a
+     non-wrapping flex ROW), so the tray was squeezed inline. Replaced with
+     "li.combatant:has(> .baph-action-tracker) { flex-wrap: wrap }" plus
+     tray flex-basis:100%.
+   - .baph-action-tracker is a flex ROW holding two pip groups —
+     .baph-pip-actions (3 gold pips) then .baph-pip-reactions (the reaction
+     pip + jade Combat Reflexes AoO pips) — with a gap between groups.
+     Reaction/reflex pips are smaller (9px); Foundry v13's 32px button
+     min-height is cleared on .baph-pip.
+   - Combat Reflexes pip color is jade; count = Dex mod (set in JS v1.23).
+   - .baph-pip-separator removed (no longer emitted).
 
    v1.7 Changes:
    - Action panel row layout switched from flex to grid
@@ -54,13 +69,15 @@
 }
 
 /* ============================================================
-   COMBATANT ROW LAYOUT — unchanged from v1.2
+   COMBATANT ROW LAYOUT — v1.8 (v13 fix)
+   v13's combatant <li> is a non-wrapping flex ROW; the old
+   "#combat-tracker .combatant" selector matched nothing, so the
+   pip tray got squeezed inline. Let any combatant row that holds
+   our tray wrap, so the tray (flex-basis:100% below) drops onto
+   its own full-width line. Works in the sidebar and the popout.
    ============================================================ */
-#combat-tracker .combatant,
-#combat-tracker li.combatant {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
+li.combatant:has(> .baph-action-tracker) {
+  flex-wrap: wrap;
 }
 
 /* --- Pip Row Container ---
@@ -69,14 +86,14 @@
    depression in old ledger paper. */
 .baph-action-tracker {
   display: flex;
-  flex-direction: row;
+  flex-direction: row;       /* v1.9: single horizontal row on its own line */
   flex-wrap: nowrap;
-  gap: 4px;
+  gap: 8px;                  /* space between the action group and the reaction/reflex group */
   align-items: center;
   padding: 3px 6px 4px;
   margin: 0;
   width: 100%;
-  min-height: 20px;
+  flex-basis: 100%;          /* v1.9: own full-width line in the wrapping combatant row */
   box-sizing: border-box;
   user-select: none;
   /* Sunken ruled line — inset tray in the ledger page */
@@ -93,6 +110,9 @@
 .baph-pip {
   width: 13px;
   height: 13px;
+  /* v1.8: Foundry v13 sets a 32px min-height on tracker buttons (inside a
+     CSS @layer); clear it so each pip's own height stands instead of stretching. */
+  min-height: 0;
   border-radius: 1px;
   cursor: pointer;
   /* Button defaults reset */
@@ -139,17 +159,34 @@
   border-color: rgba(107, 92, 74, 0.7);
 }
 
-/* --- Reaction Pip (Oxidized Copper / Verdigris) ---
-   The green-blue reads well on warm parchment. */
+/* --- Reaction Pip (bright sky blue, v1.9) ---
+   GM-chosen blue, kept clearly distinct from the jade Combat Reflexes pips. */
 .baph-pip.reaction {
-  background-color: #4b7a7a;
+  background-color: #48cae4;
   border-color: rgba(42, 35, 29, 0.45);
 }
 
 /* --- Combat Reflexes Pip (Cold Iron, dark steel) --- */
 .baph-pip.combat-reflex {
-  background-color: #3a5a78;
+  background-color: #00a86b;   /* v1.9: jade green — Combat Reflexes AoO pips (Dex mod count) */
   border-color: rgba(42, 35, 29, 0.45);
+}
+
+/* --- v1.8: the two sub-rows inside the tray --- */
+.baph-pip-actions,
+.baph-pip-reactions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 14px;
+}
+
+/* --- v1.8: reaction-row pips render smaller than action pips --- */
+.baph-pip-reactions .baph-pip {
+  width: 9px;
+  height: 9px;
 }
 
 /* --- SPENT STATE ---
@@ -188,15 +225,9 @@
   border-color: rgba(139, 48, 40, 0.9);
 }
 
-/* --- Separator between Actions and Reactions --- */
-.baph-pip-separator {
-  width: 1px;
-  height: 11px;
-  background-color: var(--baph-leather-mid, #8a7b66);
-  opacity: 0.5;
-  margin: 0 1px;
-  flex-shrink: 0;
-}
+/* --- Separator between Actions and Reactions ---
+   Removed in v1.8: the two-row layout puts actions and reactions on
+   separate rows, so the vertical separator is no longer emitted. */
 
 /* --- Active Combatant Highlight ---
    Warm brass glow on the parchment — like the page catching
@@ -222,7 +253,7 @@
 }
 
 .combatant.active .baph-action-tracker .baph-pip.combat-reflex:not(.spent) {
-  border-color: rgba(35, 68, 95, 0.75);
+  border-color: rgba(47, 90, 63, 0.75);
   box-shadow: 0 1px 3px rgba(42, 35, 29, 0.3),
               inset 0 1px 2px rgba(255, 255, 255, 0.2);
 }
