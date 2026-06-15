@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.25.0
+**Current Version:** 2.25.1
 
 ---
 
@@ -110,6 +110,10 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 ---
 
 ## Changelog
+
+### v2.25.1 — AoO intent-flag hardening
+
+Hardens the v2.25.0 AoO (Combat Reflexes) dialog-checkbox bridge (`globalThis.baphometAoO`). The one-shot intent flag is now read and consumed **once per action-use, scoped to the acting actor**, on every path — so a stale on-turn tick can no longer survive to a later off-turn attack, and one actor's attack never consumes another actor's open-dialog flag. No change to the normal flow (tick AoO → off-turn attack spends a jade pip). From Lyra's 2026-06-15 audit. (Also verified, no change: the `ItemAction.data` cost-helper fallback emits no v13 deprecation warning.)
 
 ### v2.25.0 — AoO / Combat Reflexes attack spends the jade pool (+ Attack-dialog checkbox)
 

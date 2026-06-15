@@ -14,6 +14,7 @@ SERVER_TESTING_CHECKLIST.md
 _run_validator.bat
 _validator_*.txt
 _goal_aborted.md
+lyras_audit.md
 
 # Agent council files + session notes (local only)
 AGENTS.md

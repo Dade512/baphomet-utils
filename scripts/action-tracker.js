@@ -1975,6 +1975,15 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     const cost = _deriveActionUseCost(actionUse);
     const activeCombatant = _getActiveCombatantForActor(actor);
 
+    // v2.25.1 (Lyra audit): read + consume the AoO (Combat Reflexes) intent ONCE,
+    // on every path, scoped to THIS actor. The dialog checkbox sets a one-shot
+    // globalThis.baphometAoO; consuming it here (not only in the off-turn branch)
+    // stops a stale on-turn tick from surviving to a later off-turn attack, and the
+    // actor-id scope means actor A's attack never eats actor B's open-dialog flag.
+    const _aooFlag = globalThis.baphometAoO;
+    const aooIntentForActor = !!(_aooFlag?.active && _aooFlag.actorId === actor.id);
+    if (_aooFlag && _aooFlag.actorId === actor.id) globalThis.baphometAoO = null;
+
     if (activeCombatant) {
       // On-turn: spend the action cost (all-or-nothing).
       if (!_canUserControlCombatant(activeCombatant)) {
@@ -2009,9 +2018,10 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       // v1.25: prefer the green Combat Reflexes (jade) pool when the attack
       // was flagged "AoO (Combat Reflexes)" on the dialog and the actor has
       // the feat; fall back to the blue reaction when no jade is left.
-      const aooFlag = globalThis.baphometAoO;
-      const wantsCR = !!(aooFlag?.active && aooFlag.actorId === actor.id) && _combatReflexCount(actor) > 0;
-      if (aooFlag) globalThis.baphometAoO = null; // one-shot: consume the flag
+      // v2.25.1: the AoO intent was read + consumed once before the branch
+      // (actor-scoped) — a stale on-turn tick can't survive, and actor A's
+      // attack never eats actor B's open-dialog flag.
+      const wantsCR = aooIntentForActor && _combatReflexCount(actor) > 0;
       if (wantsCR && game.baphometActions?.spendCombatReflex?.(own.id)) {
         _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — Combat Reflexes (jade) pip spent`);
       } else {
