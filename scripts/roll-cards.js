@@ -1,6 +1,12 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — ROLL CARD STYLER v1.2
+   ECHOES OF BAPHOMET — ROLL CARD STYLER v1.3
    Chat message post-processing for Gaslamp Gothic roll cards.
+
+   v1.3 Changes (FLOURISH SCOPING):
+   - Crit-flourish CSS is scoped via a body class
+     (body.baph-crit-flourish-on), toggled on ready by
+     _setFlourishBodyClass(), so the flourish styles apply only
+     when enabled. (Banner version aligned with the ready log.)
 
    v1.2 Changes (V13 HOOK PATCH):
    - Replaced deprecated 'renderChatMessage' hook with the v13

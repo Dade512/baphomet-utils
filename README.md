@@ -111,6 +111,10 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 
 ## Changelog
 
+### v2.25.2 — Hygiene: dead code + version-banner truth
+
+Maintenance only, no behavior change. Removes the dead `_spendActionForActor()` helper (defined since v2.10.0 but never called) and aligns the `roll-cards.js` header banner to v1.3 so it matches the "Roll Card Styler v1.3 ready" log it already emits. No runtime verification required (removed code was unreachable; the banner is a comment).
+
 ### v2.25.1 — AoO intent-flag hardening
 
 Hardens the v2.25.0 AoO (Combat Reflexes) dialog-checkbox bridge (`globalThis.baphometAoO`). The one-shot intent flag is now read and consumed **once per action-use, scoped to the acting actor**, on every path — so a stale on-turn tick can no longer survive to a later off-turn attack, and one actor's attack never consumes another actor's open-dialog flag. No change to the normal flow (tick AoO → off-turn attack spends a jade pip). From Lyra's 2026-06-15 audit. (Also verified, no change: the `ItemAction.data` cost-helper fallback emits no v13 deprecation warning.)

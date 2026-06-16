@@ -1295,42 +1295,6 @@ function _spendActionForCombatant(combatantId, count = 1, reason = '') {
   return true;
 }
 
-/**
- * Spend N action pips for the combatant whose actor matches the
- * provided actor reference.
- *
- * Convenience wrapper combining:
- *   _getActiveCombatantForActor → _canUserControlCombatant
- *   → _spendActionForCombatant
- *
- * This is the intended entry point for pf1AttackRoll and
- * pf1ActorRollSkill hooks in v2.10.0. Call with the actor
- * from the hook payload and an appropriate reason string.
- *
- * Returns false without throwing if: no combat is active,
- * no combatant matches the actor, the current user doesn't
- * control the combatant, or no pips are available.
- *
- * @param {Actor} actor
- * @param {number} [count=1]  Number of action pips to spend
- * @param {string} [reason]   Debug label
- * @returns {boolean}
- */
-function _spendActionForActor(actor, count = 1, reason = '') {
-  const combatant = _getActiveCombatantForActor(actor);
-  if (!combatant) {
-    _debugLog(`_spendActionForActor: no active combatant for actor "${actor?.name}" [${reason}]`);
-    return false;
-  }
-
-  if (!_canUserControlCombatant(combatant)) {
-    _debugLog(`_spendActionForActor: user cannot control combatant ${combatant.id} [${reason}]`);
-    return false;
-  }
-
-  return _spendActionForCombatant(combatant.id, count, reason);
-}
-
 /* ----------------------------------------------------------
    SKILL ACTION COSTS
    
