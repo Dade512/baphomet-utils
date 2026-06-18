@@ -45,7 +45,8 @@
      also short-circuits intra-day re-runs.
 
    v1.1 Changes:
-   - [BUG FIX] Math.clamp → Math.clamped (Foundry API).
+   - Clamp helper: Math.clamp (Foundry v13). NOTE: an earlier note here had this
+     backwards — Math.clamped is deprecated (v12) and removed in v14.
    - [BUG FIX] getWeatherFor API properly async — was mixing
      sync + async, silently defaulting to 'temperate'.
    - [CLEANUP] Trimmed verbose debug logging for production.
@@ -169,9 +170,10 @@ function generateWeather(year, monthIndex, day, climateKey, rerollSalt = 0) {
     ? Math.round(windSpeed + rng() * (params.windGust - params.windBase))
     : windSpeed;
 
-  // Cloud Cover — v1.1 FIX: Math.clamped instead of Math.clamp
+  // Cloud Cover — Math.clamp is the Foundry v13 helper (Math.clamped is
+  // deprecated since v12 and removed in v14).
   const cloudBase = params.precipitation + (rng() * 20 - 10);
-  const cloudCover = Math.clamped(Math.round(cloudBase), 0, 100);
+  const cloudCover = Math.clamp(Math.round(cloudBase), 0, 100);
 
   // Descriptive text
   const tempDesc = _pickDescription(TEMP_DESCRIPTIONS, highTemp, rng);

@@ -111,6 +111,10 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 
 ## Changelog
 
+### v2.25.3 — Security/bug fixes — escape chat HTML + Math.clamp v14-safety
+
+Escapes player/actor names — including the player's free-text task description and the socket-relayed aider name — before they are interpolated into broadcast task/aid chat cards (`task-tracker.js`, `skill-helpers.js`), closing an HTML-injection vector found in a red-team audit. Switches `Math.clamped` → `Math.clamp` in `condition-overlay.js` and `weather-engine.js` (`Math.clamped` is deprecated since Foundry v12 and **removed in v14**) and corrects two changelog comments that had the swap backwards. No storage-format change.
+
 ### v2.25.2 — Hygiene: dead code + version-banner truth
 
 Maintenance only, no behavior change. Removes the dead `_spendActionForActor()` helper (defined since v2.10.0 but never called) and aligns the `roll-cards.js` header banner to v1.3 so it matches the "Roll Card Styler v1.3 ready" log it already emits. No runtime verification required (removed code was unreachable; the banner is a comment).

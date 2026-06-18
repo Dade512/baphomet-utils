@@ -48,7 +48,7 @@ function baphometAuditPerception({ post = true } = {}) {
     const content = unchecked.length
       ? `<p><strong>Perception class-skill audit</strong></p>` +
         `<p>${unchecked.length} of ${total} character(s) have Perception <em>unchecked</em>:</p>` +
-        `<ul>${unchecked.map((n) => `<li>${n}</li>`).join('')}</ul>` +
+        `<ul>${unchecked.map((n) => `<li>${foundry.utils.escapeHTML(n)}</li>`).join('')}</ul>` +
         `<p>PF1.5 table rule: Perception is a class skill for everyone. ` +
         `Toggle it on each sheet manually (no automation).</p>`
       : `<p><strong>Perception class-skill audit</strong></p>` +

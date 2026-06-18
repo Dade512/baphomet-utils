@@ -44,8 +44,9 @@
    - Added console logging for all auto-decrement events.
 
    v2.5.1 Changes:
-   - [BUG FIX] Math.clamp → Math.clamped (Foundry API).
-     Math.clamp is not standard JS; Foundry provides Math.clamped.
+   - Clamp helper: use Math.clamp (the Foundry v13 helper). NOTE: an earlier
+     note here had this backwards — Math.clamped is deprecated (since v12) and
+     removed in v14, so Math.clamp is the correct, forward-compatible call.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
                   Enfeebled, Drained, Stunned, Slowed, Fascinated
@@ -389,7 +390,7 @@ async function applyCondition(actor, condKey, tier) {
   if (!actor || !CONDITIONS[condKey]) return;
 
   const cond = CONDITIONS[condKey];
-  tier = Math.clamped(tier, 0, cond.maxTier);
+  tier = Math.clamp(tier, 0, cond.maxTier);
 
   if (tier === 0) return removeCondition(actor, condKey);
 

@@ -1048,7 +1048,7 @@ async function _baphTaskAbandon(combatantOrId, taskId) {
 
   await _baphTaskCreateChatMessage({
     content:
-      `<p><strong>${actorName}</strong> abandons <em>${taskName}</em>.</p>` +
+      `<p><strong>${foundry.utils.escapeHTML(actorName)}</strong> abandons <em>${foundry.utils.escapeHTML(taskName)}</em>.</p>` +
       `<p>Task abandoned — no further progress possible.</p>`,
     speaker: { alias: 'Baphomet Tasks' },
     whisper: [],
@@ -1114,8 +1114,8 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
       task.status        = 'resolved';
       task.readyToResolve = false;
       chatContent =
-        `<p><strong>Success</strong> — <strong>${actorName}</strong> completes ` +
-        `<em>${taskName}</em>.</p>`;
+        `<p><strong>Success</strong> — <strong>${foundry.utils.escapeHTML(actorName)}</strong> completes ` +
+        `<em>${foundry.utils.escapeHTML(taskName)}</em>.</p>`;
       _baphTaskDebugLog(
         `adjudicate SUCCESS — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: +${diff})`
@@ -1127,8 +1127,8 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
     } else if (diff >= -4) {
       // task.status and task.readyToResolve unchanged — stays ready to retry.
       chatContent =
-        `<p><strong>Minor Failure</strong> — <strong>${actorName}</strong> does not complete ` +
-        `<em>${taskName}</em>. The task remains ready; Resolve may be retried next round.</p>`;
+        `<p><strong>Minor Failure</strong> — <strong>${foundry.utils.escapeHTML(actorName)}</strong> does not complete ` +
+        `<em>${foundry.utils.escapeHTML(taskName)}</em>. The task remains ready; Resolve may be retried next round.</p>`;
       _baphTaskDebugLog(
         `adjudicate MINOR FAILURE — "${taskName}" / ${actorName} / ` +
         `roll ${rollTotal} vs DC ${dc} (margin: ${diff})`
@@ -1141,8 +1141,8 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
       task.status        = 'resolved';
       task.readyToResolve = false;
       chatContent =
-        `<p><strong>Catastrophic Failure</strong> — <strong>${actorName}</strong> fails ` +
-        `<em>${taskName}</em>.</p>` +
+        `<p><strong>Catastrophic Failure</strong> — <strong>${foundry.utils.escapeHTML(actorName)}</strong> fails ` +
+        `<em>${foundry.utils.escapeHTML(taskName)}</em>.</p>` +
         `<p>GM: apply trap consequence manually where appropriate.</p>`;
       _baphTaskDebugLog(
         `adjudicate CATASTROPHIC FAILURE — "${taskName}" / ${actorName} / ` +
@@ -1594,9 +1594,9 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
 
       await _baphTaskCreateChatMessage({
         content:
-          `<p><strong>${aider.actor.name}</strong> aids ` +
-          `<strong>${targetCombatant.actor.name}</strong>'s ` +
-          `<em>${targetTask.taskName}</em>.</p>` +
+          `<p><strong>${foundry.utils.escapeHTML(aider.actor.name)}</strong> aids ` +
+          `<strong>${foundry.utils.escapeHTML(targetCombatant.actor.name)}</strong>'s ` +
+          `<em>${foundry.utils.escapeHTML(targetTask.taskName)}</em>.</p>` +
           `<p>Aid check: <strong>${capturedAidTotal}</strong> — ` +
           `<strong>Success.</strong> Aid queued: +2 to the next resolution roll.</p>`,
         speaker: { alias: 'Baphomet Tasks' },
@@ -1611,9 +1611,9 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
       // Failed Aid: action spent, no bonus banked.
       await _baphTaskCreateChatMessage({
         content:
-          `<p><strong>${aider.actor.name}</strong> attempts to aid ` +
-          `<strong>${targetCombatant.actor.name}</strong>'s ` +
-          `<em>${targetTask.taskName}</em>.</p>` +
+          `<p><strong>${foundry.utils.escapeHTML(aider.actor.name)}</strong> attempts to aid ` +
+          `<strong>${foundry.utils.escapeHTML(targetCombatant.actor.name)}</strong>'s ` +
+          `<em>${foundry.utils.escapeHTML(targetTask.taskName)}</em>.</p>` +
           `<p>Aid check: <strong>${capturedAidTotal ?? '?'}</strong> — ` +
           `<strong>Failure.</strong> No bonus queued. Action spent.</p>`,
         speaker: { alias: 'Baphomet Tasks' },
@@ -1853,8 +1853,8 @@ async function _baphTaskInitiate(combatantOrId, options = {}) {
     : 'Task begun. Work in progress.';
   await _baphTaskCreateChatMessage({
     content:
-      `<p><strong>${combatant.actor.name}</strong> begins ` +
-      `<em>${trimmedName}</em>.</p>` +
+      `<p><strong>${foundry.utils.escapeHTML(combatant.actor.name)}</strong> begins ` +
+      `<em>${foundry.utils.escapeHTML(trimmedName)}</em>.</p>` +
       `<p>${stateLabel}</p>`,
     speaker: { alias: 'Baphomet Tasks' },
     whisper: [],
@@ -2366,9 +2366,9 @@ Hooks.once('pf1PostReady', async () => {
 
         await _baphTaskCreateChatMessage({
           content:
-            `<p><strong>${aiderActorName ?? aider.actor.name}</strong> aids ` +
-            `<strong>${targetCombatant.actor.name}</strong>'s ` +
-            `<em>${targetTask.taskName}</em>.</p>` +
+            `<p><strong>${foundry.utils.escapeHTML(aiderActorName ?? aider.actor.name)}</strong> aids ` +
+            `<strong>${foundry.utils.escapeHTML(targetCombatant.actor.name)}</strong>'s ` +
+            `<em>${foundry.utils.escapeHTML(targetTask.taskName)}</em>.</p>` +
             `<p>Aid check: <strong>${rollTotal}</strong> — ` +
             `<strong>Success.</strong> Aid queued: +2 to the next resolution roll.</p>`,
           speaker: { alias: 'Baphomet Tasks' },
@@ -2384,9 +2384,9 @@ Hooks.once('pf1PostReady', async () => {
         // Failed aid: no bonus, no contributor record added
         await _baphTaskCreateChatMessage({
           content:
-            `<p><strong>${aiderActorName ?? aider.actor.name}</strong> attempts to aid ` +
-            `<strong>${targetCombatant.actor.name}</strong>'s ` +
-            `<em>${targetTask.taskName}</em>.</p>` +
+            `<p><strong>${foundry.utils.escapeHTML(aiderActorName ?? aider.actor.name)}</strong> attempts to aid ` +
+            `<strong>${foundry.utils.escapeHTML(targetCombatant.actor.name)}</strong>'s ` +
+            `<em>${foundry.utils.escapeHTML(targetTask.taskName)}</em>.</p>` +
             `<p>Aid check: <strong>${Number.isFinite(rollTotal) ? rollTotal : '?'}</strong> — ` +
             `<strong>Failure.</strong> No bonus queued. Action spent.</p>`,
           speaker: { alias: 'Baphomet Tasks' },
