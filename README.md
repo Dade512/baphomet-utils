@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.25.1
+**Current Version:** 2.25.4
 
 ---
 
@@ -77,39 +77,66 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 
 ---
 
-## Task Tracker (new in v2.16.0)
+## Task Tracker
 
-API-only scaffold for multi-round task tracking. No UI in this release.
+An interactive multi-round skill-task subsystem driven from the combat tracker. The GM initiates a task on the active combatant with a hidden DC and a hidden number of rounds required; on the combatant's turns the controlling player commits actions ("Continue Task"), allies may "Aid" a ready task for a bonus, and the task resolves with a real skill roll once the hidden duration is met. Resolution is classified (success / minor failure / catastrophic failure) and posted to chat by the GM client. Tasks can also be paused, resumed, or abandoned, and the combat HUD lets players *request* initiation for GM modal approval (v2.20.0).
+
+The HUD wires these operations to buttons; the same operations are exposed on `game.baphometTasks` for macros and testing. **Signatures shown match the live API** (`scripts/task-tracker.js`):
 
 ```js
-// Create a task (GM only)
-const taskId = await game.baphometTasks.createTask(combatant, {
+// GM-only: initiate a task on the ACTIVE combatant — spends 1 action and
+// commits the first round. DC and roundsRequired are hidden from players.
+const taskId = await game.baphometTasks.initiateTask(combatant, {
+  taskName: 'Disable Poison Dart Trap',
+  taskAction: 'disable',     // disable | arm | sabotage | jury_rig | custom
+  roundsRequired: 3,         // hidden from players
+  dc: 22                     // hidden from players
+});
+
+// GM-only: lower-level creation (starts at roundsCommitted=0, no action spent)
+await game.baphometTasks.createTask(combatant, {
   skillKey: 'dvs',
   taskType: 'disable-device',
   taskName: 'Disable Poison Dart Trap',
-  roundsRequired: 3,           // hidden from players
+  roundsRequired: 3,
   metadataPublic: {},
   metadataHidden: { dc: 22, trapName: 'Vipertongue Repeater' }
 });
 
-// Commit an action on the active combatant's turn
+// Continue: commit one round of work on the combatant's turn (spends 1 action)
 await game.baphometTasks.commitAction(combatant, taskId);
+
+// Aid: a different active combatant spends 1 action for a +2 on a ready task
+await game.baphometTasks.aidTask(aiderCombatant, combatant, taskId);
+
+// Resolve: once readyToResolve, spend 1 action and roll the skill check
+await game.baphometTasks.resolveTask(combatant, taskId);
 
 // Pause / resume / abandon
 await game.baphometTasks.pauseTask(combatant, taskId, 'player-choice');
 await game.baphometTasks.resumeTask(combatant, taskId);
 await game.baphometTasks.abandonTask(combatant, taskId);
 
-// Read task state
+// Read task state (non-GM callers receive a sanitized object — no hidden DC)
 const task = game.baphometTasks.getTask(combatant, taskId);
 const all  = game.baphometTasks.getTasks(combatant);
 ```
 
-Player-visible task state is stored on actor flags. Hidden duration (`roundsRequired`) and GM notes are stored in the active GM client's hidden task store and never exposed to players. The hidden store is per machine/browser profile and per world: clearing browser storage, switching browser profiles, or adjudicating from a different GM machine can make active hidden task data unavailable. In that case hidden-DC task adjudication fails closed instead of guessing.
+Player-visible task state is stored on actor flags. Hidden duration (`roundsRequired`), the DC, and GM notes are stored in the active GM client's hidden task store and never exposed to players. The hidden store is per machine/browser profile and per world: clearing browser storage, switching browser profiles, or adjudicating from a different GM machine can make active hidden task data unavailable. In that case hidden-DC task adjudication fails closed instead of guessing.
+
+### Trust model / known limitation
+
+Foundry has no server-side dice: when a player rolls their skill check, the resulting **total is reported by the player's own client** over the socket. A player who tampers with their client could therefore inflate the total on a check **for a creature they control and that is not a GM-secret roll** — the same property that lets any Foundry player fudge an ordinary attack or save. This is inherent to Foundry, not specific to this module.
+
+What that exposure does *not* grant: a player cannot read the hidden DC or hidden `roundsRequired`, cannot adjudicate or commit actions for an actor they do not control (ownership and turn-eligibility are re-checked on the GM client before any authoritative write), and cannot exfiltrate hidden task data through the socket payloads (which carry only identity and public progress). GM-secret rolls stay GM-side. The trade-off is deliberate: players drive their own turns from their own clients while the GM stays the authority for everything hidden.
 
 ---
 
 ## Changelog
+
+### v2.25.4 — Docs — README freshen + task-tracker trust-model note
+
+Documentation only — no script changes. Refreshes the README to match shipped behavior: the version banner is corrected (it was stuck at 2.25.1), the **Task Tracker** section is rewritten from the old "API-only scaffold, no UI" text to describe the interactive multi-round subsystem (initiate → continue → aid → resolve, hidden DC/duration, success/minor/catastrophic classification), the `game.baphometTasks` example block now lists the live API with correct signatures (`initiateTask`, `aidTask`, `resolveTask`), and a **Trust model / known limitation** note documents that a player's own skill-roll total is client-reported (inherent to Foundry — no server-side dice) while the hidden DC/duration and GM-side adjudication remain protected. Also generalizes a stale release-workflow sample tag and test-checklist heading. No storage-format or runtime change; no Foundry runtime verification required.
 
 ### v2.25.3 — Security/bug fixes — escape chat HTML + Math.clamp v14-safety
 
@@ -270,15 +297,6 @@ Correction patch for a critical readiness bug exposed by v2.20.0's player-driven
 - **GM commit path unchanged:** When the GM clicks Continue Task, readiness is evaluated synchronously (no socket round-trip). This path is not altered.
 - **Socket path consistent with existing patterns:** `baphTaskReadinessCheck` follows the same GM-gated socket architecture as `baphTaskResolveAdjudicate` and `baphTaskAidAdjudicate`.
 
-### v2.19.2 — Pip Flag Write Authority
-
-Correction patch for the v2.19.1 pip-sync architecture. No new behavior; eliminates console permission noise in multiplayer.
-
-- **Authority gate added to `_writePipFlag`:** The function now checks `combatant.isOwner` before attempting `combatant.setFlag(...)`. Non-owner clients (e.g., a player client observing an NPC's turn reset) silently return without attempting the write.
-- **Root cause:** `_maybeResetForNewTurn()` runs on every client during `renderCombatTracker`. It calls `_writePipFlag()`, which previously attempted `combatant.setFlag()` regardless of document ownership. On a non-GM player client, this produced `User lacks permission to update Combatant` errors for every NPC turn reset.
-- **Behavioral equivalence:** GM clients own all combatants and continue writing pip state for all. Player clients write only for their own combatants. Cross-client sync is unchanged — the GM's write still fires and triggers the `updateCombatant` hook on all clients.
-- **No silent failure logging:** The early return on unauthorized clients emits no error and no UI notification; the absence of permission is expected in this context.
-
 ### v2.20.0 — Player-Side Task Initiation
 
 Enables players to request multi-round task initiation from the combat HUD, with GM modal approval preserving the hidden-data privacy model.
@@ -295,6 +313,15 @@ Enables players to request multi-round task initiation from the combat HUD, with
 - **Sequential multi-request handling:** If multiple player requests arrive while a GM modal is active, they are queued and shown in sequence.
 - **Existing GM path unchanged:** The GM task builder (Begin Task widget) remains fully functional for direct GM-initiated tasks.
 - **Privacy preserved:** Hidden DC and `roundsRequired` are never transmitted in any socket message; they exist only in the active GM client's hidden task store after task creation.
+
+### v2.19.2 — Pip Flag Write Authority
+
+Correction patch for the v2.19.1 pip-sync architecture. No new behavior; eliminates console permission noise in multiplayer.
+
+- **Authority gate added to `_writePipFlag`:** The function now checks `combatant.isOwner` before attempting `combatant.setFlag(...)`. Non-owner clients (e.g., a player client observing an NPC's turn reset) silently return without attempting the write.
+- **Root cause:** `_maybeResetForNewTurn()` runs on every client during `renderCombatTracker`. It calls `_writePipFlag()`, which previously attempted `combatant.setFlag()` regardless of document ownership. On a non-GM player client, this produced `User lacks permission to update Combatant` errors for every NPC turn reset.
+- **Behavioral equivalence:** GM clients own all combatants and continue writing pip state for all. Player clients write only for their own combatants. Cross-client sync is unchanged — the GM's write still fires and triggers the `updateCombatant` hook on all clients.
+- **No silent failure logging:** The early return on unauthorized clients emits no error and no UI notification; the absence of permission is expected in this context.
 
 ### v2.19.1 — Cross-Client Action Pip Sync
 
@@ -616,7 +643,7 @@ Documents the deferred ESM migration task (`"scripts"` → `"esmodules"`) with r
 Pushing a version tag automatically builds and publishes a GitHub release:
 
 ```bash
-git tag v2.16.0
+git tag vX.Y.Z          # e.g. v2.25.4 — match module.json
 git push origin main --tags
 ```
 
@@ -624,7 +651,7 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 
 ---
 
-## Test Checklist (v2.16.0)
+## Test Checklist (Task Tracker subsystem)
 
 1. **Task creation (GM console):** Start combat. Run `await game.baphometTasks.createTask(game.combat.combatant, { skillKey: 'dvs', taskType: 'disable-device', taskName: 'Test Task', roundsRequired: 2, metadataHidden: { dc: 15 } })`. Confirm taskId is returned.
 2. **Actor flags written:** After createTask, open F12 → run `game.combat.combatant.actor.getFlag('baphomet-utils', 'tasks')`. Confirm the task appears with correct public fields. Confirm `roundsRequired` is absent.
