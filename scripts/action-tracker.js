@@ -455,6 +455,14 @@ const pipState = new Map();
 // Stored as: { actions: [bool,bool,bool], reaction: [bool], reflexPip: [bool], resetForRound: number|null }
 const PIP_FLAG_KEY = 'pipState';
 
+// Resolve the floating Action Spend Panel / task-widget corner from the
+// 'moveButtonPosition' client setting, defaulting to 'bottom-right' (and on any
+// settings read error). Consolidates the position read used across the renderers.
+function _getButtonPosition() {
+  try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
+  catch { return 'bottom-right'; }
+}
+
 function _initState(combatantId) {
   // Hydrate from the shared combatant flag if it exists (cross-client reload support).
   // getFlag is synchronous — reads from the document's in-memory data.
@@ -2146,7 +2154,7 @@ function _renderActionPanel() {
   if (!_shouldShowActionPanel()) return;
 
   const combatant = game.combat.combatant;
-  const position  = game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right';
+  const position = _getButtonPosition();
 
   const panel = document.createElement('div');
   panel.id = _getActionPanelId();
@@ -2220,10 +2228,7 @@ function _renderTaskWidget() {
   const task = Object.values(tasks).find(t => t.status === 'active');
 
   if (!task) {
-    const position = (() => {
-      try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
-      catch { return 'bottom-right'; }
-    })();
+    const position = _getButtonPosition();
     if (game.user.isGM) {
       _renderBeginTaskWidget(combatant, position);
     } else if (_canUserControlCombatant(combatant)) {
@@ -2234,10 +2239,7 @@ function _renderTaskWidget() {
 
   const canControl = _canUserControlCombatant(combatant);
 
-  const position = (() => {
-    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
-    catch { return 'bottom-right'; }
-  })();
+  const position = _getButtonPosition();
 
   const widget = document.createElement('div');
   widget.id = TASK_WIDGET_ID;
@@ -2450,10 +2452,7 @@ function _renderAidPanel() {
 
   if (aidTargets.length === 0) return;
 
-  const position = (() => {
-    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
-    catch { return 'bottom-right'; }
-  })();
+  const position = _getButtonPosition();
 
   const panel = document.createElement('div');
   panel.id = AID_PANEL_ID;
@@ -2589,10 +2588,7 @@ function _openTaskBuilderOverlay(combatant) {
   _removeTaskBuilderOverlay();
   _removeTaskWidget();
 
-  const position = (() => {
-    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
-    catch { return 'bottom-right'; }
-  })();
+  const position = _getButtonPosition();
 
   const overlay = document.createElement('div');
   overlay.id = TASK_BUILDER_ID;
@@ -3005,10 +3001,7 @@ function _renderRequestTaskWidget(combatant, position) {
 function _openRequestTaskDialog(combatant) {
   _removeRequestTaskOverlay();
 
-  const position = (() => {
-    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
-    catch { return 'bottom-right'; }
-  })();
+  const position = _getButtonPosition();
 
   const overlay = document.createElement('div');
   overlay.id = BAPH_REQUEST_OVERLAY_ID;
@@ -3173,10 +3166,7 @@ function _openRequestTaskDialog(combatant) {
 function _openGMApprovalModal(payload, validation) {
   _removeGMApprovalModal();
 
-  const position = (() => {
-    try { return game.settings.get(AT_MODULE_ID, 'moveButtonPosition') ?? 'bottom-right'; }
-    catch { return 'bottom-right'; }
-  })();
+  const position = _getButtonPosition();
 
   const modal = document.createElement('div');
   modal.id = BAPH_GM_APPROVAL_ID;

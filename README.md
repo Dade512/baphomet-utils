@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.25.4
+**Current Version:** 2.26.0
 
 ---
 
@@ -133,6 +133,10 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.26.0 — Hygiene — remove dead Background-Skills settings + extract button-position helper
+
+Internal cleanup, no player-facing behavior change. (1) **Removed the dead Background-Skills settings.** The advisory `backgroundSkillsEnabled` / `backgroundSkillKeys` / `backgroundBudgetLevel1` / `backgroundBudgetPerLevel` world settings (plus their two one-time migration flags/hooks) were registered and shown in the settings UI but read by **no** behavior — a GM toggling "Background Skills Mode" got no effect. The campaign uses **vanilla PF1 native Background Skills** (`pf1.allowBackgroundSkills`, where the per-level rank count is fixed by PF1's own variant-rule settings), so the baphomet layer was genuinely unneeded; it's removed rather than hidden. Orphaned stored values in existing worlds are ignored (unregistered keys). (2) **Extracted `_getButtonPosition()`** in `action-tracker.js` — the floating-panel corner read (`moveButtonPosition` setting, `try/catch` → `'bottom-right'`) was copy-pasted across 7 sites; consolidated into one helper. Behavior-preserving. Settings registration banner bumped to v1.12.
 
 ### v2.25.4 — Docs — README freshen + task-tracker trust-model note
 
