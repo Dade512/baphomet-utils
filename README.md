@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.26.0
+**Current Version:** 2.27.0
 
 ---
 
@@ -26,6 +26,7 @@ https://raw.githubusercontent.com/Dade512/baphomet-utils/main/module.json
 - **Custom XP Progression** — Campaign-specific modified slow track overriding PF1e's "Fast" track; integrates organically with character sheet level-up, skill points, feats, and class features
 - **Weather Engine** — Seeded RNG weather generation with 8 Golarion climate zones, integrated with Simple Calendar Reborn; posts daily weather to chat in Croaker's Ledger style
 - **Weather Config UI** — GM-facing weather panel accessible from Scene Controls; change climate zones, toggle auto-posting, reroll weather — no console commands needed
+- **Perception Class-Skill Toggle** — Optional GM world setting (default off) that makes Perception a class skill for every character regardless of class; the standard +3 applies once they have at least 1 rank. Derived-only override — never writes actor data
 
 ---
 
@@ -133,6 +134,10 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.27.0 — Feature — "Perception is always a class skill" toggle (global) + bundled top-offs
+
+New optional GM setting **"Perception Is Always a Class Skill"** (world scope, default **OFF**). When enabled, Perception counts as a class skill for **every** actor regardless of class, so the standard **+3** applies as soon as they have at least 1 rank — it does **not** grant ranks, is a no-op for 0-rank actors and for anyone who already has Perception as a class skill, and **never writes actor documents** (a derived-only override via the `pf1PrepareBaseActorData` prep hook in the new `scripts/perception-class-skill.js`; pf1 computes the +3 itself). Toggling the setting re-preps world actors so it applies immediately. Bundled top-offs: (2) a `CLAUDE.md` "Current Implemented Systems" truth-up — the multi-round task system is now documented as the shipped interactive subsystem (not an "API-only scaffold / `resolveTask` stub"), with the verified `game.baphometTasks` surface and the corrected `hiddenTaskStore` location; (3) two previously-deferred live checks (v2.25.3 chat-HTML escaping, v2.25.1 AoO hardening edges) folded into this milestone's runtime verification.
 
 ### v2.26.0 — Hygiene — remove dead Background-Skills settings + extract button-position helper
 

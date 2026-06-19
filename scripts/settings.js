@@ -1,6 +1,15 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.12
+   BAPHOMET UTILS — SETTINGS v1.13
    Central module settings registration.
+
+   v1.13 (module v2.27.0 — "Perception is always a class skill"):
+   - perceptionAlwaysClassSkill registered. World scope, default false.
+     When ON, scripts/perception-class-skill.js runs in pf1PrepareDerivedActorData
+     (after pf1's class-skill aggregation) and sets skills.per.cs = true for every
+     actor with a Perception skill, adding the standard +3 to skills.per.mod when the
+     skill was not already a class skill and rank >= 1. Derived override only — never
+     writes actor data; recomputed each prep. onChange re-preps world actors so the
+     toggle applies immediately. Default OFF.
 
    v1.12 (module v2.26.0 — "Hygiene — remove dead Background-Skills settings"):
    - Background Skills settings REMOVED: backgroundSkillsEnabled,
@@ -320,7 +329,37 @@ Hooks.once('init', () => {
     onChange: (value) => { try { document.body.classList.toggle('baph-crit-flourish-on', !!value); } catch (e) { /* noop */ } }
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.12 registered`);
+  /* ----------------------------------------------------------
+     PERCEPTION ALWAYS A CLASS SKILL — v2.27.0
+
+     World toggle. When ON, scripts/perception-class-skill.js treats
+     Perception as a class skill for every actor regardless of class. It
+     runs in pf1PrepareDerivedActorData (after pf1's own class-skill
+     aggregation, which would otherwise force cs=false on classed actors)
+     and sets skills.per.cs = true, adding the standard +3 to skills.per.mod
+     when the skill was not already a class skill and the actor has >=1 rank.
+     This does NOT grant ranks, adds no bonus to 0-rank actors, does not
+     double for actors who already have Perception, and never writes actor
+     documents (recomputed each prep). onChange re-preps world actors so the
+     toggle applies live.
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'perceptionAlwaysClassSkill', {
+    name: 'Perception Is Always a Class Skill',
+    hint: 'When enabled, Perception counts as a class skill for every character regardless of class — the standard +3 applies once they have at least 1 rank. Does not grant ranks; no effect on actors with 0 Perception ranks or those who already have it as a class skill. Default OFF.',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: false,
+    onChange: () => {
+      // Re-prepare world actors so the class-skill override applies/clears at once.
+      // Use the cached _sheet to avoid lazily instantiating a sheet for every actor.
+      try {
+        for (const a of game.actors) { a.reset(); if (a._sheet?.rendered) a._sheet.render(false); }
+      } catch (e) { /* noop */ }
+    }
+  });
+
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.13 registered`);
 });
 
 /* ----------------------------------------------------------
