@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.27.0
+**Current Version:** 2.27.1
 
 ---
 
@@ -11,7 +11,7 @@ Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** �
 
 Manifest URL:
 ```
-https://raw.githubusercontent.com/Dade512/baphomet-utils/main/module.json
+https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 ```
 
 ---
@@ -96,7 +96,7 @@ const taskId = await game.baphometTasks.initiateTask(combatant, {
 
 // GM-only: lower-level creation (starts at roundsCommitted=0, no action spent)
 await game.baphometTasks.createTask(combatant, {
-  skillKey: 'dvs',
+  skillKey: 'dev',
   taskType: 'disable-device',
   taskName: 'Disable Poison Dart Trap',
   roundsRequired: 3,
@@ -134,6 +134,10 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.27.1 — Packaging/Docs — correct pf1 dependency floor, release-asset manifest, README skill key
+
+Documentation/manifest patch — no script behavior change, no runtime verification required (static facts only). (1) **Corrected the `pf1` dependency floor:** `relationships.requires[pf1].compatibility.minimum` was `"13"` (a Foundry version) — wrong, since the PF1 *system* is ~11.x. Set to `minimum: "11"`, `verified: "11.11"` (the installed/tested system version). The old floor would have blocked install against the real PF1 system. (2) **Switched to release-asset packaging:** `manifest`/`download` now point at `releases/latest/download/{module.json,baphomet-utils.zip}` (built and attached by `release.yml` on each `v*` tag) instead of the raw-`main` manifest + branch-archive zip, which nested a `baphomet-utils-main/` folder Foundry could mis-handle on install. (3) **README fix:** the Task Tracker example used the skill key `'dvs'`; PF1's Disable Device key is `'dev'` (×2).
 
 ### v2.27.0 — Feature — "Perception is always a class skill" toggle (global) + bundled top-offs
 
@@ -662,7 +666,7 @@ The GitHub Actions workflow builds the module zip and attaches both `module.json
 
 ## Test Checklist (Task Tracker subsystem)
 
-1. **Task creation (GM console):** Start combat. Run `await game.baphometTasks.createTask(game.combat.combatant, { skillKey: 'dvs', taskType: 'disable-device', taskName: 'Test Task', roundsRequired: 2, metadataHidden: { dc: 15 } })`. Confirm taskId is returned.
+1. **Task creation (GM console):** Start combat. Run `await game.baphometTasks.createTask(game.combat.combatant, { skillKey: 'dev', taskType: 'disable-device', taskName: 'Test Task', roundsRequired: 2, metadataHidden: { dc: 15 } })`. Confirm taskId is returned.
 2. **Actor flags written:** After createTask, open F12 → run `game.combat.combatant.actor.getFlag('baphomet-utils', 'tasks')`. Confirm the task appears with correct public fields. Confirm `roundsRequired` is absent.
 3. **GM hidden store written:** Run `game.settings.get('baphomet-utils', 'hiddenTaskStore')`. Under `worlds[game.world.id].tasks[taskId]`, confirm the hidden entry exists with `roundsRequired: 2` and `metadataHidden`.
 4. **commitAction advances progress:** Run `await game.baphometTasks.commitAction(game.combat.combatant, taskId)`. Confirm returns `true`. Re-read actor flags — `roundsCommitted` should be 1, `lastCommittedRound` should equal `game.combat.round`. Confirm 1 action pip is spent in the tracker.
