@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.27.1
+**Current Version:** 2.28.0
 
 ---
 
@@ -134,6 +134,10 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.28.0 — Cost-aware attack spending — Vital Strike / Charge / Cleave
+
+First module-code milestone of the Extra-Attack plan. With Attack Auto-Spend ON, attack action-costs are now correct for three special attacks the flat-1 logic mis-charged: a declared **Vital Strike** or **Charge** costs **2 actions**, and a declared **Cleave** follow-up costs **0**. pf1 11.11 exposes no marker to auto-detect these (verified by a live probe), so the player declares intent via three token-driven macros (`docs/homebrew/macros/{vital-strike,charge,cleave}.js`) that set an actor-scoped intent the action tracker reads. Plain Strikes (1 action) and spells (casting-time cost) are unchanged, and the `pf1PreActionUse` handler still never cancels an action. MAP, Vital Strike damage-dice, and Charge's +2/−2 remain manual.
 
 ### v2.27.1 — Packaging/Docs — correct pf1 dependency floor, release-asset manifest, README skill key
 

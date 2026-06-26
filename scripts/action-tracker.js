@@ -1878,7 +1878,20 @@ function _getCombatantForActor(actor) {
  */
 function _deriveActionUseCost(actionUse) {
   const item = actionUse?.item;
-  if (item?.type !== 'spell') return 1; // attacks/weapons: 1 Strike = 1 action
+  if (item?.type !== 'spell') {
+    // PF1.5 cost-aware spending (GOAL_v2.28.0): Vital Strike and Charge each cost
+    // 2 actions, not 1. pf1 11.11 exposes no marker to auto-detect them (live probe
+    // 2026-06-26), so the player declares intent via a token-driven macro that sets an
+    // actor-scoped intent object (globalThis.baphomet{VitalStrike,Charge} = { actorId }).
+    // Read it only for THIS actor; the macro clears it by object identity.
+    const actor = actionUse?.actor ?? item?.actor;
+    const aid = actor?.id;
+    if (aid && (globalThis.baphometVitalStrike?.actorId === aid
+             || globalThis.baphometCharge?.actorId === aid)) {
+      return 2;
+    }
+    return 1; // attacks/weapons default: 1 Strike = 1 action
+  }
 
   const act = actionUse?.action;
   const actData = act?.data ?? act?.system ?? act ?? {};
@@ -1936,6 +1949,17 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       : game.settings.get(AT_MODULE_ID, 'autoAttackSpend');
     if (!settingOn) {
       _debugLog(`auto-spend: ${item.type} setting OFF — no spend for "${item.name}"`);
+      return;
+    }
+
+    // PF1.5 Cleave (GOAL_v2.28.0): a Cleave follow-up is a FREE Strike — 0 actions,
+    // 0 swings, no MAP advance — declared post-kill via a token-driven macro that sets an
+    // actor-scoped intent. Mirror the TWF off-hand skip above: the Strike still rolls but
+    // spends no action. Placed AFTER the auto-spend gate (so it is inert when auto-spend is
+    // OFF) and BEFORE dedupe (so a skipped Cleave never enters the dedupe set).
+    // OBSERVE-ONLY: returns early, never returns false.
+    if (isAttack && globalThis.baphometCleave?.actorId === actor.id) {
+      _debugLog(`auto-spend: Cleave free Strike for "${actor.name}" — 0 actions, no action spent`);
       return;
     }
 
