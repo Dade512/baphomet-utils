@@ -172,6 +172,15 @@ li.combatant:has(> .baph-action-tracker) {
   border-color: rgba(42, 35, 29, 0.45);
 }
 
+/* --- Bonus Action Pip (Haste) — v2.29.0 ---
+   Tarnished brass. Sits in the actions row at full action-pip size (a 4th *action*),
+   but a deeper, duller brass than the bright normal action pips so it reads as the
+   Haste bonus. Inherits .spent (charcoal) and .condition-locked (dried-blood = incap). */
+.baph-pip.bonus {
+  background-color: var(--baph-brass, #9e7d43);
+  border-color: rgba(107, 92, 74, 0.8);
+}
+
 /* --- v1.8: the two sub-rows inside the tray --- */
 .baph-pip-actions,
 .baph-pip-reactions {

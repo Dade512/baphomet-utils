@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.28.0
+**Current Version:** 2.29.0
 
 ---
 
@@ -134,6 +134,10 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.29.0 — Haste bonus-action pip (4th action) + Haste-buff auto-detect
+
+Adds Haste's extra action to the combat tracker as a distinct **4th "bonus" pip** (tarnished brass), separate from the load-bearing 3-action core (modeled on the jade Combat-Reflexes pip pool). The GM grants it via a token macro or `game.baphometActions.grant/revoke/toggleBonusAction`, **or** — with the new **Auto-Grant Haste Bonus Action** setting (default ON) — it's auto-granted whenever an actor has an active Haste buff and revoked when the buff ends. Canon-faithful: the bonus is usable only for an ordinary Strike (auto-spends on the 4th attack under Attack Auto-Spend) or a Move (click the pip); it refills each turn while granted, is suppressed by full incapacitation, and is unaffected by Slowed/Staggered (which only reduce the normal pips). The pf1 Haste buff still owns its own stat effects — this adds only the action-economy pip.
 
 ### v2.28.0 — Cost-aware attack spending — Vital Strike / Charge / Cleave
 

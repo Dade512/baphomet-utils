@@ -477,12 +477,27 @@ function _initState(combatantId) {
     ? Array.from({ length: reflexCount }, (_, i) => saved.reflexPip[i] ?? true)
     : Array(reflexCount).fill(true);
 
+  // v2.29.0 Haste bonus: hydrate provenance + availability LOCALLY (no flag write in init).
+  // Auto is derived from the actor's active Haste buffs when the setting is on; forced false
+  // when off (never hydrate a stale saved `true`). Manual + spent-state come from the flag.
+  let _bonusSettingOn = false;
+  try { _bonusSettingOn = game.settings.get(AT_MODULE_ID, 'autoHasteBonusAction'); } catch (e) { /* setting not registered yet */ }
+  const bonusManual = !!saved?.bonusManual;
+  const bonusAuto   = _bonusSettingOn ? _hasActiveHasteBuff(actor) : false;
+  const bonusEff    = bonusManual || bonusAuto;
+  const bonusPip    = bonusEff
+    ? ((Array.isArray(saved?.bonusPip) && saved.bonusPip.length === 1) ? [...saved.bonusPip] : [true])
+    : [];
+
   pipState.set(combatantId, {
     actions:         (saved?.actions  && saved.actions.length  === 3) ? [...saved.actions]  : [true, true, true],
     reaction:        (saved?.reaction && saved.reaction.length === 1)  ? [...saved.reaction] : [true],
     combatReflex:    reflexCount > 0,
     reflexPip,
     conditionLocked: 0,
+    bonusManual,
+    bonusAuto,
+    bonusPip,
     _resetForRound:  saved?.resetForRound ?? null,
   });
 }
@@ -501,6 +516,8 @@ function _resetState(combatantId) {
   state.combatReflex = reflexCount > 0;
   state.reflexPip = Array(reflexCount).fill(true);
   state.conditionLocked = 0;
+  // v2.29.0: refill the Haste bonus availability (grant persists; incap is derived at use).
+  state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
   // _resetForRound is metadata, not pip state — DO NOT touch it here.
   // It's owned by the render-based reset logic.
 }
@@ -524,6 +541,9 @@ function _writePipFlag(combatantId) {
     actions:      [...state.actions],
     reaction:     [...state.reaction],
     reflexPip:    [...state.reflexPip],
+    bonusManual:  !!state.bonusManual,
+    bonusAuto:    !!state.bonusAuto,
+    bonusPip:     Array.isArray(state.bonusPip) ? [...state.bonusPip] : [],
     resetForRound: state._resetForRound,
   }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
 }
@@ -749,6 +769,8 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   // by _maybeResetReactionsForNewRound — NOT on the combatant's own turn.
   state.actions = [true, true, true];
   state.conditionLocked = 0;
+  // v2.29.0: refill the Haste bonus availability for the new turn (grant persists; incap derived).
+  state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
 
   if (combatant?.actor) {
     _applyConditionLocks(combatantId, combatant.actor);
@@ -811,6 +833,42 @@ function _buildPipRow(combatantId, isOwner) {
 
     actionsRow.appendChild(pip);
   });
+
+  // --- Bonus action pip (Haste) — v2.29.0 ---
+  // A 4th *action* pip, shown with the action group. Present when bonusPip is non-empty
+  // (granted). Full incapacitation is DERIVED (suppresses use + locks the pip) and never
+  // mutates bonusPip, so spent-state survives an incap -> recover cycle within a turn.
+  if (Array.isArray(state.bonusPip) && state.bonusPip.length) {
+    const _bonusActor = game.combat?.combatants?.get(combatantId)?.actor;
+    const _bonusIncap = !!_readConditionActionLoss(_bonusActor).fullyIncapacitated;
+    state.bonusPip.forEach((available, idx) => {
+      const pip = document.createElement('button');
+      pip.type = 'button';
+      pip.classList.add('baph-pip', 'bonus');
+      pip.dataset.pipType = 'bonus';
+      pip.dataset.pipIndex = idx;
+      pip.title = 'Bonus action (Haste)';
+
+      if (_bonusIncap) {
+        pip.classList.add('condition-locked');
+        pip.title = 'Bonus action — suppressed (incapacitated)';
+      } else if (!available) {
+        pip.classList.add('spent');
+      }
+
+      if (isOwner && !_bonusIncap) {
+        pip.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          _togglePip(combatantId, 'bonus', idx);
+        });
+      } else {
+        pip.disabled = true;
+      }
+
+      actionsRow.appendChild(pip);
+    });
+  }
 
   // --- Reaction pip ---
   state.reaction.forEach((available, idx) => {
@@ -891,6 +949,12 @@ function _togglePip(combatantId, type, index) {
     state.reaction[index] = !state.reaction[index];
   } else if (type === 'reflex') {
     state.reflexPip[index] = !state.reflexPip[index];
+  } else if (type === 'bonus') {
+    // v2.29.0: can't use the Haste bonus while fully incapacitated (derived guard).
+    const _bActor = game.combat?.combatants?.get(combatantId)?.actor;
+    if (_readConditionActionLoss(_bActor).fullyIncapacitated) return;
+    if (!Array.isArray(state.bonusPip)) return;
+    state.bonusPip[index] = !state.bonusPip[index];
   }
 
   _refreshPipRow(combatantId);
@@ -1095,7 +1159,10 @@ Hooks.once('ready', () => {
         actionsTotal: 3,
         reactionAvailable: state.reaction[0],
         combatReflexAvailable: state.combatReflex ? state.reflexPip.filter(p => p).length : null,
-        conditionLocked: state.conditionLocked
+        conditionLocked: state.conditionLocked,
+        bonusActionsRemaining: Array.isArray(state.bonusPip) ? state.bonusPip.filter(p => p).length : 0,
+        bonusActionsTotal:     Array.isArray(state.bonusPip) ? state.bonusPip.length : 0,
+        bonusManualGranted:    !!state.bonusManual
       };
     },
     reset: (combatantId) => {
@@ -1103,21 +1170,10 @@ Hooks.once('ready', () => {
       _refreshPipRow(combatantId);
       _writePipFlag(combatantId);
     },
-    spendAction: (combatantId, count = 1) => {
-      const state = _getState(combatantId);
-      if (!state) return false;
-      let spent = 0;
-      for (let i = 0; i < 3 && count > 0; i++) {
-        if (state.actions[i] && i >= state.conditionLocked) {
-          state.actions[i] = false;
-          count--;
-          spent++;
-        }
-      }
-      _refreshPipRow(combatantId);
-      if (spent > 0) _writePipFlag(combatantId);
-      return spent > 0;
-    },
+    // Public spend is NORMAL-pool only (never the Haste bonus). Bonus eligibility is
+    // enforced privately in _spendActionCore, reachable only via _spendActionForCombatant
+    // on the validated single-Strike path. (v2.29.0)
+    spendAction: (combatantId, count = 1) => _spendActionCore(combatantId, count, false),
     spendReaction: (combatantId) => {
       const state = _getState(combatantId);
       if (!state || !state.reaction[0]) return false;
@@ -1137,7 +1193,19 @@ Hooks.once('ready', () => {
       _refreshPipRow(combatantId);
       _writePipFlag(combatantId);
       return true;
-    }
+    },
+
+    // v2.29.0 Haste bonus action. grant/revoke/toggle are GM-gated (granting is a GM act);
+    // reconcile*BonusAuto are active-GM-gated (single writer for buff/setting-driven state).
+    grantBonusAction:  (combatantId) => _setManualBonus(combatantId, true),
+    revokeBonusAction: (combatantId) => _setManualBonus(combatantId, false),
+    toggleBonusAction: (combatantId) => {
+      const s = _getState(combatantId);
+      if (!s) return false;
+      return _setManualBonus(combatantId, !s.bonusManual);
+    },
+    reconcileBonusAuto:    (combatantId) => _reconcileBonusAutoFor(combatantId),
+    reconcileAllBonusAuto: () => _reconcileAllBonusAuto()
   };
 
   _debugLog('Action Tracker v1.8 ready');
@@ -1274,6 +1342,119 @@ function _canUserControlCombatant(combatant) {
  * @param {string} [reason]   Debug label
  * @returns {boolean}
  */
+/* ----------------------------------------------------------
+   HASTE BONUS ACTION — v2.29.0
+   A dedicated 4th-action pip (separate from the 3-action core),
+   modeled on the Combat-Reflexes (reflexPip) pool. Three axes:
+     granted    = bonusManual || bonusAuto  (drives whether bonusPip exists)
+     available  = bonusPip[0]               (true=available / false=spent; preserved across incap)
+     suppressed = full incapacitation       (DERIVED at use; never mutates bonusPip)
+   Usable = granted && !fullyIncapacitated && bonusPip[0] === true.
+   ---------------------------------------------------------- */
+
+// Actor-wide scan for an active Haste buff. Callers recompute on ANY buff change, so a
+// Haste buff renamed away is handled (the scan simply no longer finds it).
+function _hasActiveHasteBuff(actor) {
+  return !!actor?.items?.some(i => i.type === 'buff' && i.system?.active && /haste/i.test(i.name));
+}
+
+// Transition-only, LOCAL mutation. Never refills a still-effective pip (no mid-turn
+// resurrection); never considers incapacitation (derived at use). Refill happens ONLY
+// in _resetState / _maybeResetForNewTurn.
+function _reconcileBonusPip(combatantId) {
+  const state = _getState(combatantId);
+  if (!state) return;
+  if (!Array.isArray(state.bonusPip)) state.bonusPip = [];
+  const effective = !!(state.bonusManual || state.bonusAuto);
+  if (!effective) { state.bonusPip = []; return; }            // true -> false: remove pip
+  if (state.bonusPip.length === 0) state.bonusPip = [true];    // false -> true: new grant, available
+  // else: still effective -> preserve existing [true]/[false]
+}
+
+// Recompute auto-grant from the setting + active Haste buffs, then reconcile. LOCAL only.
+function _recomputeBonusAuto(combatantId) {
+  const state = _getState(combatantId);
+  if (!state) return;
+  const actor = game.combat?.combatants?.get(combatantId)?.actor;
+  let settingOn = false;
+  try { settingOn = game.settings.get(AT_MODULE_ID, 'autoHasteBonusAction'); } catch (e) { /* not registered */ }
+  state.bonusAuto = !!(settingOn && actor && _hasActiveHasteBuff(actor));
+  _reconcileBonusPip(combatantId);
+}
+
+// GM-gated manual grant/revoke. Authoritative path: reconcile THEN refresh + persist.
+function _setManualBonus(combatantId, on) {
+  if (!game.user?.isGM) { ui.notifications?.warn?.('Only the GM can grant a bonus action.'); return false; }
+  const state = _getState(combatantId);
+  if (!state) return false;
+  state.bonusManual = !!on;
+  _reconcileBonusPip(combatantId);
+  _refreshPipRow(combatantId);
+  _writePipFlag(combatantId);
+  return true;
+}
+
+// Active-GM single-writer reconcile of auto state (the buff/setting bridge).
+function _reconcileBonusAutoFor(combatantId) {
+  if (game.user !== game.users?.activeGM) return;
+  _recomputeBonusAuto(combatantId);
+  _refreshPipRow(combatantId);
+  _writePipFlag(combatantId);
+}
+
+function _reconcileAllBonusAuto() {
+  if (game.user !== game.users?.activeGM) return;
+  const combat = game.combat;
+  if (!combat) return;
+  for (const c of combat.combatants) {
+    _recomputeBonusAuto(c.id);
+    _refreshPipRow(c.id);
+    _writePipFlag(c.id);
+  }
+}
+
+// Auto-detect: recompute on ANY buff create/update/delete on a combatant's actor, on the
+// active GM only (single writer). Not keyed on the changed item's current name, so renaming
+// a Haste buff away still triggers a recompute (the actor-wide scan decides the result).
+function _onBuffChangeForHasteBonus(item) {
+  if (!game.user?.isGM) return;
+  if (game.user !== game.users?.activeGM) return;
+  if (item?.type !== 'buff') return;
+  let settingOn = false;
+  try { settingOn = game.settings.get(AT_MODULE_ID, 'autoHasteBonusAction'); } catch (e) { return; }
+  if (!settingOn) return;
+  const actor = item.actor ?? item.parent;
+  if (!actor) return;
+  const combatant = _getCombatantForActor(actor);
+  if (!combatant) return;
+  _reconcileBonusAutoFor(combatant.id);
+}
+Hooks.on('createItem', (item) => _onBuffChangeForHasteBonus(item));
+Hooks.on('updateItem', (item) => _onBuffChangeForHasteBonus(item));
+Hooks.on('deleteItem', (item) => _onBuffChangeForHasteBonus(item));
+
+// Single spend implementation. Bonus eligibility is enforced HERE (never exposed via the
+// public spendAction API): allowBonus is set ONLY by _spendActionForCombatant on a validated
+// single ordinary Strike. All-or-nothing; spends the 3 normal pips first, then the bonus.
+function _spendActionCore(combatantId, count = 1, allowBonus = false) {
+  const state = _getState(combatantId);
+  if (!state) return false;
+  const actor = game.combat?.combatants?.get(combatantId)?.actor;
+  const incap = !!_readConditionActionLoss(actor).fullyIncapacitated;
+  const normalAvail = state.actions.filter((a, i) => a && i >= state.conditionLocked).length;
+  const bonusUsable = allowBonus && !incap && Array.isArray(state.bonusPip) && state.bonusPip[0] === true;
+  const bonusAvail  = bonusUsable ? 1 : 0;
+  if (normalAvail + bonusAvail < count) return false; // all-or-nothing across both pools
+  let remaining = count;
+  for (let i = 0; i < 3 && remaining > 0; i++) {
+    if (state.actions[i] && i >= state.conditionLocked) { state.actions[i] = false; remaining--; }
+  }
+  if (remaining > 0 && bonusUsable) { state.bonusPip[0] = false; remaining--; }
+  _refreshPipRow(combatantId);
+  _writePipFlag(combatantId);
+  return true;
+}
+
 function _spendActionForCombatant(combatantId, count = 1, reason = '') {
   const state = _getState(combatantId);
   if (!state) {
@@ -1281,26 +1462,19 @@ function _spendActionForCombatant(combatantId, count = 1, reason = '') {
     return false;
   }
 
-  // Require enough spendable actions to satisfy the full requested count.
-  // Spend is all-or-nothing: a 3-action cost (e.g. Disable Device) must
-  // have exactly 3 available pips or nothing is spent and false is returned.
-  // Partial spending is never permitted.
-  const spendable = state.actions.filter((a, i) => a && i >= state.conditionLocked).length;
-  if (spendable < count) {
-    _debugLog(`_spendActionForCombatant: insufficient actions (${spendable} available, ${count} needed) for ${combatantId} [${reason}]`);
-    return false;
-  }
+  // Haste bonus is spendable ONLY for a single ordinary Strike (reason `attack-*`, count 1).
+  // Spells/skills/manual-panel and cost>1 Vital Strike/Charge use normal pips only. Move /
+  // manually-resolved Strike use the bonus via a direct click on the pip. (Codex r3 #1.)
+  const allowBonus = (count === 1) && typeof reason === 'string' && reason.startsWith('attack-');
 
-  // Delegate to the existing macro API. This is the single spend
-  // implementation — do not duplicate the loop here.
-  if (!game.baphometActions?.spendAction) {
-    _debugLog(`_spendActionForCombatant: baphometActions API not ready [${reason}]`);
-    return false;
+  // All-or-nothing is enforced inside _spendActionCore (preflight across both pools).
+  const ok = _spendActionCore(combatantId, count, allowBonus);
+  if (ok) {
+    _debugLog(`_spendActionForCombatant: spent ${count} action(s) for ${combatantId} [${reason}${allowBonus ? ', bonus-eligible' : ''}]`);
+  } else {
+    _debugLog(`_spendActionForCombatant: insufficient actions (${count} needed) for ${combatantId} [${reason}]`);
   }
-
-  game.baphometActions.spendAction(combatantId, count);
-  _debugLog(`_spendActionForCombatant: spent ${count} action(s) for ${combatantId} [${reason}]`);
-  return true;
+  return ok;
 }
 
 /* ----------------------------------------------------------
@@ -2908,6 +3082,9 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   if (Array.isArray(saved.actions)   && saved.actions.length   === 3) existing.actions   = [...saved.actions];
   if (Array.isArray(saved.reaction)  && saved.reaction.length  === 1) existing.reaction  = [...saved.reaction];
   if (Array.isArray(saved.reflexPip))                                  existing.reflexPip = [...saved.reflexPip];
+  if ('bonusManual' in saved) existing.bonusManual = !!saved.bonusManual;
+  if ('bonusAuto'   in saved) existing.bonusAuto   = !!saved.bonusAuto;
+  if (Array.isArray(saved.bonusPip)) existing.bonusPip = [...saved.bonusPip];
   if ('resetForRound' in saved) existing._resetForRound = saved.resetForRound;
 
   // Refresh the pip row in the combat tracker sidebar for this combatant.

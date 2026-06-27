@@ -161,6 +161,27 @@ Hooks.once('init', () => {
   });
 
   /* ----------------------------------------------------------
+     HASTE BONUS-ACTION AUTO-DETECT — v2.29.0
+     When ON, an active Haste buff on a combatant's actor auto-grants a
+     4th bonus-action pip (and deactivating/removing/renaming-away the buff
+     revokes it). Manual grants via the Haste macro/API are independent.
+     onChange reconciles every combatant; the API method is active-GM-gated
+     (single writer). Handler lives in scripts/action-tracker.js.
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'autoHasteBonusAction', {
+    name: 'Auto-Grant Haste Bonus Action',
+    hint: 'When enabled, an active Haste buff on a combatant auto-grants a 4th bonus-action pip (deactivating or removing it revokes the pip). Manual grants via the Haste macro/API are independent. Default ON.',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: true,
+    onChange: () => {
+      // Single-writer reconcile (the API method is active-GM-gated).
+      game.baphometActions?.reconcileAllBonusAuto?.();
+    }
+  });
+
+  /* ----------------------------------------------------------
      SKILL ROLL AUTO-SPEND — LIVE as of v2.11.0
      
      Triggers on pf1ActorRollSkill. Only spends for skills in
