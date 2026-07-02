@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.29.0
+**Current Version:** 2.30.0
 
 ---
 
@@ -21,6 +21,7 @@ https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
 - **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic
+- **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll)
 - **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
 - **Roll Card Styler** — Dark leather result bar on all roll cards; nat 20 gold bar and nat 1 blood bar with flavor labels
 - **Custom XP Progression** — Campaign-specific modified slow track overriding PF1e's "Fast" track; integrates organically with character sheet level-up, skill points, feats, and class features
@@ -134,6 +135,10 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.30.0 — MAP / swing tracking (silent attack-roll penalty) + TWF off-hand budget fix
+
+Adds automatic **Multiple Attack Penalty**. With the new **MAP / Swing Tracking** setting (default ON), each weapon Strike a combatant makes on its turn accrues MAP — 1st–2nd swing at full BAB, 3rd at **−5**, 4th+ cumulative **−5** — applied **silently** to the attack roll (it shows in the attack card's secondary-attack line and **stacks** with the two-weapon penalty). It tracks **manufactured-weapon** Strikes (melee and thrown); Cleave, attacks of opportunity / off-turn attacks, spells, and natural/unarmed attacks correctly take no MAP. A **critical confirmation** reuses its threat swing's MAP and does not advance the counter. The swing counter is per-turn, resets on the render-based turn change, and is client-local (a mid-turn reload or GM↔player control hand-off may under-count — the safe direction). Also fixes the **Two-Weapon Fighting** macro: the off-hand bonus is now a **per-turn pool** (Base 1 / Improved 2 / Greater 3 swings per turn, one per Strike, draining the earliest Strikes) instead of granting the full tier on every press — persisted per turn so a reload can't refill it. Built on a live GATE-1 hook probe (pf1 11.11). Runtime verification on both seats is still required before release.
 
 ### v2.29.0 — Haste bonus-action pip (4th action) + Haste-buff auto-detect
 

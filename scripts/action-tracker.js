@@ -455,6 +455,23 @@ const pipState = new Map();
 // Stored as: { actions: [bool,bool,bool], reaction: [bool], reflexPip: [bool], resetForRound: number|null }
 const PIP_FLAG_KEY = 'pipState';
 
+// v2.30.0 MAP / TWF off-hand budget.
+// OFF_BUDGET_FLAG_KEY: an ISOLATED, versioned combatant flag for the TWF off-hand
+// per-turn budget, deliberately SEPARATE from the whole-blob pipState flag so an
+// unrelated pip/Haste/reset write can't carry-and-clobber it (GATE-1 probe fact 7).
+// Stored as: { used: number, seq: number, round: number, turn: number }.
+const OFF_BUDGET_FLAG_KEY = 'offHandBudget';
+// Two-Weapon Fighting off-hand bonus swings PER TURN by tier (canon §4 Incremental Mastery).
+const TWF_OFF_BUDGET = { base: 1, improved: 2, greater: 3 };
+// Crit-confirmation guard (GATE-1 probe fact 3): on a crit threat the hooks fire a
+// second pre→atk pair before the single use. `_mapArmCrit` is set at an eligible
+// pf1PreAttackRoll (candidate penalty), promoted to `_mapPendingConfirm` at the
+// threat's pf1AttackRoll iff roll.isCrit; the confirmation's pf1PreAttackRoll reuses
+// that penalty and does NOT advance the swing counter (canon: same swing's MAP).
+// Both keyed by actor.id; cleared on turn reset.
+const _mapArmCrit = new Map();        // actorId -> { penalty }
+const _mapPendingConfirm = new Map(); // actorId -> { penalty }
+
 // Resolve the floating Action Spend Panel / task-widget corner from the
 // 'moveButtonPosition' client setting, defaulting to 'bottom-right' (and on any
 // settings read error). Consolidates the position read used across the renderers.
@@ -489,6 +506,15 @@ function _initState(combatantId) {
     ? ((Array.isArray(saved?.bonusPip) && saved.bonusPip.length === 1) ? [...saved.bonusPip] : [true])
     : [];
 
+  // v2.30.0: TWF off-hand budget hydrates from its OWN isolated, versioned flag (NOT pipState).
+  // Valid only for the current round+turn; a stale (prior-turn) value hydrates as 0. `offSeq`
+  // is preserved for the stale-echo guard in the dedicated updateCombatant hydrator.
+  const ob = combatant?.getFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY) ?? null;
+  const _obRound = game.combat?.round ?? 0;
+  const _obTurn  = game.combat?.turn ?? 0;
+  const offHandUsed = (ob && ob.round === _obRound && ob.turn === _obTurn) ? (Number(ob.used) || 0) : 0;
+  const offSeq      = Number(ob?.seq) || 0;
+
   pipState.set(combatantId, {
     actions:         (saved?.actions  && saved.actions.length  === 3) ? [...saved.actions]  : [true, true, true],
     reaction:        (saved?.reaction && saved.reaction.length === 1)  ? [...saved.reaction] : [true],
@@ -499,6 +525,11 @@ function _initState(combatantId) {
     bonusAuto,
     bonusPip,
     _resetForRound:  saved?.resetForRound ?? null,
+    // v2.30.0 MAP swing counter — in-memory ONLY, never flag-persisted (sidesteps R6 P-8).
+    swingsTaken:     0,
+    // v2.30.0 TWF off-hand budget — persisted via the isolated OFF_BUDGET_FLAG_KEY flag.
+    offHandUsed,
+    offSeq,
   });
 }
 
@@ -518,6 +549,12 @@ function _resetState(combatantId) {
   state.conditionLocked = 0;
   // v2.29.0: refill the Haste bonus availability (grant persists; incap is derived at use).
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
+  // v2.30.0: clear the per-turn MAP counter + TWF off-hand budget on a manual reset too.
+  state.swingsTaken = 0;
+  state.offHandUsed = 0;
+  state.offSeq = (Number(state.offSeq) || 0) + 1;
+  const _rsActor = game.combat?.combatants?.get(combatantId)?.actor;
+  if (_rsActor) { _mapArmCrit.delete(_rsActor.id); _mapPendingConfirm.delete(_rsActor.id); }
   // _resetForRound is metadata, not pip state — DO NOT touch it here.
   // It's owned by the render-based reset logic.
 }
@@ -546,6 +583,26 @@ function _writePipFlag(combatantId) {
     bonusPip:     Array.isArray(state.bonusPip) ? [...state.bonusPip] : [],
     resetForRound: state._resetForRound,
   }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
+}
+
+/**
+ * v2.30.0: Persist the TWF off-hand budget to its OWN isolated, versioned flag
+ * (OFF_BUDGET_FLAG_KEY) — deliberately separate from the whole-blob pipState flag so
+ * an unrelated pip/Haste/reset write can never carry-and-clobber it (GATE-1 probe fact 7).
+ * Owner-gated, fire-and-forget (mirrors _writePipFlag). The bumped `seq` lets the
+ * dedicated updateCombatant hydrator reject a stale self-echo.
+ */
+function _writeOffBudget(combatantId) {
+  const state = _getState(combatantId);
+  if (!state) return;
+  const combatant = game.combat?.combatants?.get(combatantId);
+  if (!combatant || !combatant.isOwner) return;
+  combatant.setFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY, {
+    used:  Number(state.offHandUsed) || 0,
+    seq:   Number(state.offSeq) || 0,
+    round: game.combat?.round ?? 0,
+    turn:  game.combat?.turn ?? 0,
+  }).catch(err => console.error(`baphomet-utils | _writeOffBudget error: ${err}`));
 }
 
 /* ----------------------------------------------------------
@@ -771,6 +828,12 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   state.conditionLocked = 0;
   // v2.29.0: refill the Haste bonus availability for the new turn (grant persists; incap derived).
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
+  // v2.30.0: reset the per-turn MAP swing counter (in-memory) and TWF off-hand budget.
+  state.swingsTaken = 0;
+  state.offHandUsed = 0;
+  state.offSeq = (Number(state.offSeq) || 0) + 1; // bump so this reset write supersedes prior values
+  const _resetActorId = combatant?.actor?.id;
+  if (_resetActorId) { _mapArmCrit.delete(_resetActorId); _mapPendingConfirm.delete(_resetActorId); }
 
   if (combatant?.actor) {
     _applyConditionLocks(combatantId, combatant.actor);
@@ -778,6 +841,7 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
 
   // Persist reset state so remote clients hydrate the fresh full pips.
   _writePipFlag(combatantId);
+  _writeOffBudget(combatantId); // v2.30.0: persist the reset off-hand budget (isolated flag)
 
   _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${round})`);
 }
@@ -1169,6 +1233,7 @@ Hooks.once('ready', () => {
       _resetState(combatantId);
       _refreshPipRow(combatantId);
       _writePipFlag(combatantId);
+      _writeOffBudget(combatantId); // v2.30.0: persist the off-hand-budget reset (isolated flag)
     },
     // Public spend is NORMAL-pool only (never the Haste bonus). Bonus eligibility is
     // enforced privately in _spendActionCore, reachable only via _spendActionForCombatant
@@ -1205,7 +1270,43 @@ Hooks.once('ready', () => {
       return _setManualBonus(combatantId, !s.bonusManual);
     },
     reconcileBonusAuto:    (combatantId) => _reconcileBonusAutoFor(combatantId),
-    reconcileAllBonusAuto: () => _reconcileAllBonusAuto()
+    reconcileAllBonusAuto: () => _reconcileAllBonusAuto(),
+
+    // v2.30.0 TWF off-hand per-turn budget (Model A; option C — owner-write, no socket).
+    // reserve: synchronously consume one off-hand swing if the per-turn pool has room;
+    // returns a token for commit/rollback, or null if the pool is already spent this turn.
+    reserveOffHandSwing: (combatantId, tier) => {
+      let state = _getState(combatantId);
+      if (!state) { _initState(combatantId); state = _getState(combatantId); }
+      if (!state) return null;
+      const budget = TWF_OFF_BUDGET[tier] ?? 0;
+      if ((Number(state.offHandUsed) || 0) >= budget) return null; // pool spent this turn
+      state.offHandUsed = (Number(state.offHandUsed) || 0) + 1;
+      state.offSeq = (Number(state.offSeq) || 0) + 1;
+      _writeOffBudget(combatantId);
+      return { combatantId, round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0, seq: state.offSeq };
+    },
+    // rollback a reservation when its off-hand use() was cancelled — only if it is still the
+    // latest write for this combatant and the same round/turn (else a newer reserve superseded it).
+    rollbackOffHandSwing: (token) => {
+      if (!token?.combatantId) return false;
+      const state = _getState(token.combatantId);
+      if (!state) return false;
+      if ((Number(state.offSeq) || 0) !== token.seq) return false; // superseded by a newer write
+      if ((game.combat?.round ?? 0) !== token.round || (game.combat?.turn ?? 0) !== token.turn) return false;
+      state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
+      state.offSeq = (Number(state.offSeq) || 0) + 1;
+      _writeOffBudget(token.combatantId);
+      return true;
+    },
+    // v2.30.0 named bridge for settings.js: clear the in-memory MAP swing counter (and the
+    // crit-confirm guards) on toggle-off. Does NOT touch the TWF off-hand budget (separate
+    // concern). Mirrors the Phase-5 reconcileAllBonusAuto bridge.
+    resetMapCounters: () => {
+      for (const [, st] of pipState) { if (st) st.swingsTaken = 0; }
+      _mapArmCrit.clear();
+      _mapPendingConfirm.clear();
+    }
   };
 
   _debugLog('Action Tracker v1.8 ready');
@@ -2091,6 +2192,95 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
   if (!pen || pen === "0") return;
   const base = Number(rollConfig.secondaryPenalty) || 0;     // add, don't clobber (baseline "0")
   rollConfig.secondaryPenalty = String(base + Number(pen));
+});
+
+/* ============================================================
+   MAP / SWING TRACKING — v2.30.0
+   ══════════════════════════════════════════════════════════
+   Single pre-roll handler: (crit-confirm guard) → classify → inject → advance.
+   Live-verified by the GATE-1 probe (2026-06-29): the hook order is
+   pf1PreAttackRoll -> pf1AttackRoll -> pf1PreActionUse, so pf1PreAttackRoll is the
+   ONLY pre-roll injection surface; pf1PreActionUse is NOT used for MAP. The penalty is
+   silent (rides rollConfig.secondaryPenalty, the same additive field the TWF handler
+   above uses, so MAP stacks with the TWF penalty). NO per-use nonce / dedupe: the probe
+   observed NO duplicate little-helper hook fires across single/crit/TWF paths. That is
+   bounded-empirical (sampled paths only), NOT a guarantee duplicates are impossible — if a
+   real duplicate source later surfaces, add a targeted identity guard then. The ONLY real
+   double-fire is the crit confirmation, handled by the guard below.
+   ============================================================ */
+
+// Eligible MAP swing? On-turn manufactured-weapon Strike, not Cleave.
+// Manufactured = item.type 'weapon' OR ('attack' with system.subType 'weapon') — GATE-1c:
+// weaponSubtype is null on the 'attack' representation, so subType is the discriminator.
+// Naturals/unarmed (subType !== 'weapon'), spells, and off-turn/AoO all FAIL OPEN (no MAP).
+function _isEligibleSwing(actor, item, activeCombatant) {
+  if (!actor || !item || !activeCombatant) return false;             // off-turn / AoO → no active match
+  if (globalThis.baphometCleave?.actorId === actor.id) return false; // Cleave = 0 swings / full BAB
+  const t = item.type;
+  if (t === 'weapon') return true;
+  if (t === 'attack' && item.system?.subType === 'weapon') return true;
+  return false; // spell / natural / unarmed / unconfirmed → fail open (deferred)
+}
+
+// MAP penalty for the swing being rolled, reading the PRIOR count: max(0, prior - 1) * -5.
+// prior 0->0, 1->0, 2->-5, 3->-10, 4->-15 (canon: 1st-2nd full BAB, 3rd -5, 4th+ cumulative).
+function _mapPenaltyForPrior(prior) {
+  return Math.max(0, (Number(prior) || 0) - 1) * -5;
+}
+
+Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
+  try {
+    if (!game.combat?.active) return;
+    if (!game.settings.get(AT_MODULE_ID, 'mapTracking')) return;
+    const actor = attackData?.actor;
+    if (!actor) return;
+
+    // Crit-confirmation guard: a confirmation pre reuses the threat swing's MAP and does NOT
+    // advance the counter (canon: same swing's MAP). Armed at the threat's pf1AttackRoll below.
+    const pending = _mapPendingConfirm.get(actor.id);
+    if (pending) {
+      _mapPendingConfirm.delete(actor.id);
+      if (pending.penalty < 0) {
+        rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + pending.penalty);
+      }
+      return; // confirmation roll — do NOT advance
+    }
+
+    _mapArmCrit.delete(actor.id); // never carry an arm across rolls
+    const activeCombatant = _getActiveCombatantForActor(actor);
+    if (!_isEligibleSwing(actor, attackData?.item, activeCombatant)) return;
+
+    let state = _getState(activeCombatant.id);
+    if (!state) { _initState(activeCombatant.id); state = _getState(activeCombatant.id); }
+    if (!state) return;
+
+    const penalty = _mapPenaltyForPrior(state.swingsTaken); // prior count → this swing's MAP
+    if (penalty < 0) {
+      rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + penalty); // additive; stacks with TWF
+    }
+    state.swingsTaken = (Number(state.swingsTaken) || 0) + 1; // advance: this swing is now counted
+    _mapArmCrit.set(actor.id, { penalty });                   // candidate; promoted at atk iff crit threat
+  } catch (e) {
+    _debugLog('MAP pf1PreAttackRoll error: ' + e.message);
+  }
+});
+
+// Arm the crit-confirmation guard. On a crit THREAT (roll.isCrit) for the swing just injected,
+// stash that swing's MAP penalty so the confirmation's pre (firing next, per the probe) reuses it.
+Hooks.on('pf1AttackRoll', (action, roll) => {
+  try {
+    if (!game.combat?.active) return;
+    if (!game.settings.get(AT_MODULE_ID, 'mapTracking')) return;
+    const actor = action?.actor ?? action?.item?.actor ?? action?.parent?.actor;
+    if (!actor) return;
+    const armed = _mapArmCrit.get(actor.id);
+    _mapArmCrit.delete(actor.id);
+    if (armed && roll?.isCrit === true) {
+      _mapPendingConfirm.set(actor.id, { penalty: armed.penalty });
+    }
+  } catch (e) {
+    _debugLog('MAP pf1AttackRoll (crit-arm) error: ' + e.message);
+  }
 });
 
 /**
@@ -3089,6 +3279,30 @@ Hooks.on('updateCombatant', (combatant, changes) => {
 
   // Refresh the pip row in the combat tracker sidebar for this combatant.
   _refreshPipRow(combatant.id);
+});
+
+/* ----------------------------------------------------------
+   v2.30.0: dedicated hydrator for the ISOLATED off-hand-budget flag.
+   Kept separate from the pipState hydrator above so the two never interfere.
+   Rejects a stale self-echo via the monotonic `seq` (accept only seq > local —
+   GATE-1 probe fact 7), and treats a prior-round/turn value as 0 (the v1.25
+   "adopt current state, don't let a stale signal undo newer state" instinct).
+   No UI refresh: the off-hand budget has no rendered pip.
+   ---------------------------------------------------------- */
+Hooks.on('updateCombatant', (combatant, changes) => {
+  if (!changes?.flags?.['baphomet-utils']?.[OFF_BUDGET_FLAG_KEY]) return;
+  const combat = game.combat;
+  if (!combat || combatant.parent?.id !== combat.id) return;
+  const existing = _getState(combatant.id);
+  if (!existing) return;
+  const ob = combatant.getFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY);
+  if (!ob) return;
+  const incomingSeq = Number(ob.seq) || 0;
+  if (incomingSeq <= (Number(existing.offSeq) || 0)) return; // stale / self-echo — ignore
+  existing.offSeq = incomingSeq;
+  existing.offHandUsed = (ob.round === (combat.round ?? 0) && ob.turn === (combat.turn ?? 0))
+    ? (Number(ob.used) || 0)
+    : 0; // a prior-turn value is not valid for the current turn
 });
 
 // Initial render on world ready — shows the panel if a combat

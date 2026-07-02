@@ -182,6 +182,30 @@ Hooks.once('init', () => {
   });
 
   /* ----------------------------------------------------------
+     MAP / SWING TRACKING — v2.30.0
+     When ON, an automatic Multiple Attack Penalty rides the attack roll
+     (silent; shows in the attack card as the secondary-attack penalty):
+     1st-2nd swing full BAB, 3rd -5, 4th+ cumulative -5, per turn. Gates the
+     pf1PreAttackRoll MAP handler in scripts/action-tracker.js. onChange disable
+     clears the live MAP counter (via the resetMapCounters bridge); enable takes
+     effect from the next eligible swing (non-retroactive). Does NOT affect the
+     TWF off-hand budget (separate concern).
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'mapTracking', {
+    name: 'MAP / Swing Tracking',
+    hint: 'When enabled, applies the PF1.5 Multiple Attack Penalty automatically to each weapon Strike this turn (3rd swing -5, 4th+ cumulative -5; silent, shown on the attack card). Default ON.',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: true,
+    onChange: (value) => {
+      // On disable, clear the in-memory MAP counter so no stale count survives. Enable is
+      // non-retroactive (counts from the next eligible swing). offHandUsed is untouched.
+      if (!value) game.baphometActions?.resetMapCounters?.();
+    }
+  });
+
+  /* ----------------------------------------------------------
      SKILL ROLL AUTO-SPEND — LIVE as of v2.11.0
      
      Triggers on pf1ActorRollSkill. Only spends for skills in
