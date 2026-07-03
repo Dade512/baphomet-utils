@@ -674,23 +674,3 @@ git push origin main --tags
 ```
 
 The GitHub Actions workflow builds the module zip and attaches both `module.json` and `baphomet-utils.zip` to the release.
-
----
-
-## Test Checklist (Task Tracker subsystem)
-
-1. **Task creation (GM console):** Start combat. Run `await game.baphometTasks.createTask(game.combat.combatant, { skillKey: 'dev', taskType: 'disable-device', taskName: 'Test Task', roundsRequired: 2, metadataHidden: { dc: 15 } })`. Confirm taskId is returned.
-2. **Actor flags written:** After createTask, open F12 → run `game.combat.combatant.actor.getFlag('baphomet-utils', 'tasks')`. Confirm the task appears with correct public fields. Confirm `roundsRequired` is absent.
-3. **GM hidden store written:** Run `game.settings.get('baphomet-utils', 'hiddenTaskStore')`. Under `worlds[game.world.id].tasks[taskId]`, confirm the hidden entry exists with `roundsRequired: 2` and `metadataHidden`.
-4. **commitAction advances progress:** Run `await game.baphometTasks.commitAction(game.combat.combatant, taskId)`. Confirm returns `true`. Re-read actor flags — `roundsCommitted` should be 1, `lastCommittedRound` should equal `game.combat.round`. Confirm 1 action pip is spent in the tracker.
-5. **readyToResolve set on threshold:** After 2 commits (advance a round between them), confirm `readyToResolve: true` on the actor flag.
-6. **Same-round guard:** Run `commitAction` twice in the same round. Second call should return `false` and log a warning.
-7. **Non-active combatant guard:** Try commitAction on a combatant that is NOT the current active. Should return `false`.
-8. **Pause / resume cycle:** `pauseTask` → confirm status `paused`. `commitAction` on paused task → returns `false`. `resumeTask` → confirm status `active`. `commitAction` → succeeds.
-9. **Abandon preserves data:** `abandonTask` → status `abandoned`. Actor flags still have the task entry. Hidden GM client-store data unchanged.
-10. **deleteCombat pause:** Start combat, create a task, end combat. Re-read actor flags — task should be `status: 'paused'`, `pausedReason: 'combat-ended'`. GM notification should appear.
-11. **Non-GM sanitization:** Log in as a player who owns a combatant. Run `game.baphometTasks.getTask(...)`. Confirm returned object has no `roundsRequired` or `metadataHidden`.
-12. **resolveTask stub:** Run `game.baphometTasks.resolveTask(...)`. Should return `false` and log a stub message. No rolls fired.
-13. **Disable Device warning unchanged:** Roll Disable Device in combat (action-tracker.js behavior). Confirm the existing warning notification still fires. Confirm task-tracker does NOT create any task automatically.
-14. **Action tracker pip behavior unchanged:** Manual pip clicks, turn reset, condition locks, skill auto-spend, action panel — all should behave identically to v2.15.1.
-15. **debug logging:** Enable `debugLogging` in Module Settings. Run createTask and commitAction. Confirm `[task]`-prefixed log lines appear in F12 for each gate and write.
