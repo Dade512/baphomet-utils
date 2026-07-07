@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.30.0
+**Current Version:** 2.31.0
 
 ---
 
@@ -135,6 +135,14 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.31.0 — Vital Strike + Charge — declare-intent macros (dice/modifier automation) riding the MAP swing counter
+
+Closes the "damage/modifiers are manual" gap left by v2.28.0's cost-aware Vital Strike / Charge declare-macros. With the actor's intent flag set (`globalThis.baphometVitalStrike` / `baphometCharge`), the module now automates the remaining per-swing effects: **Vital Strike** doubles the weapon's base damage dice (a new `pf1PreDamageRoll` handler in `action-tracker.js` pushes a duplicate of each matched weapon-die part onto the transient per-roll damage array — Strength, the PF1.5 ½-level flat bonus, and precision/sneak-attack damage are correctly excluded because they are separate flat-additive parts, not weapon dice); **Charge** adds **+2 to the attack roll** (additively via `rollConfig.secondaryPenalty` on `pf1PreAttackRoll`) and, only on a confirmed swing, applies a **−2 AC** PF1 buff Item that auto-deactivates at the start of the charging actor's next turn (a real pf1 buff-duration expiry, not a render-based removal). A cancelled `use()` (return value `undefined`) never strands the −2 AC buff. MAP continues to advance automatically per v2.30.0 (unchanged). Built on a live runtime probe (`docs/ai-council/RUNTIME_PROBE_RESULTS_v2.31.0.md`) that confirmed the `pf1PreDamageRoll` signature/mutability, the buff mechanism/timing, and the `use()` cancel signal; the Charge +2 to-hit injection field was **runtime-confirmed live** (2026-07-07, module 2.31.0 loaded): it uses `rollConfig.secondaryPenalty` (additive — the same field MAP/TWF use; `rollConfig.parts` has no effect on the attack roll) and renders as "Secondary Attack" on the card. **Runtime-verified on both seats (2026-07-07, GM + player).** Vital Strike's precision exclusion is guaranteed by architecture: this campaign's sneak attack is a standalone feat-action (`Sneak Attack (UC)`), rolled separately from the weapon, so it is never in the weapon's damage roll the doubler operates on.
+
+### v2.30.1 — Deployment close-out for v2.30.0 — TWF macro re-sync, runtime-gate status, release-body bug note
+
+Close-out patch for v2.30.0. TWF macro (`docs/homebrew/macros/twf-tier-aware.js`) re-synced with SYNC_STAMP 2026-07-07; the in-world Foundry copy must be kept byte-identical. GM-seat runtime verification for v2.30.0 passed 2026-07-02; player-seat verification is a pending manual step. No mechanics change; no new code.
 
 ### v2.30.0 — MAP / swing tracking (silent attack-roll penalty) + TWF off-hand budget fix
 
