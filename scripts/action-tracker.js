@@ -2195,7 +2195,7 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
 });
 
 // PF1.5 Charge +2 to-hit (GOAL_v2.31.0). Dormant unless the Charge declare macro has set
-// globalThis.baphometCharge = { actorId } (docs/homebrew/macros/charge.js). Gated to the
+// globalThis.baphometCharge = { actorId } (macros/charge.js). Gated to the
 // declaring actor only (mirrors the VS/MAP actor-scope pattern in _deriveActionUseCost).
 // Injection field RUNTIME-CONFIRMED live 2026-07-07 (tab focused, module 2.31.0 loaded):
 // pf1PreAttackRoll's rollConfig exposes only { proficient, secondaryPenalty } — there is NO
@@ -2215,22 +2215,36 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
 });
 
 /* ============================================================
-   VITAL STRIKE — DAMAGE DICE DOUBLING — v2.31.0
+   VITAL STRIKE — DAMAGE DICE DOUBLING — v2.31.0, corrected pre-v2.32.0
+   (GOAL_v2.32.0_VS_DOUBLER_FIX.md)
    ══════════════════════════════════════════════════════════
    Runtime-confirmed (docs/ai-council/RUNTIME_PROBE_RESULTS_v2.31.0.md, Seam 3/4):
    pf1PreDamageRoll fires (action: ItemAction, rollData: Object, parts: Array,
    extraParts: Array). arg2 ("parts") is the TRANSIENT per-roll damage-parts array —
    pushing to it changes the resolved damage but is never persisted (no item.update()).
-   arg0 ("action") is the LIVE persisted ItemAction; read-only here (arg0.damage.parts[i]
-   .formula gives the weapon's own base-die formulas to match against).
-   VS = push (multiplier-1) duplicate(s) of the weapon base-die part(s) found in arg2,
-   identified by matching each arg2 entry's `base` against arg0's damage.parts formulas.
-   The duplicate carries ONLY the weapon die (base/damageType/type) — Strength and the
-   PF1.5 half-level flat bonus are separate flat-additive parts on the primary entry and
-   are correctly NOT duplicated (probe-confirmed: the doubled test run showed no
-   [Strength] on the pushed duplicate). Precision (sneak attack) is likewise excluded by
-   this base-formula-match filter, since it is added as its own part, not a weapon-die
-   part (per Michael's 2026-07-07 ruling on the half-level bonus, same mechanism).
+   arg0 ("action") is the LIVE persisted ItemAction; read-only here.
+
+   CORRECTED PREDICATE (docs/ai-council/VS_DOUBLER_FIX_IDENTIFICATION_PROBE_RESULTS.md):
+   the v2.31.0 predicate matched any transient part whose `base` was a member of the SET
+   of ALL action.damage.parts[].formula strings. Live probe evidence proved this over-
+   doubles: elemental riders and flat per-action modifiers stored as additional
+   damage.parts entries were also doubled (wrong). The load-bearing identification probe
+   (config 4: two damage.parts entries sharing an IDENTICAL formula string) further
+   proved NO reliable signal — not provenance, not object identity, not insertion index —
+   distinguishes the primary base weapon die from any other damage.parts entry at
+   pf1PreDamageRoll time, and PF1 does NOT guarantee the base die is stored first
+   (authored-order test: an elemental rider authored at index 0 stayed at index 0).
+   Per the ratified VS_AMBIGUOUS_PRIMARY_POLICY = FAIL_OPEN_NO_MULTIPLICATION, the fix
+   only auto-doubles when the weapon action has EXACTLY ONE damage.parts entry (the
+   unambiguous case — the only configuration v2.31.0 live verification actually
+   exercised). Any action with zero or more-than-one damage.parts entries is left
+   untouched — no guess, no silent multiplication — and a debug-gated diagnostic is
+   emitted so the player knows to apply Vital Strike's doubling manually.
+   The duplicate (single-part case) carries ONLY the weapon die (base/damageType/type) —
+   Strength and the PF1.5 half-level flat bonus are separate flat-additive parts on the
+   primary entry and are correctly NOT duplicated (probe-confirmed: the doubled test run
+   showed no [Strength] on the pushed duplicate). Precision (sneak attack) is likewise
+   excluded, since it is not a damage.parts entry on the weapon action.
    Gated on globalThis.baphometVitalStrike = { actorId } (vital-strike.js), scoped to the
    declaring actor only. VS multiplier is 2 (Greater VS would be 3 — out of scope).
    ============================================================ */
@@ -2240,18 +2254,30 @@ Hooks.on('pf1PreDamageRoll', (action, rollData, parts, extraParts) => {
     if (!vs?.actorId) return;
     const actor = action?.actor ?? action?.item?.actor ?? action?.parent?.actor;
     if (!actor || actor.id !== vs.actorId) return;
+
+    const actionParts = Array.isArray(action?.damage?.parts) ? action.damage.parts : [];
+
+    // Ambiguity gate MUST run before the transient-parts emptiness check below: a
+    // zero-part (or multi-part) action.damage.parts shape is itself the ambiguous/
+    // degenerate case this policy exists for, and must emit the diagnostic regardless
+    // of whether the transient `parts` array happens to be empty.
+    if (actionParts.length !== 1 || typeof actionParts[0]?.formula !== "string" || actionParts[0].formula.length === 0) {
+      // VS_AMBIGUOUS_PRIMARY_POLICY = FAIL_OPEN_NO_MULTIPLICATION (GOAL_v2.32.0_VS_DOUBLER_FIX.md):
+      // no reliable signal identifies the primary base weapon die on a multi-part (or
+      // zero-part) damage action — do not guess, do not multiply anything.
+      _debugLog(`Vital Strike: weapon action has ${actionParts.length} damage part(s); primary base die is ambiguous for multi-part damage — no auto-doubling (VS_AMBIGUOUS_PRIMARY_POLICY = FAIL_OPEN_NO_MULTIPLICATION). Apply Vital Strike doubling manually.`);
+      return;
+    }
+
+    // Single unambiguous base part identified; nothing to double if the transient
+    // per-roll parts array has no entries (not an ambiguity case, just a no-op).
     if (!Array.isArray(parts) || parts.length === 0) return;
 
-    const weaponFormulas = new Set(
-      (action?.damage?.parts ?? [])
-        .map((p) => p?.formula)
-        .filter((f) => typeof f === "string" && f.length > 0)
-    );
-    if (weaponFormulas.size === 0) return;
+    const baseFormula = actionParts[0].formula;
 
     const VS_MULTIPLIER = 2; // Vital Strike; Greater VS (x3) is out of scope
     const extraCopies = VS_MULTIPLIER - 1;
-    const toDuplicate = parts.filter((p) => weaponFormulas.has(p?.base));
+    const toDuplicate = parts.filter((p) => p?.base === baseFormula);
     if (toDuplicate.length === 0) return;
 
     for (const p of toDuplicate) {

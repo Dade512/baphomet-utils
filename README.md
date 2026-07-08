@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.31.0
+**Current Version:** 2.32.0
 
 ---
 
@@ -13,6 +13,42 @@ Manifest URL:
 ```
 https://github.com/Dade512/baphomet-utils/releases/latest/download/module.json
 ```
+
+### Macros — manual deployment (fresh install)
+
+The PF1.5 combat-automation macros (Vital Strike, Charge, Cleave, Two-Weapon Fighting,
+Haste bonus-action) are **declare-intent macros**: a Foundry world macro sets an intent
+flag that the module's shipped `scripts/action-tracker.js` reads to apply the correct
+action cost / dice-doubling / attack-roll modifiers. Starting with **v2.32.0**, the
+canonical source for these macros ships inside the release ZIP under `/macros`, so a
+fresh install has the source available — but Foundry does not auto-create world Macro
+documents from a module's files. You must place each one manually:
+
+1. In Foundry, open the **Macro Directory** and click **Create Macro**.
+2. Set **Type: Script**.
+3. Name it per the table below.
+4. Open the shipped file from your installed module folder (or the release ZIP) under
+   `macros/<file>.js`, copy its **complete** contents, and paste into the macro's command box.
+5. Save, and set the macro's **Owner/Observer** permissions so the players who need it can execute it.
+
+| Repo file (`/macros/`) | Suggested in-world macro name |
+| --- | --- |
+| `vital-strike.js` | Vital Strike |
+| `charge.js` | Charge |
+| `cleave.js` | Cleave |
+| `twf-tier-aware.js` | Two-Weapon Fighting |
+| `haste-bonus-action.js` | Haste: Bonus Action |
+
+**Two-Weapon Fighting is per-character**: `twf-tier-aware.js` hardcodes an actor name and two
+weapon item IDs near the top of the file. Copy the file's contents per dual-wielding character,
+edit those three values to match that character's actor/weapon IDs, and create one in-world
+macro per dual-wielder.
+
+`/macros/*.js` in this repository is the **one canonical source** for these macros. This
+milestone packages that source into the release ZIP so it is *available* on a fresh install —
+it does **not** add any automatic world↔repo sync. A world Macro you paste in today can still
+drift from a later repo update; re-paste it manually after checking `macros/README.md`'s
+version-history / SYNC_STAMP notes if you suspect drift.
 
 ---
 
@@ -135,6 +171,30 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.32.0 — Macro Canonicalization — make the declare-intent macros first-class, version-tracked, release-packaged runtime assets
+
+Infrastructure milestone — no combat-feature or macro-logic change. The five declare-intent
+macros (`vital-strike.js`, `charge.js`, `cleave.js`, `twf-tier-aware.js`, `haste-bonus-action.js`)
+previously lived only under the gitignored `docs/homebrew/macros/`, so they were **absent from
+the git repo and the release ZIP** — a fresh install had the shipped hooks waiting for an intent
+flag that nothing in the package could ever set. This milestone relocates the canonical source
+to tracked, non-ignored top-level `/macros`, updates each file's header (`CANONICAL SOURCE OF
+TRUTH` path + `SYNC_STAMP`, metadata only — no executable changes), packages `/macros` into the
+release ZIP (`.github/workflows/release.yml`), and adds a "Macros — manual deployment" section
+above documenting fresh-install placement. `/macros/*.js` is now the one canonical repo source;
+this does not, by itself, add any world↔repo auto-sync mechanism. `docs/homebrew/macros/
+author_twf_feats.js` and its README remain in place (a one-time authoring helper, out of scope
+for relocation). A dormant code comment in `scripts/action-tracker.js` referencing the old path
+was updated to match; no executable line changed.
+
+**Vital Strike doubler correctness fix (folded into this release, `GOAL_v2.32.0_VS_DOUBLER_FIX.md`):**
+live testing found the v2.31.0 doubler could over-double multi-part weapons (elemental riders,
+flat per-action modifiers) because it matched against any `damage.parts` formula. Auto-doubling now
+fires only for weapons with a single `damage.parts` entry (the unambiguous base die); multi-part
+weapons fail open — nothing is auto-doubled, a debug-gated diagnostic fires, and the player applies
+Vital Strike's doubling manually. **Runtime-verified on both seats (2026-07-08, GM + player)** —
+evidence in `docs/ai-council/VS_DOUBLER_FIX_BOTHSEATS_VERIFICATION.md`.
 
 ### v2.31.0 — Vital Strike + Charge — declare-intent macros (dice/modifier automation) riding the MAP swing counter
 

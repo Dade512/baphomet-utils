@@ -19,11 +19,13 @@ jobs:
 
       - name: Build module zip
         run: |
-          mkdir -p build/baphomet-utils/scripts build/baphomet-utils/styles build/baphomet-utils/data
+          mkdir -p build/baphomet-utils/scripts build/baphomet-utils/styles build/baphomet-utils/data build/baphomet-utils/macros
           cp module.json build/baphomet-utils/
           cp scripts/*.js build/baphomet-utils/scripts/
           cp styles/*.css build/baphomet-utils/styles/
           cp data/*.js build/baphomet-utils/data/
+          cp macros/*.js build/baphomet-utils/macros/
+          [ -f macros/README.md ] && cp macros/README.md build/baphomet-utils/macros/
           [ -f README.md ] && cp README.md build/baphomet-utils/
           cd build && zip -r ../baphomet-utils.zip baphomet-utils/
 
