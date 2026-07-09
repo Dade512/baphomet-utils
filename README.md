@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.32.0
+**Current Version:** 2.33.0
 
 ---
 
@@ -171,6 +171,25 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.33.0 — Proof Before Ink
+
+Defense-in-depth hardening of the v2.32.0 Vital Strike `pf1PreDamageRoll` doubler
+(`GOAL_v2.33.0_VS_STRUCTURAL_HARDENING.md`) — **not** a newly discovered shipping damage bug.
+The v2.32.0 fix already guarantees the *persisted* `action.damage.parts` array is exactly one
+unambiguous entry before auto-doubling proceeds; this pass closes two structural seams in the
+separate *transient* per-roll doubling path so the same unambiguous-shape guarantee holds there
+too. Auto-doubling now additionally requires **exactly one** transient damage-part candidate
+matching the persisted base formula — zero or more than one is treated as ambiguous and fails
+open, symmetric with the existing persisted-parts gate. The pushed Vital Strike duplicate no
+longer copies the transient part's `extra` array (`extra: []`); this closes the copy seam
+structurally rather than relying solely on the bounded probe evidence that `extra` was always
+empty for the tested shapes. Every automation-decline path (persisted ambiguous, transient
+empty, transient candidate count zero or multiple) now emits a debug-gated manual-adjudication
+diagnostic. **No behavior change is expected** for the currently verified PF1 11.11 weapon
+shapes (plain single-part weapon; enhancement-only single-part weapon) — these guarantees only
+change outcomes for weapon/feat/ammo/condition shapes not yet observed in this campaign. This
+milestone does not expand what Vital Strike automates.
 
 ### v2.32.0 — Macro Canonicalization — make the declare-intent macros first-class, version-tracked, release-packaged runtime assets
 

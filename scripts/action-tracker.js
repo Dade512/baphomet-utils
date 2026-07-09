@@ -2215,8 +2215,8 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
 });
 
 /* ============================================================
-   VITAL STRIKE — DAMAGE DICE DOUBLING — v2.31.0, corrected pre-v2.32.0
-   (GOAL_v2.32.0_VS_DOUBLER_FIX.md)
+   VITAL STRIKE — DAMAGE DICE DOUBLING — v2.33.0 structural hardening
+   (GOAL_v2.33.0_VS_STRUCTURAL_HARDENING.md; prior fix: GOAL_v2.32.0_VS_DOUBLER_FIX.md)
    ══════════════════════════════════════════════════════════
    Runtime-confirmed (docs/ai-council/RUNTIME_PROBE_RESULTS_v2.31.0.md, Seam 3/4):
    pf1PreDamageRoll fires (action: ItemAction, rollData: Object, parts: Array,
@@ -2240,11 +2240,33 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
    exercised). Any action with zero or more-than-one damage.parts entries is left
    untouched — no guess, no silent multiplication — and a debug-gated diagnostic is
    emitted so the player knows to apply Vital Strike's doubling manually.
-   The duplicate (single-part case) carries ONLY the weapon die (base/damageType/type) —
-   Strength and the PF1.5 half-level flat bonus are separate flat-additive parts on the
-   primary entry and are correctly NOT duplicated (probe-confirmed: the doubled test run
-   showed no [Strength] on the pushed duplicate). Precision (sneak attack) is likewise
-   excluded, since it is not a damage.parts entry on the weapon action.
+
+   v2.33.0 STRUCTURAL HARDENING adds two seams on top of the above (defense-in-depth;
+   no behavior change expected for the currently verified PF1 11.11 weapon shapes):
+
+   - VS_TRANSIENT_MULTIPLICITY_POLICY = EXACTLY_ONE_OR_FAIL_OPEN: the persisted-parts gate
+     above only guarantees the PERSISTED action.damage.parts array is unambiguous. The
+     actual duplication reads the separate TRANSIENT `parts` array. A future weapon/feat/
+     ammo/condition path could in principle inject more than one transient candidate
+     sharing the persisted base formula. The transient candidate count (`toDuplicate`) is
+     now itself gated to EXACTLY ONE before doubling proceeds — symmetric with the
+     persisted-parts gate above. Zero or more-than-one transient matches fails open, doubles
+     nothing, and emits the manual-adjudication diagnostic. No provenance heuristic is
+     added; the module does not guess which of multiple candidates is the true base die.
+
+   - VS_DUPLICATE_EXTRA_POLICY = EMPTY_ARRAY: the pushed Vital Strike duplicate no longer
+     copies the transient part's `extra` array. v2.32.0 Probe B confirmed `extra: []` for
+     every tested PF1 11.11 shape, but that evidence is bounded — it does not prove no
+     future weapon/feat/condition combination could carry modifier or metadata content in
+     transient `p.extra`. Setting `extra: []` structurally closes that copy seam rather than
+     relying on the bounded empirical guarantee. `base`, `damageType` (Set-cloned), and
+     `type` are still carried from the single matched transient candidate.
+
+   VS_FAIL_OPEN_DIAGNOSTIC_POLICY = EVERY_AUTOMATION_DECLINE_PATH_LOGS_REASON: every path
+   below that declines automatic doubling (persisted ambiguous, transient parts empty/
+   unavailable, transient candidate count !== 1) emits a debug-gated diagnostic naming the
+   reason and the manual-adjudication outcome. No player-facing UI/notification is added.
+
    Gated on globalThis.baphometVitalStrike = { actorId } (vital-strike.js), scoped to the
    declaring actor only. VS multiplier is 2 (Greater VS would be 3 — out of scope).
    ============================================================ */
@@ -2269,26 +2291,34 @@ Hooks.on('pf1PreDamageRoll', (action, rollData, parts, extraParts) => {
       return;
     }
 
-    // Single unambiguous base part identified; nothing to double if the transient
-    // per-roll parts array has no entries (not an ambiguity case, just a no-op).
-    if (!Array.isArray(parts) || parts.length === 0) return;
-
     const baseFormula = actionParts[0].formula;
 
-    const VS_MULTIPLIER = 2; // Vital Strike; Greater VS (x3) is out of scope
-    const extraCopies = VS_MULTIPLIER - 1;
-    const toDuplicate = parts.filter((p) => p?.base === baseFormula);
-    if (toDuplicate.length === 0) return;
+    // Item 3 (VS_FAIL_OPEN_DIAGNOSTIC_POLICY): transient parts empty/unavailable → fail open + diagnostic (was a silent return).
+    if (!Array.isArray(parts) || parts.length === 0) {
+      _debugLog(`Vital Strike: transient damage-parts array is empty/unavailable — no auto-doubling (fail open). Apply Vital Strike doubling manually.`);
+      return;
+    }
 
-    for (const p of toDuplicate) {
-      for (let i = 0; i < extraCopies; i++) {
-        parts.push({
-          base: p.base,
-          extra: Array.isArray(p.extra) ? p.extra.slice() : p.extra,
-          damageType: (p.damageType instanceof Set) ? new Set(p.damageType) : p.damageType,
-          type: p.type
-        });
-      }
+    const toDuplicate = parts.filter((p) => p?.base === baseFormula);
+
+    // Item 1 (VS_TRANSIENT_MULTIPLICITY_POLICY = EXACTLY_ONE_OR_FAIL_OPEN): require exactly one transient
+    // candidate matching the sole persisted base formula. Zero OR more-than-one is ambiguous — fail open,
+    // double nothing, emit the diagnostic. Symmetric with the persisted-parts gate. Do NOT add a provenance
+    // heuristic; do NOT guess which of multiple candidates is the true base die.
+    if (toDuplicate.length !== 1) {
+      _debugLog(`Vital Strike: ${toDuplicate.length} transient damage part(s) match the base weapon formula (expected exactly 1) — base die ambiguous, no auto-doubling (VS_TRANSIENT_MULTIPLICITY_POLICY = EXACTLY_ONE_OR_FAIL_OPEN). Apply Vital Strike doubling manually.`);
+      return;
+    }
+
+    const VS_MULTIPLIER = 2; // Vital Strike; Greater VS (x3) is out of scope
+    const p = toDuplicate[0];
+    for (let i = 0; i < VS_MULTIPLIER - 1; i++) {
+      parts.push({
+        base: p.base,
+        extra: [], // Item 2 (VS_DUPLICATE_EXTRA_POLICY = EMPTY_ARRAY): never copy transient `extra` onto the VS duplicate.
+        damageType: (p.damageType instanceof Set) ? new Set(p.damageType) : p.damageType,
+        type: p.type
+      });
     }
   } catch (e) {
     _debugLog('Vital Strike pf1PreDamageRoll error: ' + e.message);
