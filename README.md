@@ -172,6 +172,38 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 
 ## Changelog
 
+### v2.34.0 — The Single Tally
+
+Condition action-loss math repair (`GOAL_v2.34.0_CONDITION_CANON.md`) — the highest play-impact item
+in the module portfolio. The prior model summed Stunned and Slowed action-loss instead of taking
+the higher single value (canon is max-not-sum), hardcoded the Staggered/Nauseated floor at 2 actions
+instead of the correct Nauseated value of 1, tracked Staggered as a live condition when canon
+folds it into Slowed 1 with no separate condition maintained, and had no real Stunned countdown —
+the applied tier was read statically each turn rather than decrementing and carrying a remainder
+forward. All four are fixed: `_readConditionActionLoss` now takes a single `Math.max()` across
+Slowed, this-turn Stunned, and Nauseated; Staggered no longer exists as a creatable condition;
+Stunned now carries a genuine per-turn countdown that pays down correctly across multiple turns.
+A co-GM race (two simultaneous GM-role clients each independently decrementing the same turn
+transition) is also closed, gated on the already-correct `activeGM` pattern used elsewhere in this
+repo.
+
+**Two earlier fix attempts for the Stunned-countdown timing were built, audited, and disproven live
+before this one held.** Both tried to derive "which combatant just finished their turn" reactively,
+by reading Foundry live combat state at the exact moment the turn-change hook fires — first
+`combat.current.turn`/an `updateData.turn` fallback, then `combat.combatant` itself. Both looked
+correct under static review and both failed a live two-seat probe, for the same underlying reason:
+Foundry combat-state propagation is not guaranteed settled by the time that hook fires. The shipped
+design abandons reactive derivation entirely — it stamps the active combatant into a flag at an
+already-safe point (the existing turn-start render detection) and simply reads that stamp back at
+the next transition, rather than re-deriving anything from live combat state at hook-fire time.
+
+**Runtime-verified two-seat, 2026-07-15**, against all nine required cases (the original eight plus
+a direct Stunned-buff-Item-deletion cleanup case added after a probe caught orphaned countdown
+flags surviving deletion outside the normal remove path) — evidence in
+`docs/ai-council/CONDITION_CANON_LIVE_VERIFICATION_v2.34.0.md`. Nauseated action/cast/concentration
+hard-enforcement remains explicitly out of scope for this release; tracked separately in the
+module portfolio backlog.
+
 ### v2.33.0 — Proof Before Ink
 
 Defense-in-depth hardening of the v2.32.0 Vital Strike `pf1PreDamageRoll` doubler

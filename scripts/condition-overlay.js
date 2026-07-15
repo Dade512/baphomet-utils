@@ -1,6 +1,41 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.7
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.8
    Applies PF2e-style conditions as PF1e system Buffs.
+
+   v2.8 Changes (GOAL_v2.34.0_CONDITION_CANON — "The Single Tally"):
+   - [MECH-3] Removed the `staggered` CONDITIONS entry entirely. Canon
+     (SS5 "Folded / Retired Conditions") forbids a live tracked Staggered
+     condition — PF1 Staggered folds into Slowed 1 at the point of
+     application. No automated conversion path existed (GM-selected UI
+     toggle only), so this is a clean removal, not a redirect.
+   - [Stunned countdown] Added a genuine, persisted Stunned countdown
+     lifecycle, distinct from the Stunned buff's own `tier` flag (see the
+     "STUNNED COUNTDOWN LIFECYCLE" comment block near
+     `_decrementStunnedCountdown` below for the full flag shape and
+     decrement mechanics, and action-tracker.js's `_readConditionActionLoss`
+     for the read side). Handles the round-4 mid-turn-application-skip
+     case (SS5:224 "starting NEXT turn") via a proactive breadcrumb read
+     rather than re-deriving the departing combatant reactively.
+   - [Prior-combatant identification — architecture change] `_getPriorCombatantId`
+     (which read `combat.current.turn`/`updateData.turn`, then in a disproven
+     fix attempt `combat.combatant`) is REMOVED. Both were reactive reads at
+     `combatTurn`/`combatRound`/`pf1PostTurnChange` hook-fire time and both
+     were disproven by live two-seat re-verification — Foundry combat-state
+     propagation is not guaranteed settled at that exact moment in this
+     environment. Replaced with `_getBreadcrumbCombatant`, which reads
+     `globalThis.baphometActiveCombatant` — a value STAMPED proactively by
+     action-tracker.js's render-based turn-start detection (a point already
+     proven safe; see that file's header comment on
+     `_stampActiveCombatantBreadcrumb`), not re-derived at hook-fire time.
+     Fail-safe: returns null (no decrement performed) if the breadcrumb is
+     missing or belongs to a different combat, rather than guessing.
+   - [TRUST-4] `_handleAutoDecrement`'s gate changed from bare
+     `game.user.isGM` (true for every connected GM-role client
+     simultaneously) to `_isActiveGMClient()` — mirrors
+     `task-tracker.js`'s `_baphTaskIsActiveGMClient()` pattern
+     (`game.user?.isGM && game.user === game.users?.activeGM`). Prevents
+     two connected GM-role clients from each independently decrementing
+     the same turn transition.
 
    v2.7 Changes:
    - [BUG FIX] Turn/round hooks (combatTurn, combatRound) could
@@ -52,7 +87,9 @@
                   Enfeebled, Drained, Stunned, Slowed, Fascinated
    TOGGLE (on/off): Fatigued, Off-Guard, Persistent Damage,
                     Blinded, Deafened, Nauseated, Confused,
-                    Paralyzed, Staggered
+                    Paralyzed
+   (Staggered is NOT a live tracked condition — SS5 folds it into Slowed 1
+   at the point of application; see v2.8 Changes above, MECH-3.)
 
    For Foundry VTT v13 + PF1e System
    Source: Homebrew_Master_File.md § Simplified Conditions
@@ -209,6 +246,11 @@ const CONDITIONS = {
     maxTier: 4,
     type: 'tiered',
     description: 'You lose X actions on your next turn. If Stunned exceeds 3, excess carries over to subsequent turns.',
+    // v2.34.0: `autoDecrement: true` still marks this as an auto-decrementing condition for
+    // the token HUD's "↓" indicator, but `_handleAutoDecrement` skips 'stunned' in its
+    // generic per-tier -1 loop — the real decrement is the bespoke, multi-action
+    // `_decrementStunnedCountdown` (see that function's comment block below), driven by the
+    // separate `stunnedCountdown` actor flag, not this buff's own `tier`.
     autoDecrement: true,
     buildChanges(_tier) {
       return [];
@@ -355,18 +397,6 @@ const CONDITIONS = {
       ];
     }
   },
-
-  staggered: {
-    name: 'Staggered',
-    icon: 'icons/svg/stoned.svg',
-    maxTier: 1,
-    type: 'toggle',
-    description: 'Can only take a single move action or standard action each turn (not both). Cannot take full-round actions. Cannot run or charge.',
-    autoDecrement: false,
-    buildChanges() {
-      return [];
-    }
-  },
 };
 
 /* ----------------------------------------------------------
@@ -440,11 +470,39 @@ async function applyCondition(actor, condKey, tier) {
     await created.setActive(true);
   }
 
+  // v2.34.0: Stunned countdown lifecycle — this is an EXTERNAL (re)application (GM UI tier
+  // button, macro API `game.baphometConditions.apply`, or `adjustCondition`'s tier-up path —
+  // never the internal decrement, which writes stunnedCountdown/removes the buff directly and
+  // never calls back into applyCondition; see `_decrementStunnedCountdown`'s comment block).
+  // (Re)initializes the countdown to the freshly-applied tier and stamps when this happened,
+  // via a live (safe, non-hook-fire-time) read of game.combat. The stamp is compared against
+  // the proactive breadcrumb at decrement time to implement the round-4 mid-turn-application
+  // skip (SS5:224). stunnedCountdown is genuinely distinct from this buff's own `tier` flag
+  // above, which stays at the originally-applied value (display/history only).
+  if (condKey === 'stunned') {
+    await actor.setFlag(MODULE_ID, 'stunnedCountdown', tier);
+    await actor.setFlag(MODULE_ID, 'stunnedAppliedAt', {
+      combatId: game.combat?.id ?? null,
+      round:    game.combat?.round ?? null,
+      turn:     game.combat?.turn ?? null,
+    });
+  }
+
   _postConditionChat(actor, cond, tier, 'apply');
 }
 
 async function removeCondition(actor, condKey) {
   const existing = _findExistingBuff(actor, condKey);
+
+  // v2.34.0: clear the Stunned countdown lifecycle flags regardless of whether a buff was
+  // found — defensive: no removal path (GM "X" button, adjustCondition reaching tier 0, or
+  // _decrementStunnedCountdown's own zero-remainder cleanup) should leave a stale countdown
+  // or stamp behind.
+  if (condKey === 'stunned') {
+    await actor.unsetFlag(MODULE_ID, 'stunnedCountdown');
+    await actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
+  }
+
   if (!existing) return;
 
   const cond = CONDITIONS[condKey];
@@ -639,7 +697,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.7`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.8`);
 });
 
 Hooks.once('ready', () => {
@@ -666,7 +724,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.7 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.8 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
@@ -747,15 +805,157 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
 });
 
 /* ----------------------------------------------------------
-   AUTO-DECREMENT — v2.5 REWRITE
+   TRUST-4 — ACTIVE-GM GATE — v2.34.0
+
+   Mirrors task-tracker.js's `_baphTaskIsActiveGMClient()` pattern
+   (`game.user?.isGM && game.user === game.users?.activeGM`). Bare
+   `game.user.isGM` passes for EVERY connected GM-role client
+   simultaneously; with two GM-role clients connected, each independently
+   running `_handleAutoDecrement` would double-decrement (or race) the
+   same turn transition. Only the elected active GM client proceeds.
+   task-tracker.js is not in this goal's allowlist, so this is a local
+   equivalent rather than an import.
+   ---------------------------------------------------------- */
+
+function _isActiveGMClient() {
+  return !!(game.user?.isGM && game.user === game.users?.activeGM);
+}
+
+/* ----------------------------------------------------------
+   PROACTIVE BREADCRUMB READ — v2.34.0
+
+   Two prior fix attempts derived "who is the prior (departing) combatant"
+   REACTIVELY at combatTurn/combatRound/pf1PostTurnChange hook-fire time —
+   first from `combat.current.turn`/`updateData.turn`, then from
+   `combat.combatant` — and both were disproven by live two-seat
+   re-verification in a 2-combatant alternating encounter: Foundry
+   combat-state propagation is not guaranteed settled at the exact moment
+   these hooks fire in this environment.
+
+   Replaced with a read of `globalThis.baphometActiveCombatant`, a value
+   STAMPED proactively by action-tracker.js's render-based turn-start
+   detection (`_stampActiveCombatantBreadcrumb`, called from
+   `_maybeResetForNewTurn` — see that file's header comment for the full
+   rationale). That stamp point is already proven safe (it's the same
+   `.active`-CSS-class / renderCombatTracker signal the v1.6 rewrite in
+   that file trusts), and — critically — it fires only when the NEW
+   combatant's turn starts, which happens AFTER these turn-transition
+   hooks fire for the OLD (departing) combatant. So at the moment any of
+   the three hooks below fire, the breadcrumb still holds the departing
+   combatant, not the arriving one.
+
+   Fail-safe (EXACTLY_ONE_OR_FAIL_OPEN precedent, this repo): returns null
+   — no decrement performed — if the breadcrumb is missing or belongs to
+   a different combat, rather than guessing.
+   ---------------------------------------------------------- */
+
+function _getBreadcrumbCombatant(combat) {
+  const breadcrumb = globalThis.baphometActiveCombatant;
+  if (!breadcrumb || !combat || breadcrumb.combatId !== combat.id) return null;
+  return breadcrumb;
+}
+
+/* ----------------------------------------------------------
+   STUNNED COUNTDOWN LIFECYCLE — v2.34.0
+
+   Stunned is NOT a static per-turn tier like Slowed (SS5:224, SS5:268 —
+   "lose X actions starting NEXT turn; if X exceeds 3, the remainder
+   carries to subsequent turns"). Two ACTOR flags (MODULE_ID namespace)
+   track it, deliberately separate from the Stunned buff's own `tier`
+   flag (set in `applyCondition` above, which stays at the
+   originally-applied value — display/history only, never read for
+   action-loss math):
+
+     stunnedCountdown  (number) — the actual remaining action-debt. Read
+                                  directly and unconditionally by
+                                  action-tracker.js's
+                                  `_readConditionActionLoss` — no gate on
+                                  whether the Stunned buff still exists,
+                                  which sidesteps the exact race that
+                                  broke an earlier design (the buff being
+                                  deleted the same transition its tier
+                                  was last needed).
+     stunnedAppliedAt  ({combatId, round, turn} | null) — the combat
+                                  identity/round/turn at which the
+                                  countdown was last EXTERNALLY
+                                  (re)initialized (GM UI apply/tier-adjust,
+                                  macro API call — see `applyCondition`
+                                  above). Captured via a live read of
+                                  `game.combat` at the moment of
+                                  application (a GM UI click, or a macro
+                                  call) — safe because that read isn't
+                                  tied to the volatile turn-transition
+                                  update itself, unlike the disproven
+                                  hook-fire-time reads described above.
+
+   `_decrementStunnedCountdown` (called once per turn-transition for the
+   DEPARTING combatant, from `_handleAutoDecrement`) pays down
+   min(countdown, 3) — never more than one turn's 3-action pool — and
+   removes the buff + both flags when the remainder reaches 0.
+
+   Round-4 mid-turn-application-skip (SS5:224 "starting NEXT turn"): if
+   Stunned is (re)applied to the CURRENTLY-ACTIVE combatant mid-turn, the
+   turn-start pip lock in action-tracker.js already ran before the
+   countdown existed, so no actions were actually lost that turn — paying
+   down debt at that same turn's end would charge a loss that was never
+   locked. Guarded by comparing `stunnedAppliedAt` against the PROACTIVE
+   BREADCRUMB (`_getBreadcrumbCombatant`, above): if they name the SAME
+   {combatId, round, turn}, the countdown was (re)initialized during the
+   very turn that is now ending, so the pay-down is skipped for this one
+   transition. Because the breadcrumb's round/turn always reflects
+   whichever turn is currently ending, this self-resolves on the
+   combatant's NEXT turn without any explicit clearing.
+
+   Implementation-trap note (named explicitly in the goal): a naive
+   design decrements by calling back into `applyCondition('stunned',
+   remaining)`, which would re-stamp `stunnedAppliedAt` on every internal
+   resync and skip every subsequent decrement forever. This function does
+   NOT do that — it writes `stunnedCountdown` directly and calls
+   `removeCondition` only at zero, never `applyCondition` — so
+   `stunnedAppliedAt` is only ever written by the external path in
+   `applyCondition`, and this trap does not apply to this implementation.
+   ---------------------------------------------------------- */
+
+async function _decrementStunnedCountdown(actor, breadcrumb) {
+  if (!actor) return;
+
+  const countdown = Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0;
+  if (countdown <= 0) return;
+
+  const appliedAt = actor.getFlag(MODULE_ID, 'stunnedAppliedAt') ?? null;
+  const sameTurn = !!(
+    appliedAt && breadcrumb &&
+    appliedAt.combatId === breadcrumb.combatId &&
+    appliedAt.round === breadcrumb.round &&
+    appliedAt.turn === breadcrumb.turn
+  );
+
+  if (sameTurn) {
+    console.debug(`${MODULE_ID} | Stunned countdown: skip pay-down for ${actor.name} — countdown was (re)applied during the turn that just ended (round-4 mid-turn-skip guard)`);
+    return;
+  }
+
+  const paidDown = Math.min(countdown, 3);
+  const remaining = countdown - paidDown;
+  console.debug(`${MODULE_ID} | Stunned countdown: ${actor.name} ${countdown} -> ${remaining} (paid down ${paidDown})`);
+
+  if (remaining <= 0) {
+    await removeCondition(actor, 'stunned'); // clears the buff + both lifecycle flags
+  } else {
+    await actor.setFlag(MODULE_ID, 'stunnedCountdown', remaining);
+  }
+}
+
+/* ----------------------------------------------------------
+   AUTO-DECREMENT — v2.5 REWRITE, v2.34.0 TRUST-4 + STUNNED COUNTDOWN
    ---------------------------------------------------------- */
 
 const _decrementProcessed = new Set();
 
-async function _handleAutoDecrement(combat, priorCombatantId, source) {
-  if (!game.user.isGM) return;
+async function _handleAutoDecrement(combat, priorCombatantId, source, breadcrumb) {
+  if (!_isActiveGMClient()) return;
   if (!priorCombatantId) {
-    console.debug(`${MODULE_ID} | Auto-decrement (${source}): no prior combatant ID, skipping`);
+    console.debug(`${MODULE_ID} | Auto-decrement (${source}): no prior combatant ID (breadcrumb missing/stale), skipping`);
     return;
   }
 
@@ -783,10 +983,11 @@ async function _handleAutoDecrement(combat, priorCombatantId, source) {
   let decremented = false;
   for (const [key, cond] of Object.entries(CONDITIONS)) {
     if (!cond.autoDecrement) continue;
-    
+    if (key === 'stunned') continue; // v2.34.0: bespoke multi-action countdown, handled below — not a simple -1
+
     const buff = _findExistingBuff(actor, key);
     if (!buff) continue;
-    
+
     const currentTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
     if (currentTier > 0) {
       console.debug(`${MODULE_ID} | Auto-decrement: ${actor.name} ${cond.name} ${currentTier} → ${currentTier - 1}`);
@@ -795,47 +996,79 @@ async function _handleAutoDecrement(combat, priorCombatantId, source) {
     }
   }
 
+  await _decrementStunnedCountdown(actor, breadcrumb);
+
   if (!decremented) {
     console.debug(`${MODULE_ID} | Auto-decrement (${source}): ${actor.name} has no auto-decrement conditions active`);
   }
 }
 
-function _getPriorCombatantId(combat, updateData) {
-  // v2.7: guard against transient undefined combat.turns. Seen with
-  // monks-combat-details triggering initiative re-rolls on new rounds,
-  // which briefly leaves combat.turns undefined while the hook fires.
-  const turns = combat?.turns;
-  if (!Array.isArray(turns) || !turns.length) return null;
-
-  const currentTurn = combat.current?.turn ?? updateData?.turn ?? 0;
-  const safeCurrentTurn = Math.max(0, Math.min(currentTurn, turns.length - 1));
-
-  const prevTurn = safeCurrentTurn === 0 ? turns.length - 1 : safeCurrentTurn - 1;
-  return turns[prevTurn]?.id ?? null;
-}
-
 Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
   console.debug(`${MODULE_ID} | Hook fired: pf1PostTurnChange`, { prior, current });
-  
-  const priorId = prior?.combatantId ?? prior?.id ?? prior?.combatant?.id ?? null;
-  _handleAutoDecrement(combat, priorId, 'pf1PostTurnChange');
+
+  const breadcrumb = _getBreadcrumbCombatant(combat);
+  _handleAutoDecrement(combat, breadcrumb?.combatantId ?? null, 'pf1PostTurnChange', breadcrumb);
 });
 
 Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
   console.debug(`${MODULE_ID} | Hook fired: combatTurn`, { turn: combat.current?.turn, round: combat.current?.round });
-  
-  const priorId = _getPriorCombatantId(combat, updateData);
-  _handleAutoDecrement(combat, priorId, 'combatTurn');
+
+  const breadcrumb = _getBreadcrumbCombatant(combat);
+  _handleAutoDecrement(combat, breadcrumb?.combatantId ?? null, 'combatTurn', breadcrumb);
 });
 
 Hooks.on('combatRound', (combat, updateData, updateOptions) => {
   console.debug(`${MODULE_ID} | Hook fired: combatRound`, { turn: combat.current?.turn, round: combat.current?.round });
 
-  // v2.7: guard against transient undefined combat.turns.
-  const turns = combat?.turns;
-  if (!Array.isArray(turns) || !turns.length) return;
-
-  const lastCombatant = turns[turns.length - 1];
-  const priorId = lastCombatant?.id ?? null;
-  _handleAutoDecrement(combat, priorId, 'combatRound');
+  const breadcrumb = _getBreadcrumbCombatant(combat);
+  _handleAutoDecrement(combat, breadcrumb?.combatantId ?? null, 'combatRound', breadcrumb);
 });
+
+/* ----------------------------------------------------------
+   ORPHANED STUNNED FLAG CLEANUP — v2.34.0 round-2 FIX-1
+
+   The Stunned countdown lifecycle above deliberately decouples
+   stunnedCountdown/stunnedAppliedAt from the Stunned buff Item's own
+   existence — action-tracker.js's `_readConditionActionLoss` reads
+   stunnedCountdown UNCONDITIONALLY, with no gate on whether the buff Item
+   still exists, to avoid re-opening the intra-transition race this design
+   closed (see the STUNNED COUNTDOWN LIFECYCLE comment above). That
+   decoupling means a direct Item deletion — a GM deleting the Stunned
+   buff Item straight from the actor sheet, or any other path that
+   deletes the Item without going through `removeCondition()` — would
+   leave stunnedCountdown/stunnedAppliedAt orphaned on the actor: a
+   "ghost" Stunned action-loss surviving the buff's own removal.
+
+   `removeCondition()` (above) already clears both flags itself before it
+   deletes the Item, so this hook exists to catch every OTHER deletion
+   path. Rather than trying to distinguish those paths, it unsets the
+   same two flags unconditionally whenever a Stunned buff Item (matched
+   by `type === 'buff'` + `conditionKey === 'stunned'`, the existing
+   pattern at `_findExistingBuff`/`applyCondition` above) is deleted, by
+   any route. This is deliberately idempotent: when it fires as a
+   side-effect of removeCondition's OWN delete, the flags are already
+   unset and `unsetFlag` on an already-clear flag is a harmless no-op —
+   so this cannot loop back into the lifecycle (no `applyCondition`,
+   `removeCondition`, or Item-delete call happens from here).
+
+   Gated through `_isActiveGMClient()` (TRUST-4, above) so two connected
+   GM-role clients cannot both fire this cleanup redundantly or race a
+   permission-limited flag write. Mirrors the confirmed in-repo
+   `deleteItem` hook pattern at `action-tracker.js:1634`
+   (`Hooks.on('deleteItem', (item) => _onBuffChangeForHasteBonus(item));`)
+   — the only other `deleteItem` hook anywhere in this tree.
+   ---------------------------------------------------------- */
+
+function _onDeleteItemCleanupOrphanedStunnedFlags(item) {
+  if (!_isActiveGMClient()) return;
+  if (item?.type !== 'buff') return;
+  if (item.getFlag(MODULE_ID, 'conditionKey') !== 'stunned') return;
+
+  const actor = item.actor ?? item.parent;
+  if (!actor) return;
+
+  console.debug(`${MODULE_ID} | deleteItem: clearing any orphaned Stunned countdown flags for ${actor.name}`);
+  actor.unsetFlag(MODULE_ID, 'stunnedCountdown');
+  actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
+}
+Hooks.on('deleteItem', (item) => _onDeleteItemCleanupOrphanedStunnedFlags(item));

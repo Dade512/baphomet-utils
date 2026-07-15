@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.25
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.26
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
@@ -11,8 +11,43 @@
              resource: they reset at the start of a NEW ROUND, NOT on the
              combatant's own turn (PF1.5 ruling). An AoO spent earlier in
              a round stays spent until the next round begins.
-             Reads Stunned/Slowed/Staggered/Paralyzed/Nauseated from
-             baphomet-utils condition buffs to auto-lock pips.
+             Reads Stunned (via the stunnedCountdown actor flag)/Slowed/
+             Paralyzed/Nauseated from baphomet-utils condition buffs/flags
+             to auto-lock pips. Staggered is not a live tracked condition
+             (folds into Slowed 1 — see v1.26 Changes / MECH-3).
+
+   v1.26 Changes (GOAL_v2.34.0_CONDITION_CANON — "The Single Tally"):
+   - [MECH-1/MECH-2/MECH-3] _readConditionActionLoss REWRITTEN to the canon
+     max-not-sum model (SS5 "Action-Loss Stacking"): Slowed, the new Stunned
+     countdown, and the corrected Nauseated-1 value are peer inputs to a
+     single Math.max(), never summed. The Staggered read is REMOVED
+     entirely (condition-overlay.js no longer defines a `staggered`
+     CONDITIONS entry — canon folds Staggered into Slowed 1). See the
+     rewritten comment block directly above that function for full worked
+     examples; the prior block's "confirmed ruling" additive model and its
+     worked examples are gone, not left alongside the new ones.
+   - [Stunned countdown] Stunned's action-loss contribution now comes from
+     a persisted `stunnedCountdown` ACTOR flag (module id `baphomet-utils`,
+     maintained by condition-overlay.js — see that file's "STUNNED
+     COUNTDOWN LIFECYCLE" comment block), read directly and
+     unconditionally here — no gate on the Stunned buff still existing.
+     This is deliberately distinct from the buff's own `tier` flag, which
+     is display/history only and is no longer read for action-loss math.
+   - [Proactive breadcrumb] Added `_stampActiveCombatantBreadcrumb`,
+     called from `_maybeResetForNewTurn` (render-based turn-start
+     detection — already the file's most reliable "who is active right
+     now" signal, per the v1.6 rewrite below) and from the `combatStart`
+     hook. Writes `globalThis.baphometActiveCombatant = { combatId,
+     combatantId, round, turn }`. condition-overlay.js's turn-transition
+     decrement logic reads this instead of re-deriving the departing
+     combatant reactively at its own hook-fire time — two prior attempts
+     at that reactive approach (`combat.current.turn`, then
+     `combat.combatant`) were each disproven by live two-seat
+     re-verification. Classic <script> load order (module.json lists this
+     file before condition-overlay.js) guarantees the global exists by the
+     time it's read.
+   - No changes to manual pip spend/toggle, MAP/swing tracking, TWF,
+     Vital Strike/Charge automation, or any other system in this file.
 
    v1.25 Changes (AoO / COMBAT REFLEXES ATTACK SPENDS THE JADE POOL):
    - Attack dialog gains an "AoO (Combat Reflexes)" checkbox in the
@@ -606,59 +641,68 @@ function _writeOffBudget(combatantId) {
 }
 
 /* ----------------------------------------------------------
-   CONDITION READING — v1.2 REWRITE
-   [DIRECTIVE: LOGIC BUG FIX]
+   CONDITION READING — v2.34.0 REWRITE (max-not-sum canon)
+   [GOAL_v2.34.0_CONDITION_CANON — MECH-1, MECH-2, MECH-3]
 
-   Previous implementation used Math.max() inside the item loop
-   for Staggered/Nauseated, creating order-dependent results when
-   conditions stacked (e.g. Staggered 2 + Stunned 1 could yield
-   wrong totals depending on item array order).
+   Canon ground truth: docs/reference/pf1.5/PF1.5_Module_Mechanics_Reference.md
+   section 5 ("SS5"), "Action-Loss Stacking" — every action-loss source is a
+   PEER INPUT to ONE Math.max(), never summed against each other. The prior
+   model here summed Stunned + Slowed and used a hardcoded 2-action floor
+   for Staggered/Nauseated, and called that the "confirmed ruling" — it was
+   not; that label and its worked examples are gone, not left in place
+   alongside the corrected ones below.
 
-   New implementation:
-   1. Declare ALL condition trackers BEFORE the loop.
-   2. Inside the loop: set booleans (isStaggered, isNauseated)
-      and accumulate integers (stunnedTotal, slowedTotal).
-      NO Math.max() or conditional logic inside the loop.
-   3. AFTER the loop: calculate final actionsLost from all
-      tracked values in one deterministic pass.
+   Sources (all peers to the same Math.max(), no floor/additive split):
+     Slowed X   → X actions lost (static per-turn tier; does not decrement)
+     Stunned    → the CURRENT `stunnedCountdown` actor flag value — NOT a
+                  read of the buff's own tier (see below)
+     Nauseated  → 1 action lost (MECH-2: corrected from a hardcoded 2). The
+                  no-attack/no-cast restriction that accompanies Nauseated
+                  is a SEPARATE overlay on top of this count, not itself an
+                  action-loss value — and this module does not build hard
+                  enforcement of that restriction (out of scope for this
+                  goal; tracked separately as LANE-B-5 / a follow-up item).
+   Paralyzed (full incapacitation) bypasses this math entirely: all 3
+   actions + the reaction are locked, matching prior behavior.
 
-   PF1.5 ACTION-LOSS RULE (confirmed ruling):
-   Compute actions lost from each applicable source, take the
-   maximum of the sources, cap at 3, then subtract from the
-   3-action pool (floor 0).
+   Staggered is REMOVED (MECH-3): canon (SS5 "Folded / Retired Conditions")
+   forbids a live tracked Staggered condition — PF1 Staggered folds into
+   Slowed 1 at the point of application. condition-overlay.js's CONDITIONS
+   object has no `staggered` entry, and there is no `isStaggered` read
+   anywhere in this file.
 
-   Sources that set a floor (baseBlock):
-     Staggered: 2 actions lost
-     Nauseated:  2 actions lost
+   Final formula: actionsLost = min(max(slowedTotal, stunnedCountdown,
+   nauseatedLoss), 3); remaining = max(0, 3 - actionsLost).
 
-   Sources that are additive (stacked together):
-     Stunned X: +X actions lost
-     Slowed X:  +X actions lost
+   Worked examples (match SS5:272-277 exactly — cross-checked against the
+   goal's required runtime cases):
+     Slowed 1 alone           → max(1, 0, 0) = 1 lost → 2 actions remain
+     Nauseated alone          → max(0, 0, 1) = 1 lost → 2 actions remain
+     Slowed 1 + Nauseated     → max(1, 0, 1) = 1 lost → 2 actions remain
+     Stunned 2 + Slowed 1     → max(1, 2, 0) = 2 lost → 1 action remains
+     Paralyzed                → bypasses math; all actions + reaction locked
 
-   Final formula: actionsLost = min(max(baseBlock, additive), 3)
-
-   Worked examples:
-     Staggered alone          → max(2, 0) = 2 lost → 1 action remains
-     Slowed 1 alone           → max(0, 1) = 1 lost → 2 actions remain
-     Staggered + Slowed 1    → max(2, 1) = 2 lost → 1 action remains
-     Staggered + Slowed 2    → max(2, 2) = 2 lost → 1 action remains
-     Staggered + Slowed 3    → max(2, 3) = 3 lost → 0 actions remain
-     Stunned 2 + Slowed 1    → max(0, 3) = 3 lost → 0 actions remain
-     Paralyzed               → bypasses math; all actions + reaction locked
-
-   Note: Staggered + Slowed 3 equals 3 actions lost because the
-   Slowed additive total (3) exceeds the Staggered floor (2).
-   Slowed does not stack with Staggered's floor — it only matters
-   when the additive total surpasses the floor.
+   Stunned carryover (structural — SS5:224, SS5:268; NOT a formula-only
+   fix): Stunned X means "lose X actions starting NEXT turn; if X exceeds
+   3, the remainder carries to subsequent turns" — it is not a static
+   per-turn tier the way Slowed is. `stunnedCountdown` is a persisted actor
+   flag (module id `AT_MODULE_ID` == condition-overlay.js's `MODULE_ID`,
+   both `'baphomet-utils'` — one shared flag namespace) maintained entirely
+   by condition-overlay.js; see that file's "STUNNED COUNTDOWN LIFECYCLE"
+   comment block for the full flag shape, the decrement mechanics, and the
+   round-4 mid-turn-application-skip guard (SS5:224 "starting NEXT turn").
+   It is read here unconditionally — no gate on whether the Stunned buff
+   itself still exists, which sidesteps the buff-deletion-vs-pip-read race
+   that broke an earlier design. Worked example, Stunned 4 applied before
+   the actor's turn 1: turn 1 → lose 3 (0 remain, countdown 4 → 1); turn 2
+   → lose 1 (2 remain, countdown 1 → 0, buff removed, condition clears).
    ---------------------------------------------------------- */
 
 function _readConditionActionLoss(actor) {
   if (!actor) return { actionsLost: 0, fullyIncapacitated: false };
 
-  let isStaggered       = false;
-  let isNauseated       = false;
-  let stunnedTotal      = 0;
-  let slowedTotal       = 0;
+  let isNauseated        = false;
+  let slowedTotal        = 0;
   let fullyIncapacitated = false;
 
   for (const item of actor.items) {
@@ -670,11 +714,12 @@ function _readConditionActionLoss(actor) {
     const tier = flags.tier ?? 1;
 
     switch (flags.conditionKey) {
-      case 'stunned':    stunnedTotal += tier; break;
-      case 'slowed':     slowedTotal  += tier; break;
-      case 'staggered':  isStaggered = true;   break;
-      case 'nauseated':  isNauseated = true;   break;
+      case 'slowed':     slowedTotal  += tier;      break;
+      case 'nauseated':  isNauseated = true;        break;
       case 'paralyzed':  fullyIncapacitated = true; break;
+      // 'stunned' is deliberately NOT read from the buff loop — its
+      // action-loss contribution comes from the stunnedCountdown actor
+      // flag below, not this buff's own tier. See the comment block above.
     }
   }
 
@@ -682,9 +727,9 @@ function _readConditionActionLoss(actor) {
     return { actionsLost: 3, fullyIncapacitated: true };
   }
 
-  const baseBlock = (isStaggered || isNauseated) ? 2 : 0;
-  const additive  = stunnedTotal + slowedTotal;
-  const actionsLost = Math.min(Math.max(baseBlock, additive), 3);
+  const stunnedCountdown = Number(actor.getFlag(AT_MODULE_ID, 'stunnedCountdown')) || 0;
+  const nauseatedLoss = isNauseated ? 1 : 0;
+  const actionsLost = Math.min(Math.max(slowedTotal, stunnedCountdown, nauseatedLoss), 3);
 
   return { actionsLost, fullyIncapacitated: false };
 }
@@ -809,6 +854,44 @@ function _applyConditionLocks(combatantId, actor) {
    given round.
    ---------------------------------------------------------- */
 
+/**
+ * v2.34.0: PROACTIVE BREADCRUMB — cross-script "who is the active combatant
+ * right now" signal, read by condition-overlay.js's turn-transition decrement
+ * logic (Stunned countdown + the TRUST-4 activeGM gate's dedupe context).
+ *
+ * Two prior fix attempts derived the departing combatant REACTIVELY at
+ * combatTurn hook-fire time (first `combat.current.turn`, then
+ * `combat.combatant`), and both were disproven by live two-seat
+ * re-verification in a 2-combatant alternating encounter — Foundry
+ * combat-state propagation is not guaranteed settled at that exact moment
+ * in this environment. Instead of a fourth reactive read, this STAMPS the
+ * active combatant at the one point already proven safe: the render-based
+ * turn-start detection below (`_maybeResetForNewTurn`, called from inside
+ * `renderCombatTracker`, which Foundry guarantees fires only after combat
+ * state is fully committed — the whole premise of the v1.6 rewrite this
+ * function is part of). condition-overlay.js reads this instead of
+ * re-deriving anything from combat.turns/combat.combatant/combat.current.turn
+ * at its own hook-fire time.
+ *
+ * Bridged via `globalThis` (the same pattern already used by
+ * `globalThis.baphometTWF` / `globalThis.baphometAoO` elsewhere in this
+ * file) because `module.json` loads these as classic (non-module)
+ * `<script>` tags sharing one global scope — action-tracker.js is listed
+ * BEFORE condition-overlay.js, so the global is already declared by the
+ * time the other file reads it.
+ *
+ * @param {Combat} combat
+ * @param {string} combatantId
+ */
+function _stampActiveCombatantBreadcrumb(combat, combatantId) {
+  globalThis.baphometActiveCombatant = {
+    combatId:    combat?.id ?? null,
+    combatantId: combatantId ?? null,
+    round:       combat?.round ?? null,
+    turn:        combat?.turn ?? null,
+  };
+}
+
 function _maybeResetForNewTurn(combat, combatantId, combatant) {
   if (!combat || !combatantId) return;
 
@@ -820,6 +903,12 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
 
   // Mark first to prevent any chance of re-entry (defensive).
   state._resetForRound = round;
+
+  // v2.34.0: stamp the proactive breadcrumb — see the comment block above
+  // _stampActiveCombatantBreadcrumb for the full rationale. Safe here
+  // specifically because this runs inside renderCombatTracker (post-commit),
+  // not inside a volatile turn-transition hook.
+  _stampActiveCombatantBreadcrumb(combat, combatantId);
 
   // v1.24: reset ONLY the action pips for the new turn. Reaction + Combat
   // Reflexes (AoO) pips are a per-ROUND resource, refreshed at round start
@@ -1176,6 +1265,12 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 Hooks.on('deleteCombat', (combat) => {
   for (const c of combat.combatants) pipState.delete(c.id);
   _reactionResetRound = null;
+  // v2.34.0: clear the breadcrumb if it belonged to this now-deleted combat
+  // (hygiene only — _getBreadcrumbCombatant in condition-overlay.js already
+  // guards on combatId matching a live combat).
+  if (globalThis.baphometActiveCombatant?.combatId === combat.id) {
+    globalThis.baphometActiveCombatant = null;
+  }
 });
 
 Hooks.on('deleteCombatant', (combatant) => {
@@ -1202,6 +1297,10 @@ Hooks.on('combatStart', (combat) => {
     _applyConditionLocks(firstCombatant.id, firstCombatant.actor);
     const state = _getState(firstCombatant.id);
     if (state) state._resetForRound = combat.round ?? 1;
+    // v2.34.0: stamp the breadcrumb here too (combatStart runs synchronously,
+    // not via renderCombatTracker) so it's correct from the very first
+    // turn-transition, before any render has fired.
+    _stampActiveCombatantBreadcrumb(combat, firstCombatant.id);
   }
 
   // v1.24: mark this round as already reaction-refreshed (init set reactions
