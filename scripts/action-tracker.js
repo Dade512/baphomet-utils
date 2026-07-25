@@ -1,20 +1,47 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.26
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.27
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
              AoO pips = Dexterity modifier; single row on its own line)
    LOCATION: Injected BELOW combatant name row in Combat Tracker sidebar
-   BEHAVIOR: Manual click-to-spend. ACTION pips reset at the START of the
-             combatant's OWN turn (you get 3 actions on your turn). The
-             REACTION and Combat Reflexes (AoO) pips are a PER-ROUND
-             resource: they reset at the start of a NEW ROUND, NOT on the
-             combatant's own turn (PF1.5 ruling). An AoO spent earlier in
-             a round stays spent until the next round begins.
+   BEHAVIOR: Manual click-to-spend. ACTION pips AND the REACTION +
+             Combat Reflexes (AoO) pips all reset at the START of the
+             combatant's OWN turn (CONFLICT-1 ruling, v1.27 — each
+             creature's own turn, not a shared round-start moment for
+             everyone). An AoO spent on someone else's turn stays spent
+             until this combatant's own next turn begins.
              Reads Stunned (via the stunnedCountdown actor flag)/Slowed/
              Paralyzed/Nauseated from baphomet-utils condition buffs/flags
              to auto-lock pips. Staggered is not a live tracked condition
              (folds into Slowed 1 — see v1.26 Changes / MECH-3).
+
+   v1.27 Changes (GOAL_v2.35.0_REACTION_RETIME — "On Your Own Time"):
+   - [CONFLICT-1] Reaction + Combat Reflexes (AoO) pip refresh MOVED off
+     the shared, simultaneous round-start boundary and onto each
+     combatant's own turn-start moment. The v1.24/v1.25 round-keyed
+     mechanism (_maybeResetReactionsForNewRound, _reactionResetRound) is
+     REMOVED; _maybeResetForNewTurn now also refreshes reaction/reflex
+     pips (via _resetReactionReflexPips, formerly
+     _resetReactionReflexForRound) at the same point it refreshes action
+     pips, reusing the same proven render-based `.active`-combatant
+     detection — no new hook.
+   - [Delay fix] _maybeResetForNewTurn's dedupe guard was keyed on round
+     number alone (`state._resetForRound === round`), which only ever
+     saw one turn-start per combatant per round. Delay gives a combatant
+     a SECOND turn-start moment within the SAME round (re-inserted later
+     in the turn order), which a round-only guard would silently skip.
+     The guard is now keyed on the (round, turn-index) pair — a new
+     `_resetForTurn` field (persisted alongside `_resetForRound`) tracks
+     `combat.turn` at the moment of the last reset for this combatant.
+   - [Reload-safety preserved] The existing reload/reconnect-adoption
+     protection (a fresh client must not re-fill already-spent pips)
+     falls out of reusing the SAME already-proven turn-keyed guard +
+     flag-hydration path that already protected action pips — no new
+     adoption logic was needed; reaction/reflex now ride the same rails.
+   - No changes to MAP/swing tracking, TWF, Vital Strike/Charge
+     automation, the Combat Reflexes pip *count* (Dex-mod sizing), or
+     any other system in this file.
 
    v1.26 Changes (GOAL_v2.34.0_CONDITION_CANON — "The Single Tally"):
    - [MECH-1/MECH-2/MECH-3] _readConditionActionLoss REWRITTEN to the canon
@@ -473,6 +500,13 @@ const AT_MODULE_ID = 'baphomet-utils';
    for. If `_resetForRound !== combat.round` AND this combatant
    is the current active, the renderCombatTracker hook resets
    them and updates the marker. Idempotent across renders.
+
+   v1.27: added `_resetForTurn`, tracking `combat.turn` at the moment of
+   the last turn-start reset alongside `_resetForRound`. The dedupe guard
+   in _maybeResetForNewTurn now requires BOTH to match the current
+   (round, turn) pair before skipping — a round-alone match is no longer
+   sufficient, because Delay can give a combatant a second turn-start
+   moment within the same round (see GOAL_v2.35.0_REACTION_RETIME).
    ---------------------------------------------------------- */
 
 // Map<combatantId, {
@@ -482,6 +516,7 @@ const AT_MODULE_ID = 'baphomet-utils';
 //   reflexPip: [bool],
 //   conditionLocked: number,
 //   _resetForRound: number | null   // v1.6
+//   _resetForTurn: number | null    // v1.27
 // }>
 // true = available, false = spent
 const pipState = new Map();
@@ -560,6 +595,9 @@ function _initState(combatantId) {
     bonusAuto,
     bonusPip,
     _resetForRound:  saved?.resetForRound ?? null,
+    // v1.27: paired with _resetForRound for the finer-grained (round, turn)
+    // turn-instance dedup guard (Delay fix) — see _maybeResetForNewTurn.
+    _resetForTurn:   saved?.resetForTurn ?? null,
     // v2.30.0 MAP swing counter — in-memory ONLY, never flag-persisted (sidesteps R6 P-8).
     swingsTaken:     0,
     // v2.30.0 TWF off-hand budget — persisted via the isolated OFF_BUDGET_FLAG_KEY flag.
@@ -590,8 +628,8 @@ function _resetState(combatantId) {
   state.offSeq = (Number(state.offSeq) || 0) + 1;
   const _rsActor = game.combat?.combatants?.get(combatantId)?.actor;
   if (_rsActor) { _mapArmCrit.delete(_rsActor.id); _mapPendingConfirm.delete(_rsActor.id); }
-  // _resetForRound is metadata, not pip state — DO NOT touch it here.
-  // It's owned by the render-based reset logic.
+  // _resetForRound / _resetForTurn are metadata, not pip state — DO NOT
+  // touch them here. They're owned by the render-based reset logic.
 }
 
 /**
@@ -617,6 +655,7 @@ function _writePipFlag(combatantId) {
     bonusAuto:    !!state.bonusAuto,
     bonusPip:     Array.isArray(state.bonusPip) ? [...state.bonusPip] : [],
     resetForRound: state._resetForRound,
+    resetForTurn:  state._resetForTurn, // v1.27 — see _maybeResetForNewTurn
   }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
 }
 
@@ -759,24 +798,30 @@ function _combatReflexCount(actor) {
 }
 
 /* ----------------------------------------------------------
-   PER-ROUND REACTION / AoO RESET — v1.24
+   REACTION / AoO PIP REFRESH — v1.27 (retimed, GOAL_v2.35.0_REACTION_RETIME)
 
-   Reaction + Combat Reflexes pips are a per-round resource:
-   they refresh at the start of a NEW ROUND, not on each
-   combatant's own turn. Render-based (mirrors the v1.6
-   turn-reset approach) and guarded by a module-level round
-   marker so it fires exactly once per round across renders.
+   Reaction + Combat Reflexes pips are a per-TURN resource: they refresh
+   at the start of EACH COMBATANT'S OWN turn (CONFLICT-1 ruling), not at
+   a single simultaneous round-start moment for everyone. The prior
+   round-keyed mechanism (_maybeResetReactionsForNewRound, guarded by the
+   module-level _reactionResetRound marker) is REMOVED — no code path
+   here refreshes reactions on a shared round boundary anymore.
+
+   _resetReactionReflexPips (below, formerly _resetReactionReflexForRound)
+   is now called directly from _maybeResetForNewTurn, at the same
+   render-based `.active`-combatant detection point action pips already
+   reset from. It no longer writes the pip flag itself — the caller
+   (_maybeResetForNewTurn) does a single flag write after ALL of a turn's
+   resets (actions, reaction/reflex, condition locks) are applied.
    ---------------------------------------------------------- */
 
-// Last round for which reaction/reflex pips were refreshed (module-global).
-let _reactionResetRound = null;
-
 /**
- * Refresh one combatant's reaction + Combat Reflexes pips to full for a
- * new round, recomputing the AoO count from current Dex mod. Respects
- * full incapacitation (Paralyzed -> no reactions/AoOs).
+ * Refresh one combatant's reaction + Combat Reflexes pips to full for
+ * their own new turn, recomputing the AoO count from current Dex mod.
+ * Respects full incapacitation (Paralyzed -> no reactions/AoOs). Does
+ * NOT write the pip flag itself — caller is responsible for that.
  */
-function _resetReactionReflexForRound(combatantId, combatant) {
+function _resetReactionReflexPips(combatantId, combatant) {
   const state = _getState(combatantId);
   if (!state) return;
   state.reaction = [true];
@@ -788,28 +833,6 @@ function _resetReactionReflexForRound(combatantId, combatant) {
     state.reaction = [false];
     state.reflexPip = state.reflexPip.map(() => false);
   }
-  _writePipFlag(combatantId);
-}
-
-/**
- * When combat.round has advanced, refresh reaction + Combat Reflexes pips
- * for every combatant once. Idempotent within a round via _reactionResetRound.
- */
-function _maybeResetReactionsForNewRound(combat) {
-  const round = combat?.round ?? 0;
-  if (round === _reactionResetRound) return;
-  // v1.25 fix: first observation on this client (fresh/reloaded client mid-combat) — ADOPT the
-  // current round WITHOUT resetting, so a mid-round reload/reconnect does not refill reaction/AoO
-  // pips already spent this round (pip state is hydrated from the combatant flags in _initState).
-  // Only a genuine round CHANGE refreshes pips.
-  if (_reactionResetRound === null) { _reactionResetRound = round; return; }
-  _reactionResetRound = round;
-  for (const combatant of combat.combatants) {
-    if (!combatant?.actor) continue;
-    if (!_getState(combatant.id)) _initState(combatant.id);
-    _resetReactionReflexForRound(combatant.id, combatant);
-  }
-  _debugLog(`Per-round reaction/AoO reset for round ${round}`);
 }
 
 /* ----------------------------------------------------------
@@ -899,10 +922,17 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   if (!state) return;
 
   const round = combat.round ?? 0;
-  if (state._resetForRound === round) return; // already reset this round
+  const turn = combat.turn ?? 0;
+  // v1.27: the dedupe guard is keyed on the (round, turn-index) PAIR, not
+  // round alone. Delay gives a combatant a SECOND turn-start moment within
+  // the SAME round number (they're re-inserted later in the turn order),
+  // which a round-only guard would silently skip since the round hasn't
+  // changed. See GOAL_v2.35.0_REACTION_RETIME.md "Implementation trap."
+  if (state._resetForRound === round && state._resetForTurn === turn) return; // already reset for this turn instance
 
   // Mark first to prevent any chance of re-entry (defensive).
   state._resetForRound = round;
+  state._resetForTurn = turn;
 
   // v2.34.0: stamp the proactive breadcrumb — see the comment block above
   // _stampActiveCombatantBreadcrumb for the full rationale. Safe here
@@ -910,11 +940,14 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   // not inside a volatile turn-transition hook.
   _stampActiveCombatantBreadcrumb(combat, combatantId);
 
-  // v1.24: reset ONLY the action pips for the new turn. Reaction + Combat
-  // Reflexes (AoO) pips are a per-ROUND resource, refreshed at round start
-  // by _maybeResetReactionsForNewRound — NOT on the combatant's own turn.
+  // v1.24: reset the action pips for the new turn.
   state.actions = [true, true, true];
   state.conditionLocked = 0;
+  // v1.27 (GOAL_v2.35.0_REACTION_RETIME): reaction + Combat Reflexes (AoO)
+  // pips are a per-TURN resource (CONFLICT-1 ruling) — refresh them here
+  // too, at the same turn-start detection point as the action pips, instead
+  // of on the retired shared round-start boundary.
+  _resetReactionReflexPips(combatantId, combatant);
   // v2.29.0: refill the Haste bonus availability for the new turn (grant persists; incap derived).
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
   // v2.30.0: reset the per-turn MAP swing counter (in-memory) and TWF off-hand budget.
@@ -932,7 +965,7 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   _writePipFlag(combatantId);
   _writeOffBudget(combatantId); // v2.30.0: persist the reset off-hand budget (isolated flag)
 
-  _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${round})`);
+  _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${round}, turn ${turn})`);
 }
 
 /* ----------------------------------------------------------
@@ -1179,9 +1212,10 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
   const combat = game.combat;
   if (!combat) return;
 
-  // v1.24: per-ROUND reaction + Combat Reflexes (AoO) refresh. Runs once
-  // when combat.round advances; action pips reset separately on own turn.
-  _maybeResetReactionsForNewRound(combat);
+  // v1.27 (GOAL_v2.35.0_REACTION_RETIME): the per-round reaction/Combat
+  // Reflexes refresh call that used to live here is REMOVED. Reaction +
+  // reflex pips now refresh inside _maybeResetForNewTurn, alongside the
+  // action pips, for the active combatant only — see that function.
 
   const root = _baphNormalizeHtml(html);
   if (!root) return;
@@ -1264,7 +1298,6 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 
 Hooks.on('deleteCombat', (combat) => {
   for (const c of combat.combatants) pipState.delete(c.id);
-  _reactionResetRound = null;
   // v2.34.0: clear the breadcrumb if it belonged to this now-deleted combat
   // (hygiene only — _getBreadcrumbCombatant in condition-overlay.js already
   // guards on combatId matching a live combat).
@@ -1296,16 +1329,19 @@ Hooks.on('combatStart', (combat) => {
   if (firstCombatant?.actor) {
     _applyConditionLocks(firstCombatant.id, firstCombatant.actor);
     const state = _getState(firstCombatant.id);
-    if (state) state._resetForRound = combat.round ?? 1;
+    if (state) {
+      // v1.27: mark BOTH the round and turn-index as already reset for the
+      // first active combatant — _initState already gave them a full
+      // action/reaction/reflex pool, so the first render's
+      // _maybeResetForNewTurn call should not redundantly re-reset them.
+      state._resetForRound = combat.round ?? 1;
+      state._resetForTurn = combat.turn ?? 0;
+    }
     // v2.34.0: stamp the breadcrumb here too (combatStart runs synchronously,
     // not via renderCombatTracker) so it's correct from the very first
     // turn-transition, before any render has fired.
     _stampActiveCombatantBreadcrumb(combat, firstCombatant.id);
   }
-
-  // v1.24: mark this round as already reaction-refreshed (init set reactions
-  // available), so the first render does not redundantly reset them.
-  _reactionResetRound = combat.round ?? 1;
 });
 
 /* ----------------------------------------------------------
@@ -3506,6 +3542,7 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   if ('bonusAuto'   in saved) existing.bonusAuto   = !!saved.bonusAuto;
   if (Array.isArray(saved.bonusPip)) existing.bonusPip = [...saved.bonusPip];
   if ('resetForRound' in saved) existing._resetForRound = saved.resetForRound;
+  if ('resetForTurn'  in saved) existing._resetForTurn  = saved.resetForTurn; // v1.27
 
   // Refresh the pip row in the combat tracker sidebar for this combatant.
   _refreshPipRow(combatant.id);
