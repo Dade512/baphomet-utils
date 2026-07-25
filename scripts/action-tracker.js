@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.27
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.28
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
@@ -64,6 +64,44 @@
    - No changes to MAP/swing tracking, TWF, Vital Strike/Charge
      automation, the Combat Reflexes pip *count* (Dex-mod sizing), or
      any other system in this file.
+
+   v1.28 Changes (GOAL_v2.35.0_REACTION_RETIME round-03 — FD-01, the TWF
+   off-hand budget's own staleness key):
+   - [FD-01 fix] The round-02 turn-sequence guard above never touched the
+     TWF off-hand budget's OWN staleness test, which round-02's probe never
+     read. That test still keyed on `(round, combat.turn)` — the exact
+     value round-01 disproved for the pip guard, in the same file, one
+     resource over. Delay and a mid-round insertion above the active
+     combatant both move `combat.turn` under an unchanged active
+     combatant (captured live, same evidence as round-01/round-02); on
+     re-hydration a spent off-hand swing came back. `_writeOffBudget`,
+     `_initState`'s off-budget hydration, the `updateCombatant` off-budget
+     hydrator, and the `reserveOffHandSwing`/`rollbackOffHandSwing` token
+     pair now key on `(round, activeId)` instead — both are replicated
+     document/breadcrumb state that does not move when the turn order
+     re-sorts. `_turnSeqTrack` is deliberately NOT reused here: it is
+     client-local by design (two clients hold different `seq` values for
+     the same combat), and this staleness test is inherently cross-client
+     (written by one client, read by another), so keying it on the
+     turn-sequence would be silently wrong.
+   - [Active-identity source] "Who is active" is sourced from
+     `globalThis.baphometActiveCombatant` (the v2.34.0 proactive
+     breadcrumb — see `_stampActiveCombatantBreadcrumb` below), guarded on
+     `combatId`, mirroring `condition-overlay.js`'s
+     `_getBreadcrumbCombatant`. This codebase has now disproven three
+     separate reactive turn-identity reads (`combat.current.turn`,
+     `combat.combatant`, `combat.turn`) — see `_currentActiveCombatantId`
+     for the one narrow, commented exception (a client that has not yet
+     observed a genuine turn-start for this combat).
+   - [Legacy shim] A flag persisted before round-03 carries `turn` and no
+     `activeId`. Such a flag is NOT treated as stale (that would be the
+     refill bug under a new name) — the comparison falls back to the old
+     `(round, turn)` test when `activeId` is absent from the stored flag,
+     and self-heals on the next write (every off-hand spend and every
+     turn reset rewrites the flag).
+   - No changes to `_advanceTurnSeq`, `_maybeResetForNewTurn`'s dedupe
+     guard itself, `_turnSeqTrack`, `_resetForSeq`, the pip/reaction/AoO
+     guard, the MAP swing counter, or `condition-overlay.js`.
 
    v1.26 Changes (GOAL_v2.34.0_CONDITION_CANON — "The Single Tally"):
    - [MECH-1/MECH-2/MECH-3] _readConditionActionLoss REWRITTEN to the canon
@@ -568,10 +606,52 @@ const _turnSeqTrack = new Map();
 // OFF_BUDGET_FLAG_KEY: an ISOLATED, versioned combatant flag for the TWF off-hand
 // per-turn budget, deliberately SEPARATE from the whole-blob pipState flag so an
 // unrelated pip/Haste/reset write can't carry-and-clobber it (GATE-1 probe fact 7).
-// Stored as: { used: number, seq: number, round: number, turn: number }.
+// Stored as: { used: number, seq: number, round: number, activeId: string|null }.
+// v2.35.0 round-03 (GOAL_v2.35.0_REACTION_RETIME, FD-01): `activeId` replaces the
+// prior `turn` field — see `_currentActiveCombatantId` and the v1.28 changelog
+// block above for why. A flag persisted before round-03 carries `turn` and no
+// `activeId`; every comparison site below falls back to `(round, turn)` in that
+// legacy case so it does not hydrate as unspent.
 const OFF_BUDGET_FLAG_KEY = 'offHandBudget';
 // Two-Weapon Fighting off-hand bonus swings PER TURN by tier (canon §4 Incremental Mastery).
 const TWF_OFF_BUDGET = { base: 1, improved: 2, greater: 3 };
+
+/**
+ * v2.35.0 round-03 (GOAL_v2.35.0_REACTION_RETIME, FD-01): resolve "who is the
+ * active combatant right now," for the TWF off-hand budget's staleness key
+ * ONLY. Do not reuse `_turnSeqTrack` here — it is client-local by design (two
+ * clients hold different `seq` values for the same combat), and this
+ * comparison is inherently cross-client (one client writes the flag, another
+ * reads it), so a client-local sequence would be silently wrong.
+ *
+ * Prefers `globalThis.baphometActiveCombatant`, the v2.34.0 proactive
+ * breadcrumb stamped by `_stampActiveCombatantBreadcrumb` from the same
+ * render-based `.active` detection this whole GOAL relies on — guarded on
+ * `combatId` matching, exactly as `condition-overlay.js`'s
+ * `_getBreadcrumbCombatant` does. This codebase has disproven three separate
+ * reactive turn-identity reads (`combat.current.turn`, `combat.combatant`,
+ * `combat.turn`); prefer the module-owned signal over a fourth.
+ *
+ * Falls back to a reactive `combat.combatant?.id` read ONLY when the
+ * breadcrumb is null or belongs to a different combat (a client that has not
+ * yet observed a genuine turn-start for this combat this session). That
+ * fallback is acceptable here specifically because every call site is
+ * `_initState` (render-triggered hydration), the `updateCombatant` off-budget
+ * hydrator (a post-commit document-update echo), or the reserve/rollback
+ * pair (invoked synchronously from a GM/owner-driven UI action) — none of
+ * them run inside a volatile turn-transition hook. Treating a null breadcrumb
+ * as "no match, therefore stale" would zero the budget and reintroduce the
+ * FD-01 defect under a new name, so this does NOT do that.
+ *
+ * @param {Combat|null|undefined} combat
+ * @returns {string|null}
+ */
+function _currentActiveCombatantId(combat) {
+  const breadcrumb = globalThis.baphometActiveCombatant;
+  if (breadcrumb && combat && breadcrumb.combatId === combat.id) return breadcrumb.combatantId ?? null;
+  return combat?.combatant?.id ?? null;
+}
+
 // Crit-confirmation guard (GATE-1 probe fact 3): on a crit threat the hooks fire a
 // second pre→atk pair before the single use. `_mapArmCrit` is set at an eligible
 // pf1PreAttackRoll (candidate penalty), promoted to `_mapPendingConfirm` at the
@@ -616,12 +696,21 @@ function _initState(combatantId) {
     : [];
 
   // v2.30.0: TWF off-hand budget hydrates from its OWN isolated, versioned flag (NOT pipState).
-  // Valid only for the current round+turn; a stale (prior-turn) value hydrates as 0. `offSeq`
-  // is preserved for the stale-echo guard in the dedicated updateCombatant hydrator.
+  // Valid only for the current round + active-combatant identity; a stale (prior-turn) value
+  // hydrates as 0. `offSeq` is preserved for the stale-echo guard in the dedicated
+  // updateCombatant hydrator.
+  // v2.35.0 round-03 (FD-01): keyed on (round, activeId), not (round, turn) — see
+  // `_currentActiveCombatantId` and OFF_BUDGET_FLAG_KEY's comment. A legacy flag (no
+  // `activeId` key) falls back to the old (round, turn) comparison so it is not
+  // treated as stale-therefore-unspent.
   const ob = combatant?.getFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY) ?? null;
   const _obRound = game.combat?.round ?? 0;
-  const _obTurn  = game.combat?.turn ?? 0;
-  const offHandUsed = (ob && ob.round === _obRound && ob.turn === _obTurn) ? (Number(ob.used) || 0) : 0;
+  const _obIsCurrent = !!ob && ob.round === _obRound && (
+    Object.prototype.hasOwnProperty.call(ob, 'activeId')
+      ? ob.activeId === _currentActiveCombatantId(game.combat)
+      : ob.turn === (game.combat?.turn ?? 0) // legacy pre-round-03 flag shape
+  );
+  const offHandUsed = _obIsCurrent ? (Number(ob.used) || 0) : 0;
   const offSeq      = Number(ob?.seq) || 0;
 
   pipState.set(combatantId, {
@@ -711,11 +800,13 @@ function _writeOffBudget(combatantId) {
   if (!state) return;
   const combatant = game.combat?.combatants?.get(combatantId);
   if (!combatant || !combatant.isOwner) return;
+  // v2.35.0 round-03 (FD-01): stamp activeId, not turn — see OFF_BUDGET_FLAG_KEY's comment
+  // and `_currentActiveCombatantId`.
   combatant.setFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY, {
-    used:  Number(state.offHandUsed) || 0,
-    seq:   Number(state.offSeq) || 0,
-    round: game.combat?.round ?? 0,
-    turn:  game.combat?.turn ?? 0,
+    used:     Number(state.offHandUsed) || 0,
+    seq:      Number(state.offSeq) || 0,
+    round:    game.combat?.round ?? 0,
+    activeId: _currentActiveCombatantId(game.combat),
   }).catch(err => console.error(`baphomet-utils | _writeOffBudget error: ${err}`));
 }
 
@@ -1535,16 +1626,21 @@ Hooks.once('ready', () => {
       state.offHandUsed = (Number(state.offHandUsed) || 0) + 1;
       state.offSeq = (Number(state.offSeq) || 0) + 1;
       _writeOffBudget(combatantId);
-      return { combatantId, round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0, seq: state.offSeq };
+      // v2.35.0 round-03 (FD-01): token carries activeId, not turn — the sole producer of
+      // this token, so no legacy-token compatibility is needed (in-memory only, one session).
+      return { combatantId, round: game.combat?.round ?? 0, activeId: _currentActiveCombatantId(game.combat), seq: state.offSeq };
     },
     // rollback a reservation when its off-hand use() was cancelled — only if it is still the
-    // latest write for this combatant and the same round/turn (else a newer reserve superseded it).
+    // latest write for this combatant and the same round/active-combatant (else a newer
+    // reserve superseded it, or a genuine turn-start already reset the budget).
     rollbackOffHandSwing: (token) => {
       if (!token?.combatantId) return false;
       const state = _getState(token.combatantId);
       if (!state) return false;
       if ((Number(state.offSeq) || 0) !== token.seq) return false; // superseded by a newer write
-      if ((game.combat?.round ?? 0) !== token.round || (game.combat?.turn ?? 0) !== token.turn) return false;
+      // v2.35.0 round-03 (FD-01): compare (round, activeId), not (round, turn) — see
+      // OFF_BUDGET_FLAG_KEY's comment and `_currentActiveCombatantId`.
+      if ((game.combat?.round ?? 0) !== token.round || _currentActiveCombatantId(game.combat) !== token.activeId) return false;
       state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
       state.offSeq = (Number(state.offSeq) || 0) + 1;
       _writeOffBudget(token.combatantId);
@@ -3667,9 +3763,15 @@ Hooks.on('updateCombatant', (combatant, changes) => {
    v2.30.0: dedicated hydrator for the ISOLATED off-hand-budget flag.
    Kept separate from the pipState hydrator above so the two never interfere.
    Rejects a stale self-echo via the monotonic `seq` (accept only seq > local —
-   GATE-1 probe fact 7), and treats a prior-round/turn value as 0 (the v1.25
+   GATE-1 probe fact 7), and treats a prior-round/activeId value as 0 (the v1.25
    "adopt current state, don't let a stale signal undo newer state" instinct).
    No UI refresh: the off-hand budget has no rendered pip.
+
+   v2.35.0 round-03 (FD-01): the current-vs-stale test now compares
+   (round, activeId) instead of (round, turn) — see OFF_BUDGET_FLAG_KEY's
+   comment and `_currentActiveCombatantId`. A legacy flag (no `activeId` key)
+   falls back to the old (round, turn) comparison so it is not treated as
+   stale-therefore-unspent.
    ---------------------------------------------------------- */
 Hooks.on('updateCombatant', (combatant, changes) => {
   if (!changes?.flags?.['baphomet-utils']?.[OFF_BUDGET_FLAG_KEY]) return;
@@ -3682,9 +3784,12 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   const incomingSeq = Number(ob.seq) || 0;
   if (incomingSeq <= (Number(existing.offSeq) || 0)) return; // stale / self-echo — ignore
   existing.offSeq = incomingSeq;
-  existing.offHandUsed = (ob.round === (combat.round ?? 0) && ob.turn === (combat.turn ?? 0))
-    ? (Number(ob.used) || 0)
-    : 0; // a prior-turn value is not valid for the current turn
+  const isCurrent = ob.round === (combat.round ?? 0) && (
+    Object.prototype.hasOwnProperty.call(ob, 'activeId')
+      ? ob.activeId === _currentActiveCombatantId(combat)
+      : ob.turn === (combat.turn ?? 0) // legacy pre-round-03 flag shape
+  );
+  existing.offHandUsed = isCurrent ? (Number(ob.used) || 0) : 0; // not current -> not valid for now
 });
 
 // Initial render on world ready — shows the panel if a combat
