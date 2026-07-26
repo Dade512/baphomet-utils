@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.34.0
+**Current Version:** 2.35.0
 
 ---
 
@@ -171,6 +171,25 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.35.0 — On Your Own Time
+
+Reaction and Combat Reflexes AoO pips now refresh at the start of each creature's own turn, not at
+a shared round-start moment (`GOAL_v2.35.0.md`, CONFLICT-1 ruling). An AoO spent on someone else's
+turn stays spent until your own next turn -- crossing a round boundary no longer refills it.
+Delaying, or a combatant being inserted above you in the initiative order, no longer hands back your
+reaction, AoO pool, actions, MAP counter, or TWF off-hand budget mid-turn. Three Council rounds:
+round-01's guard was disproven live and superseded (kept in history on purpose, not squashed); the
+shipped guard is a module-owned turn-sequence tracker, proven live across delay, mid-round insertion,
+reload, and single-combatant-round-advance cases.
+
+**Known limitation, stated plainly rather than implied away:** player-driven pip spends do not yet
+persist to the server in every case -- a role-2 (player) client's attempt to save a spent pip can be
+silently rejected while the GM's own view still shows it available, with no visible warning to
+either side. GM-driven spends are unaffected. This release does not fix that; it is accepted for now
+because the module is in prep/learning use with no play sessions imminent. The proper fix routes
+player spends through the GM via socketlib (the same verified-sender pattern already used
+elsewhere in this repo), tracked as the next major goal.
 
 ### v2.34.0 — The Single Tally
 
