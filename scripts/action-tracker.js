@@ -1,20 +1,107 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.26
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.28
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
              AoO pips = Dexterity modifier; single row on its own line)
    LOCATION: Injected BELOW combatant name row in Combat Tracker sidebar
-   BEHAVIOR: Manual click-to-spend. ACTION pips reset at the START of the
-             combatant's OWN turn (you get 3 actions on your turn). The
-             REACTION and Combat Reflexes (AoO) pips are a PER-ROUND
-             resource: they reset at the start of a NEW ROUND, NOT on the
-             combatant's own turn (PF1.5 ruling). An AoO spent earlier in
-             a round stays spent until the next round begins.
+   BEHAVIOR: Manual click-to-spend. ACTION pips AND the REACTION +
+             Combat Reflexes (AoO) pips all reset at the START of the
+             combatant's OWN turn (CONFLICT-1 ruling, v1.27 — each
+             creature's own turn, not a shared round-start moment for
+             everyone). An AoO spent on someone else's turn stays spent
+             until this combatant's own next turn begins.
              Reads Stunned (via the stunnedCountdown actor flag)/Slowed/
              Paralyzed/Nauseated from baphomet-utils condition buffs/flags
              to auto-lock pips. Staggered is not a live tracked condition
              (folds into Slowed 1 — see v1.26 Changes / MECH-3).
+
+   v1.27 Changes (GOAL_v2.35.0_REACTION_RETIME — "On Your Own Time"):
+   - [CONFLICT-1] Reaction + Combat Reflexes (AoO) pip refresh MOVED off
+     the shared, simultaneous round-start boundary and onto each
+     combatant's own turn-start moment. The v1.24/v1.25 round-keyed
+     mechanism (_maybeResetReactionsForNewRound, _reactionResetRound) is
+     REMOVED; _maybeResetForNewTurn now also refreshes reaction/reflex
+     pips (via _resetReactionReflexPips, formerly
+     _resetReactionReflexForRound) at the same point it refreshes action
+     pips, reusing the same proven render-based `.active`-combatant
+     detection — no new hook.
+   - [Delay fix, round-01 — DISPROVEN LIVE, do not resurrect] The first
+     attempt keyed the dedupe guard on the (round, `combat.turn`-index)
+     PAIR. `combat.turn` is an index into a re-sortable array, not an
+     identity: the round-01 two-seat live probe
+     (`docs/ai-council/GOAL_v2.35.0_REACTION_RETIME/20260724-163226/LIVE_PROBE_RESULT.md`)
+     confirmed Delay (lowering initiative) and a mid-round insertion
+     ABOVE the active combatant both re-sort the turn order and move
+     `combat.turn` out from under the still-active combatant WITHOUT a
+     genuine new turn beginning, causing the guard to mismatch and the
+     entire turn-start reset body to spuriously re-fire mid-turn.
+   - [Turn-sequence guard, round-02 — the shipped fix] The guard now keys
+     on a module-owned, CLIENT-LOCAL turn-sequence tracker (`_turnSeqTrack`,
+     `_advanceTurnSeq`), never on any Foundry-supplied numeric index. The
+     sequence for a combat advances only when the `.active` combatant's
+     IDENTITY differs from the one last observed, OR `combat.round`
+     advances (the latter is required so a single-combatant combat still
+     refreshes on its own round boundary — an identity-only key would
+     advance once and never again). Each combatant persists the sequence
+     value its own last reset fired at (`_resetForSeq`, replacing the
+     retired `_resetForRound` / `_resetForTurn` pair) purely for schema
+     parity with the pre-round-02 shape; the live guard decision itself
+     reads only the client-local tracker, never that persisted value,
+     which is what avoids the durable-cross-client-write question
+     entirely. See `_advanceTurnSeq` for the full rationale, including the
+     adopt-on-first-observation branch that preserves reload-safety below.
+   - [Reload-safety preserved, re-verified on the round-02 guard] A fresh
+     client's local `_turnSeqTrack` starts empty for a combat it has not
+     yet observed. Rather than treat "no local record" as "advance," the
+     first observation ADOPTS the current active combatant without firing
+     a reset — the same shape as the retired v1.25
+     `_maybeResetReactionsForNewRound` null-branch above. `_initState`
+     already hydrated the correct spent/available pip VALUES from the
+     persisted combatant flag; only the dedupe bookkeeping is being
+     (re)established here, not the pips themselves, so a mid-turn
+     reload/reconnect still does not re-fill already-spent pips.
+   - No changes to MAP/swing tracking, TWF, Vital Strike/Charge
+     automation, the Combat Reflexes pip *count* (Dex-mod sizing), or
+     any other system in this file.
+
+   v1.28 Changes (GOAL_v2.35.0_REACTION_RETIME round-03 — FD-01, the TWF
+   off-hand budget's own staleness key):
+   - [FD-01 fix] The round-02 turn-sequence guard above never touched the
+     TWF off-hand budget's OWN staleness test, which round-02's probe never
+     read. That test still keyed on `(round, combat.turn)` — the exact
+     value round-01 disproved for the pip guard, in the same file, one
+     resource over. Delay and a mid-round insertion above the active
+     combatant both move `combat.turn` under an unchanged active
+     combatant (captured live, same evidence as round-01/round-02); on
+     re-hydration a spent off-hand swing came back. `_writeOffBudget`,
+     `_initState`'s off-budget hydration, the `updateCombatant` off-budget
+     hydrator, and the `reserveOffHandSwing`/`rollbackOffHandSwing` token
+     pair now key on `(round, activeId)` instead — both are replicated
+     document/breadcrumb state that does not move when the turn order
+     re-sorts. `_turnSeqTrack` is deliberately NOT reused here: it is
+     client-local by design (two clients hold different `seq` values for
+     the same combat), and this staleness test is inherently cross-client
+     (written by one client, read by another), so keying it on the
+     turn-sequence would be silently wrong.
+   - [Active-identity source] "Who is active" is sourced from
+     `globalThis.baphometActiveCombatant` (the v2.34.0 proactive
+     breadcrumb — see `_stampActiveCombatantBreadcrumb` below), guarded on
+     `combatId`, mirroring `condition-overlay.js`'s
+     `_getBreadcrumbCombatant`. This codebase has now disproven three
+     separate reactive turn-identity reads (`combat.current.turn`,
+     `combat.combatant`, `combat.turn`) — see `_currentActiveCombatantId`
+     for the one narrow, commented exception (a client that has not yet
+     observed a genuine turn-start for this combat).
+   - [Legacy shim] A flag persisted before round-03 carries `turn` and no
+     `activeId`. Such a flag is NOT treated as stale (that would be the
+     refill bug under a new name) — the comparison falls back to the old
+     `(round, turn)` test when `activeId` is absent from the stored flag,
+     and self-heals on the next write (every off-hand spend and every
+     turn reset rewrites the flag).
+   - No changes to `_advanceTurnSeq`, `_maybeResetForNewTurn`'s dedupe
+     guard itself, `_turnSeqTrack`, `_resetForSeq`, the pip/reaction/AoO
+     guard, the MAP swing counter, or `condition-overlay.js`.
 
    v1.26 Changes (GOAL_v2.34.0_CONDITION_CANON — "The Single Tally"):
    - [MECH-1/MECH-2/MECH-3] _readConditionActionLoss REWRITTEN to the canon
@@ -473,6 +560,21 @@ const AT_MODULE_ID = 'baphomet-utils';
    for. If `_resetForRound !== combat.round` AND this combatant
    is the current active, the renderCombatTracker hook resets
    them and updates the marker. Idempotent across renders.
+
+   v1.27 round-01 (DISPROVEN LIVE, retired): added `_resetForTurn`,
+   tracking `combat.turn` at the moment of the last turn-start reset
+   alongside `_resetForRound`, requiring BOTH to match before skipping.
+   `combat.turn` is a re-sortable array index, not an identity — Delay and
+   mid-round insertion above the active combatant both move it without a
+   genuine new turn beginning, which the live probe confirmed spuriously
+   re-fires the entire reset body. See the v1.27 changelog block above.
+
+   v1.27 round-02 (shipped): `_resetForRound` AND `_resetForTurn` are BOTH
+   retired, replaced by a single `_resetForSeq` field — the sequence value
+   (from the client-local `_advanceTurnSeq` tracker, see below) at which
+   this combatant's own last turn-start reset fired. The guard in
+   _maybeResetForNewTurn no longer compares against any Foundry-supplied
+   round/turn value at all; see GOAL_v2.35.0_REACTION_RETIME.
    ---------------------------------------------------------- */
 
 // Map<combatantId, {
@@ -481,23 +583,75 @@ const AT_MODULE_ID = 'baphomet-utils';
 //   combatReflex: bool,
 //   reflexPip: [bool],
 //   conditionLocked: number,
-//   _resetForRound: number | null   // v1.6
+//   _resetForSeq: number | null   // v1.27 round-02 — replaces the retired
+//                                 // v1.6 `_resetForRound` / round-01 `_resetForTurn`
 // }>
 // true = available, false = spent
 const pipState = new Map();
 
 // Flag key used to persist pip state cross-client on the Combatant document.
-// Stored as: { actions: [bool,bool,bool], reaction: [bool], reflexPip: [bool], resetForRound: number|null }
+// Stored as: { actions: [bool,bool,bool], reaction: [bool], reflexPip: [bool], resetForSeq: number|null }
 const PIP_FLAG_KEY = 'pipState';
+
+// v1.27 round-02 (GOAL_v2.35.0_REACTION_RETIME) — module-owned, CLIENT-LOCAL
+// turn-sequence tracker backing the _maybeResetForNewTurn dedupe guard. See
+// _advanceTurnSeq for the full rationale. Map<combatId, { seq: number,
+// activeId: string, round: number }>. In-memory only, per client, cleared on
+// deleteCombat — never persisted, never compared cross-client (that is the
+// deliberate choice that sidesteps the durable-shared-flag question; see the
+// v1.27 changelog block and _advanceTurnSeq).
+const _turnSeqTrack = new Map();
 
 // v2.30.0 MAP / TWF off-hand budget.
 // OFF_BUDGET_FLAG_KEY: an ISOLATED, versioned combatant flag for the TWF off-hand
 // per-turn budget, deliberately SEPARATE from the whole-blob pipState flag so an
 // unrelated pip/Haste/reset write can't carry-and-clobber it (GATE-1 probe fact 7).
-// Stored as: { used: number, seq: number, round: number, turn: number }.
+// Stored as: { used: number, seq: number, round: number, activeId: string|null }.
+// v2.35.0 round-03 (GOAL_v2.35.0_REACTION_RETIME, FD-01): `activeId` replaces the
+// prior `turn` field — see `_currentActiveCombatantId` and the v1.28 changelog
+// block above for why. A flag persisted before round-03 carries `turn` and no
+// `activeId`; every comparison site below falls back to `(round, turn)` in that
+// legacy case so it does not hydrate as unspent.
 const OFF_BUDGET_FLAG_KEY = 'offHandBudget';
 // Two-Weapon Fighting off-hand bonus swings PER TURN by tier (canon §4 Incremental Mastery).
 const TWF_OFF_BUDGET = { base: 1, improved: 2, greater: 3 };
+
+/**
+ * v2.35.0 round-03 (GOAL_v2.35.0_REACTION_RETIME, FD-01): resolve "who is the
+ * active combatant right now," for the TWF off-hand budget's staleness key
+ * ONLY. Do not reuse `_turnSeqTrack` here — it is client-local by design (two
+ * clients hold different `seq` values for the same combat), and this
+ * comparison is inherently cross-client (one client writes the flag, another
+ * reads it), so a client-local sequence would be silently wrong.
+ *
+ * Prefers `globalThis.baphometActiveCombatant`, the v2.34.0 proactive
+ * breadcrumb stamped by `_stampActiveCombatantBreadcrumb` from the same
+ * render-based `.active` detection this whole GOAL relies on — guarded on
+ * `combatId` matching, exactly as `condition-overlay.js`'s
+ * `_getBreadcrumbCombatant` does. This codebase has disproven three separate
+ * reactive turn-identity reads (`combat.current.turn`, `combat.combatant`,
+ * `combat.turn`); prefer the module-owned signal over a fourth.
+ *
+ * Falls back to a reactive `combat.combatant?.id` read ONLY when the
+ * breadcrumb is null or belongs to a different combat (a client that has not
+ * yet observed a genuine turn-start for this combat this session). That
+ * fallback is acceptable here specifically because every call site is
+ * `_initState` (render-triggered hydration), the `updateCombatant` off-budget
+ * hydrator (a post-commit document-update echo), or the reserve/rollback
+ * pair (invoked synchronously from a GM/owner-driven UI action) — none of
+ * them run inside a volatile turn-transition hook. Treating a null breadcrumb
+ * as "no match, therefore stale" would zero the budget and reintroduce the
+ * FD-01 defect under a new name, so this does NOT do that.
+ *
+ * @param {Combat|null|undefined} combat
+ * @returns {string|null}
+ */
+function _currentActiveCombatantId(combat) {
+  const breadcrumb = globalThis.baphometActiveCombatant;
+  if (breadcrumb && combat && breadcrumb.combatId === combat.id) return breadcrumb.combatantId ?? null;
+  return combat?.combatant?.id ?? null;
+}
+
 // Crit-confirmation guard (GATE-1 probe fact 3): on a crit threat the hooks fire a
 // second pre→atk pair before the single use. `_mapArmCrit` is set at an eligible
 // pf1PreAttackRoll (candidate penalty), promoted to `_mapPendingConfirm` at the
@@ -542,12 +696,21 @@ function _initState(combatantId) {
     : [];
 
   // v2.30.0: TWF off-hand budget hydrates from its OWN isolated, versioned flag (NOT pipState).
-  // Valid only for the current round+turn; a stale (prior-turn) value hydrates as 0. `offSeq`
-  // is preserved for the stale-echo guard in the dedicated updateCombatant hydrator.
+  // Valid only for the current round + active-combatant identity; a stale (prior-turn) value
+  // hydrates as 0. `offSeq` is preserved for the stale-echo guard in the dedicated
+  // updateCombatant hydrator.
+  // v2.35.0 round-03 (FD-01): keyed on (round, activeId), not (round, turn) — see
+  // `_currentActiveCombatantId` and OFF_BUDGET_FLAG_KEY's comment. A legacy flag (no
+  // `activeId` key) falls back to the old (round, turn) comparison so it is not
+  // treated as stale-therefore-unspent.
   const ob = combatant?.getFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY) ?? null;
   const _obRound = game.combat?.round ?? 0;
-  const _obTurn  = game.combat?.turn ?? 0;
-  const offHandUsed = (ob && ob.round === _obRound && ob.turn === _obTurn) ? (Number(ob.used) || 0) : 0;
+  const _obIsCurrent = !!ob && ob.round === _obRound && (
+    Object.prototype.hasOwnProperty.call(ob, 'activeId')
+      ? ob.activeId === _currentActiveCombatantId(game.combat)
+      : ob.turn === (game.combat?.turn ?? 0) // legacy pre-round-03 flag shape
+  );
+  const offHandUsed = _obIsCurrent ? (Number(ob.used) || 0) : 0;
   const offSeq      = Number(ob?.seq) || 0;
 
   pipState.set(combatantId, {
@@ -559,7 +722,12 @@ function _initState(combatantId) {
     bonusManual,
     bonusAuto,
     bonusPip,
-    _resetForRound:  saved?.resetForRound ?? null,
+    // v1.27 round-02: the sequence value (from the client-local
+    // _advanceTurnSeq tracker) at which this combatant's own last
+    // turn-start reset fired. Replaces the retired _resetForRound /
+    // _resetForTurn pair — see _maybeResetForNewTurn and the STATE
+    // MANAGEMENT comment block above.
+    _resetForSeq:    saved?.resetForSeq ?? null,
     // v2.30.0 MAP swing counter — in-memory ONLY, never flag-persisted (sidesteps R6 P-8).
     swingsTaken:     0,
     // v2.30.0 TWF off-hand budget — persisted via the isolated OFF_BUDGET_FLAG_KEY flag.
@@ -590,8 +758,8 @@ function _resetState(combatantId) {
   state.offSeq = (Number(state.offSeq) || 0) + 1;
   const _rsActor = game.combat?.combatants?.get(combatantId)?.actor;
   if (_rsActor) { _mapArmCrit.delete(_rsActor.id); _mapPendingConfirm.delete(_rsActor.id); }
-  // _resetForRound is metadata, not pip state — DO NOT touch it here.
-  // It's owned by the render-based reset logic.
+  // _resetForSeq is metadata, not pip state — DO NOT touch it here.
+  // It's owned by the render-based reset logic (_maybeResetForNewTurn).
 }
 
 /**
@@ -616,7 +784,7 @@ function _writePipFlag(combatantId) {
     bonusManual:  !!state.bonusManual,
     bonusAuto:    !!state.bonusAuto,
     bonusPip:     Array.isArray(state.bonusPip) ? [...state.bonusPip] : [],
-    resetForRound: state._resetForRound,
+    resetForSeq:  state._resetForSeq, // v1.27 round-02 — see _maybeResetForNewTurn / _advanceTurnSeq
   }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
 }
 
@@ -632,11 +800,13 @@ function _writeOffBudget(combatantId) {
   if (!state) return;
   const combatant = game.combat?.combatants?.get(combatantId);
   if (!combatant || !combatant.isOwner) return;
+  // v2.35.0 round-03 (FD-01): stamp activeId, not turn — see OFF_BUDGET_FLAG_KEY's comment
+  // and `_currentActiveCombatantId`.
   combatant.setFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY, {
-    used:  Number(state.offHandUsed) || 0,
-    seq:   Number(state.offSeq) || 0,
-    round: game.combat?.round ?? 0,
-    turn:  game.combat?.turn ?? 0,
+    used:     Number(state.offHandUsed) || 0,
+    seq:      Number(state.offSeq) || 0,
+    round:    game.combat?.round ?? 0,
+    activeId: _currentActiveCombatantId(game.combat),
   }).catch(err => console.error(`baphomet-utils | _writeOffBudget error: ${err}`));
 }
 
@@ -759,24 +929,30 @@ function _combatReflexCount(actor) {
 }
 
 /* ----------------------------------------------------------
-   PER-ROUND REACTION / AoO RESET — v1.24
+   REACTION / AoO PIP REFRESH — v1.27 (retimed, GOAL_v2.35.0_REACTION_RETIME)
 
-   Reaction + Combat Reflexes pips are a per-round resource:
-   they refresh at the start of a NEW ROUND, not on each
-   combatant's own turn. Render-based (mirrors the v1.6
-   turn-reset approach) and guarded by a module-level round
-   marker so it fires exactly once per round across renders.
+   Reaction + Combat Reflexes pips are a per-TURN resource: they refresh
+   at the start of EACH COMBATANT'S OWN turn (CONFLICT-1 ruling), not at
+   a single simultaneous round-start moment for everyone. The prior
+   round-keyed mechanism (_maybeResetReactionsForNewRound, guarded by the
+   module-level _reactionResetRound marker) is REMOVED — no code path
+   here refreshes reactions on a shared round boundary anymore.
+
+   _resetReactionReflexPips (below, formerly _resetReactionReflexForRound)
+   is now called directly from _maybeResetForNewTurn, at the same
+   render-based `.active`-combatant detection point action pips already
+   reset from. It no longer writes the pip flag itself — the caller
+   (_maybeResetForNewTurn) does a single flag write after ALL of a turn's
+   resets (actions, reaction/reflex, condition locks) are applied.
    ---------------------------------------------------------- */
 
-// Last round for which reaction/reflex pips were refreshed (module-global).
-let _reactionResetRound = null;
-
 /**
- * Refresh one combatant's reaction + Combat Reflexes pips to full for a
- * new round, recomputing the AoO count from current Dex mod. Respects
- * full incapacitation (Paralyzed -> no reactions/AoOs).
+ * Refresh one combatant's reaction + Combat Reflexes pips to full for
+ * their own new turn, recomputing the AoO count from current Dex mod.
+ * Respects full incapacitation (Paralyzed -> no reactions/AoOs). Does
+ * NOT write the pip flag itself — caller is responsible for that.
  */
-function _resetReactionReflexForRound(combatantId, combatant) {
+function _resetReactionReflexPips(combatantId, combatant) {
   const state = _getState(combatantId);
   if (!state) return;
   state.reaction = [true];
@@ -788,28 +964,6 @@ function _resetReactionReflexForRound(combatantId, combatant) {
     state.reaction = [false];
     state.reflexPip = state.reflexPip.map(() => false);
   }
-  _writePipFlag(combatantId);
-}
-
-/**
- * When combat.round has advanced, refresh reaction + Combat Reflexes pips
- * for every combatant once. Idempotent within a round via _reactionResetRound.
- */
-function _maybeResetReactionsForNewRound(combat) {
-  const round = combat?.round ?? 0;
-  if (round === _reactionResetRound) return;
-  // v1.25 fix: first observation on this client (fresh/reloaded client mid-combat) — ADOPT the
-  // current round WITHOUT resetting, so a mid-round reload/reconnect does not refill reaction/AoO
-  // pips already spent this round (pip state is hydrated from the combatant flags in _initState).
-  // Only a genuine round CHANGE refreshes pips.
-  if (_reactionResetRound === null) { _reactionResetRound = round; return; }
-  _reactionResetRound = round;
-  for (const combatant of combat.combatants) {
-    if (!combatant?.actor) continue;
-    if (!_getState(combatant.id)) _initState(combatant.id);
-    _resetReactionReflexForRound(combatant.id, combatant);
-  }
-  _debugLog(`Per-round reaction/AoO reset for round ${round}`);
 }
 
 /* ----------------------------------------------------------
@@ -839,7 +993,7 @@ function _applyConditionLocks(combatantId, actor) {
 }
 
 /* ----------------------------------------------------------
-   RENDER-BASED TURN-START RESET — v1.6
+   RENDER-BASED TURN-START RESET — v1.6, guard redesigned v1.27 round-02
 
    Called from inside the renderCombatTracker hook for the
    combatant whose row has the `.active` CSS class. Foundry
@@ -847,11 +1001,16 @@ function _applyConditionLocks(combatantId, actor) {
    combat state has been updated, so it's the most reliable
    signal of "who is the active combatant right now."
 
-   The dedupe is per-round, stored on the state itself as
-   `_resetForRound`. So this function is safely idempotent —
-   call it on every render of the active combatant; it'll
-   only do work the first time we see them as active in a
-   given round.
+   The dedupe no longer compares against combat.round or combat.turn at
+   all (see the v1.27 round-01/round-02 changelog blocks near the top of
+   this file for why: combat.turn is a re-sortable array index, not an
+   identity, and Delay / mid-round insertion above the active combatant
+   were both confirmed live to move it without a genuine new turn
+   beginning). Instead the guard asks the client-local `_advanceTurnSeq`
+   tracker "did a genuine new turn actually start for this combatant,"
+   which is `true` only on an active-identity change or a round advance.
+   Still safely idempotent — call it on every render of the active
+   combatant; it only does work on a genuine turn-start transition.
    ---------------------------------------------------------- */
 
 /**
@@ -892,17 +1051,90 @@ function _stampActiveCombatantBreadcrumb(combat, combatantId) {
   };
 }
 
+/**
+ * v1.27 round-02 (GOAL_v2.35.0_REACTION_RETIME) — module-owned, CLIENT-LOCAL
+ * turn-sequence advance, backing the _maybeResetForNewTurn dedupe guard.
+ *
+ * Replaces the round-01 (round, `combat.turn`-index) pair guard, which the
+ * live two-seat probe
+ * (`docs/ai-council/GOAL_v2.35.0_REACTION_RETIME/20260724-163226/LIVE_PROBE_RESULT.md`)
+ * confirmed spuriously re-fires the ENTIRE turn-start reset body when Delay
+ * or a mid-round insertion above the active combatant re-sorts the turn
+ * order and moves `combat.turn` out from under a combatant whose active
+ * IDENTITY never actually changed. `combat.turn` is an index into a
+ * re-sortable array, not an identity — this never keys on it.
+ *
+ * The sequence for a given combat (`_turnSeqTrack`, keyed by combat.id)
+ * advances only when EITHER:
+ *   1. the `.active` combatant's IDENTITY differs from the one last
+ *      observed by THIS client, or
+ *   2. `combat.round` has advanced since THIS client last observed it.
+ * Condition 2 is required, not redundant: a single-combatant combat (solo
+ * boss, one-creature scene) never changes active identity, so an
+ * identity-only key would advance exactly once and that combatant would
+ * never refresh again for the rest of the fight (required case 7).
+ *
+ * CLIENT-LOCALITY TRAP (the reason this is a tracker, not a document flag):
+ * a module-owned counter held only in client memory starts EMPTY on every
+ * fresh client. Rather than treat "no local record for this combat yet" as
+ * "advance" (which would refresh already-spent pips on a mid-turn
+ * reload/reconnect — regressing required case 6), the first observation of
+ * a combat ADOPTS the current active combatant as already-current WITHOUT
+ * signaling an advance. This is the same shape as the retired v1.25
+ * `_maybeResetReactionsForNewRound` null-branch (see that changelog entry
+ * above). `_initState` already hydrated this combatant's correct
+ * spent/available pip VALUES from the persisted combatant flag before this
+ * ever runs — only the dedupe bookkeeping is being (re)established here,
+ * not the pips themselves. This is also why the persisted `_resetForSeq`
+ * field is schema-parity bookkeeping only: this function never compares a
+ * remote client's persisted sequence number against its own, which is what
+ * avoids needing a durable, permission-sensitive, cross-client-shared
+ * document write for this guard at all.
+ *
+ * `combatStart` seeds `_turnSeqTrack` for a brand-new combat directly (see
+ * that hook) so the very first render doesn't redundantly re-fire on top
+ * of the fresh full pool `_initState` + `_applyConditionLocks` already gave
+ * the first combatant.
+ *
+ * @param {Combat} combat
+ * @param {string} combatantId - the combatant Foundry marked `.active`
+ * @returns {{ advanced: boolean, seq: number }}
+ */
+function _advanceTurnSeq(combat, combatantId) {
+  const combatId = combat.id;
+  const round = combat.round ?? 0;
+  let track = _turnSeqTrack.get(combatId);
+
+  if (!track) {
+    // First observation of this combat by THIS client — adopt, don't fire.
+    track = { seq: 0, activeId: combatantId, round };
+    _turnSeqTrack.set(combatId, track);
+    return { advanced: false, seq: track.seq };
+  }
+
+  const identityChanged = track.activeId !== combatantId;
+  const roundAdvanced = track.round !== round;
+  if (!identityChanged && !roundAdvanced) {
+    return { advanced: false, seq: track.seq }; // no genuine new turn-start; already caught up
+  }
+
+  track.seq += 1;
+  track.activeId = combatantId;
+  track.round = round;
+  return { advanced: true, seq: track.seq };
+}
+
 function _maybeResetForNewTurn(combat, combatantId, combatant) {
   if (!combat || !combatantId) return;
 
   const state = _getState(combatantId);
   if (!state) return;
 
-  const round = combat.round ?? 0;
-  if (state._resetForRound === round) return; // already reset this round
+  const { advanced, seq } = _advanceTurnSeq(combat, combatantId);
+  if (!advanced) return; // adopted, or already reset for this turn instance — no genuine new turn-start
 
   // Mark first to prevent any chance of re-entry (defensive).
-  state._resetForRound = round;
+  state._resetForSeq = seq;
 
   // v2.34.0: stamp the proactive breadcrumb — see the comment block above
   // _stampActiveCombatantBreadcrumb for the full rationale. Safe here
@@ -910,11 +1142,14 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   // not inside a volatile turn-transition hook.
   _stampActiveCombatantBreadcrumb(combat, combatantId);
 
-  // v1.24: reset ONLY the action pips for the new turn. Reaction + Combat
-  // Reflexes (AoO) pips are a per-ROUND resource, refreshed at round start
-  // by _maybeResetReactionsForNewRound — NOT on the combatant's own turn.
+  // v1.24: reset the action pips for the new turn.
   state.actions = [true, true, true];
   state.conditionLocked = 0;
+  // v1.27 (GOAL_v2.35.0_REACTION_RETIME): reaction + Combat Reflexes (AoO)
+  // pips are a per-TURN resource (CONFLICT-1 ruling) — refresh them here
+  // too, at the same turn-start detection point as the action pips, instead
+  // of on the retired shared round-start boundary.
+  _resetReactionReflexPips(combatantId, combatant);
   // v2.29.0: refill the Haste bonus availability for the new turn (grant persists; incap derived).
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
   // v2.30.0: reset the per-turn MAP swing counter (in-memory) and TWF off-hand budget.
@@ -932,7 +1167,7 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   _writePipFlag(combatantId);
   _writeOffBudget(combatantId); // v2.30.0: persist the reset off-hand budget (isolated flag)
 
-  _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${round})`);
+  _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${combat.round ?? 0}, seq ${seq})`);
 }
 
 /* ----------------------------------------------------------
@@ -1179,9 +1414,10 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
   const combat = game.combat;
   if (!combat) return;
 
-  // v1.24: per-ROUND reaction + Combat Reflexes (AoO) refresh. Runs once
-  // when combat.round advances; action pips reset separately on own turn.
-  _maybeResetReactionsForNewRound(combat);
+  // v1.27 (GOAL_v2.35.0_REACTION_RETIME): the per-round reaction/Combat
+  // Reflexes refresh call that used to live here is REMOVED. Reaction +
+  // reflex pips now refresh inside _maybeResetForNewTurn, alongside the
+  // action pips, for the active combatant only — see that function.
 
   const root = _baphNormalizeHtml(html);
   if (!root) return;
@@ -1264,7 +1500,9 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 
 Hooks.on('deleteCombat', (combat) => {
   for (const c of combat.combatants) pipState.delete(c.id);
-  _reactionResetRound = null;
+  // v1.27 round-02: clear this combat's client-local turn-sequence tracker
+  // (hygiene only — a deleted combat's id is never reused).
+  _turnSeqTrack.delete(combat.id);
   // v2.34.0: clear the breadcrumb if it belonged to this now-deleted combat
   // (hygiene only — _getBreadcrumbCombatant in condition-overlay.js already
   // guards on combatId matching a live combat).
@@ -1296,16 +1534,21 @@ Hooks.on('combatStart', (combat) => {
   if (firstCombatant?.actor) {
     _applyConditionLocks(firstCombatant.id, firstCombatant.actor);
     const state = _getState(firstCombatant.id);
-    if (state) state._resetForRound = combat.round ?? 1;
+    const seedRound = combat.round ?? 1;
+    if (state) {
+      // v1.27 round-02: seed this combat's client-local turn-sequence
+      // tracker with the first active combatant already current, and stamp
+      // their own _resetForSeq to match — _initState already gave them a
+      // full action/reaction/reflex pool, so the first render's
+      // _maybeResetForNewTurn call should not redundantly re-reset them.
+      state._resetForSeq = 0;
+    }
+    _turnSeqTrack.set(combat.id, { seq: 0, activeId: firstCombatant.id, round: seedRound });
     // v2.34.0: stamp the breadcrumb here too (combatStart runs synchronously,
     // not via renderCombatTracker) so it's correct from the very first
     // turn-transition, before any render has fired.
     _stampActiveCombatantBreadcrumb(combat, firstCombatant.id);
   }
-
-  // v1.24: mark this round as already reaction-refreshed (init set reactions
-  // available), so the first render does not redundantly reset them.
-  _reactionResetRound = combat.round ?? 1;
 });
 
 /* ----------------------------------------------------------
@@ -1383,16 +1626,21 @@ Hooks.once('ready', () => {
       state.offHandUsed = (Number(state.offHandUsed) || 0) + 1;
       state.offSeq = (Number(state.offSeq) || 0) + 1;
       _writeOffBudget(combatantId);
-      return { combatantId, round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0, seq: state.offSeq };
+      // v2.35.0 round-03 (FD-01): token carries activeId, not turn — the sole producer of
+      // this token, so no legacy-token compatibility is needed (in-memory only, one session).
+      return { combatantId, round: game.combat?.round ?? 0, activeId: _currentActiveCombatantId(game.combat), seq: state.offSeq };
     },
     // rollback a reservation when its off-hand use() was cancelled — only if it is still the
-    // latest write for this combatant and the same round/turn (else a newer reserve superseded it).
+    // latest write for this combatant and the same round/active-combatant (else a newer
+    // reserve superseded it, or a genuine turn-start already reset the budget).
     rollbackOffHandSwing: (token) => {
       if (!token?.combatantId) return false;
       const state = _getState(token.combatantId);
       if (!state) return false;
       if ((Number(state.offSeq) || 0) !== token.seq) return false; // superseded by a newer write
-      if ((game.combat?.round ?? 0) !== token.round || (game.combat?.turn ?? 0) !== token.turn) return false;
+      // v2.35.0 round-03 (FD-01): compare (round, activeId), not (round, turn) — see
+      // OFF_BUDGET_FLAG_KEY's comment and `_currentActiveCombatantId`.
+      if ((game.combat?.round ?? 0) !== token.round || _currentActiveCombatantId(game.combat) !== token.activeId) return false;
       state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
       state.offSeq = (Number(state.offSeq) || 0) + 1;
       _writeOffBudget(token.combatantId);
@@ -3505,7 +3753,7 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   if ('bonusManual' in saved) existing.bonusManual = !!saved.bonusManual;
   if ('bonusAuto'   in saved) existing.bonusAuto   = !!saved.bonusAuto;
   if (Array.isArray(saved.bonusPip)) existing.bonusPip = [...saved.bonusPip];
-  if ('resetForRound' in saved) existing._resetForRound = saved.resetForRound;
+  if ('resetForSeq' in saved) existing._resetForSeq = saved.resetForSeq; // v1.27 round-02
 
   // Refresh the pip row in the combat tracker sidebar for this combatant.
   _refreshPipRow(combatant.id);
@@ -3515,9 +3763,15 @@ Hooks.on('updateCombatant', (combatant, changes) => {
    v2.30.0: dedicated hydrator for the ISOLATED off-hand-budget flag.
    Kept separate from the pipState hydrator above so the two never interfere.
    Rejects a stale self-echo via the monotonic `seq` (accept only seq > local —
-   GATE-1 probe fact 7), and treats a prior-round/turn value as 0 (the v1.25
+   GATE-1 probe fact 7), and treats a prior-round/activeId value as 0 (the v1.25
    "adopt current state, don't let a stale signal undo newer state" instinct).
    No UI refresh: the off-hand budget has no rendered pip.
+
+   v2.35.0 round-03 (FD-01): the current-vs-stale test now compares
+   (round, activeId) instead of (round, turn) — see OFF_BUDGET_FLAG_KEY's
+   comment and `_currentActiveCombatantId`. A legacy flag (no `activeId` key)
+   falls back to the old (round, turn) comparison so it is not treated as
+   stale-therefore-unspent.
    ---------------------------------------------------------- */
 Hooks.on('updateCombatant', (combatant, changes) => {
   if (!changes?.flags?.['baphomet-utils']?.[OFF_BUDGET_FLAG_KEY]) return;
@@ -3530,9 +3784,12 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   const incomingSeq = Number(ob.seq) || 0;
   if (incomingSeq <= (Number(existing.offSeq) || 0)) return; // stale / self-echo — ignore
   existing.offSeq = incomingSeq;
-  existing.offHandUsed = (ob.round === (combat.round ?? 0) && ob.turn === (combat.turn ?? 0))
-    ? (Number(ob.used) || 0)
-    : 0; // a prior-turn value is not valid for the current turn
+  const isCurrent = ob.round === (combat.round ?? 0) && (
+    Object.prototype.hasOwnProperty.call(ob, 'activeId')
+      ? ob.activeId === _currentActiveCombatantId(combat)
+      : ob.turn === (combat.turn ?? 0) // legacy pre-round-03 flag shape
+  );
+  existing.offHandUsed = isCurrent ? (Number(ob.used) || 0) : 0; // not current -> not valid for now
 });
 
 // Initial render on world ready — shows the panel if a combat
