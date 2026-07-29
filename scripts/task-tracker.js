@@ -109,6 +109,47 @@ const _baphTaskCache = new Map();
 const _baphHiddenTaskMap = new Map();
 
 /* ============================================================
+   SOCKETLIB REGISTRATION   [v2.36.0 — GOAL_v2.36.0_TASK_AUTH.md]
+
+   Migrates the three GM task-socket handlers (resolve/aid/readiness
+   adjudication) from raw `game.socket` to socketlib's verified-sender
+   pattern. Registered on `Hooks.once('socketlib.ready', ...)`, not
+   `pf1PostReady` — socketlib fires this hook itself from its own `init`
+   hook (docs/reference/socket-authority/socketlib-v1.1.4-source.js:18-21),
+   independent of PF1's own bootstrap timing
+   (docs/reference/socket-authority/VERIFIED_SENDER_PATTERN_REFERENCE.md §2).
+   The actual handler bodies still depend on state hydrated during
+   pf1PostReady (hidden store, cache), but that hydration only needs to be
+   complete by the time a real socket call is EXECUTED, not by the time it
+   is registered — combat, and therefore any resolve/aid/readiness call,
+   cannot occur before pf1PostReady has already run.
+
+   Handler functions are declared with `function`, not arrow syntax, so
+   socketlib's `.call({socketdata}, ...)` binding
+   (socketlib-v1.1.4-source.js:190-192, 251-259) supplies
+   `this.socketdata.userId` — the verified sender id, sourced from
+   Foundry's own socket/session layer, never a payload field
+   (VERIFIED_SENDER_PATTERN_REFERENCE.md §3).
+
+   This does NOT replace the existing raw `game.socket.on` listener
+   further down in this file — that listener still carries
+   `baphTaskRequest` / `baphTaskRequestResponse`, which are emitted from
+   action-tracker.js (out of this goal's allowlist) and are not part of
+   this migration's scope (Michael's dispatch: "the three GM task-socket
+   handlers ... (resolve, aid, readiness)").
+   ============================================================ */
+
+let _baphTaskSocket = null;
+
+Hooks.once('socketlib.ready', () => {
+  _baphTaskSocket = socketlib.registerModule(BAPH_TASK_MODULE_ID);
+  _baphTaskSocket.register('baphTaskResolveAdjudicate', _baphSocketResolveAdjudicate);
+  _baphTaskSocket.register('baphTaskAidAdjudicate',     _baphSocketAidAdjudicate);
+  _baphTaskSocket.register('baphTaskReadinessCheck',    _baphSocketReadinessCheck);
+  _baphTaskDebugLog('socketlib: registered resolve/aid/readiness handlers');
+});
+
+/* ============================================================
    INTERNAL HELPERS
    All prefixed _baphTask to avoid global scope collision.
    ============================================================ */
@@ -158,6 +199,44 @@ function _baphTaskCanControl(combatant) {
     combatant.actor?.isOwner   ||
     combatant.token?.isOwner
   );
+}
+
+/* ----------------------------------------------------------
+   _baphTaskHasAvailableAction(combatantId)   [v2.36.0 — TASK_AUTH]
+
+   Read-only availability pre-check used by the non-GM branches of
+   _baphTaskResolve / _baphTaskAid. As of v2.36.0 the GM's socketlib
+   handler is the sole authority that actually SPENDS an action for a
+   player-triggered resolve/aid (GOAL_v2.36.0_TASK_AUTH.md mapping row
+   C4 — "the socket path must perform the equivalent spend server-side,
+   not merely check a client-reported 'already spent' claim"). If the
+   requesting client also committed a spend here, an honest attempt
+   would be charged twice once the GM's replay spend lands. This helper
+   exists so the player still gets a fast, local "you have no actions"
+   rejection before rolling, without mutating any pip state itself.
+
+   Mirrors the normal-pip branch of action-tracker.js's own preflight
+   math in `_spendActionCore` (a global from that file, loaded before
+   this one in module.json's `scripts` array) — bonus-pip eligibility is
+   deliberately not mirrored here: action-tracker.js reserves the bonus
+   pip for a single ordinary Strike only (`reason.startsWith('attack-')`,
+   see `_spendActionForCombatant`'s own comment), and task resolve/aid
+   reasons ('resolve-*' / 'aid-*') never match that prefix, so bonus
+   availability is never relevant to this check.
+
+   Read-only: calls `_getState` (a global from action-tracker.js) for its
+   current in-memory snapshot only. Never calls `_spendActionForCombatant`
+   or `_spendActionCore`, and does not modify action-tracker.js.
+
+   @param {string} combatantId
+   @returns {boolean}
+   ---------------------------------------------------------- */
+
+function _baphTaskHasAvailableAction(combatantId) {
+  const state = (typeof _getState === 'function') ? _getState(combatantId) : null;
+  if (!state || !Array.isArray(state.actions)) return false;
+  const normalAvail = state.actions.filter((a, i) => a && i >= (state.conditionLocked ?? 0)).length;
+  return normalAvail >= 1;
 }
 
 /* ----------------------------------------------------------
@@ -414,10 +493,43 @@ function _baphTaskAssertNoSecrets(value, label = 'task payload') {
   return value;
 }
 
+/* ----------------------------------------------------------
+   _baphTaskEmitSocket(action, payload)   [v2.36.0 — TASK_AUTH]
+
+   Sends a resolve/aid/readiness adjudication request to the GM via
+   socketlib's `executeAsGM`, instead of a raw `game.socket.emit`.
+   `action` is the socketlib-registered handler name (registered above
+   on `socketlib.ready`) — socketlib routes to it directly; there is no
+   longer an `{action, payload}` envelope or GM-side if/else dispatch for
+   these three actions (contrast the still-raw baphTaskRequest /
+   baphTaskRequestResponse pair, untouched, out of this goal's scope).
+
+   `_baphTaskAssertNoSecrets` is preserved unchanged — payload must still
+   carry no hidden fields (dc, roundsRequired, trapName, metadataHidden).
+
+   Fire-and-forget from the caller's perspective (existing callers do not
+   await this function), but the underlying socketlib call is a real,
+   awaited request on this function's own async chain: `executeAsGM`
+   returns a rejected promise on GM-side exception, unregistered handler,
+   or zero connected GMs (socketlib-v1.1.4-source.js:87-98, 217-268) —
+   caught here and logged rather than left as an unhandled rejection.
+   ---------------------------------------------------------- */
 function _baphTaskEmitSocket(action, payload) {
-  const message = { action, payload };
-  _baphTaskAssertNoSecrets(message, `socket.${action}`);
-  game.socket.emit(`module.${BAPH_TASK_MODULE_ID}`, message);
+  _baphTaskAssertNoSecrets(payload, `socket.${action}`);
+  if (!_baphTaskSocket) {
+    console.warn(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: socketlib module not yet registered — ` +
+      `"${action}" not sent.`
+    );
+    ui.notifications?.warn?.('Socket layer not ready yet — try again in a moment.');
+    return;
+  }
+  _baphTaskSocket.executeAsGM(action, payload).catch((err) => {
+    console.error(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: "${action}" GM adjudication failed: ${err}`
+    );
+    ui.notifications?.warn?.('The GM could not process this request — see console for details.');
+  });
 }
 
 async function _baphTaskCreateChatMessage(data) {
@@ -892,7 +1004,6 @@ async function _baphTaskCommit(combatantOrId, taskId) {
       combatantId:        combatant.id,
       taskId,
       roundsCommitted:    task.roundsCommitted,
-      requestingUserId:   game.user.id,
     });
   }
 
@@ -1211,9 +1322,20 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
      6.  Task readyToResolve is true
      7.  Task status is not already 'resolved' or 'abandoned'
      8.  Same-round guard (lastResolvedAttemptRound !== currentRound)
-     9.  Spend 1 action via _spendActionForCombatant
+     9.  Player-triggered resolve requires a live active GM before spending
+     10. Action available — see the split below (v2.36.0)
 
-   On spend success:
+   Gate 10 spend split (v2.36.0 — GOAL_v2.36.0_TASK_AUTH.md, mapping row C4):
+     - GM-direct path (game.user.isGM): spends 1 action right here, locally,
+       exactly as before — no socket round-trip is involved.
+     - Non-GM (player) path: performs a READ-ONLY availability pre-check
+       (_baphTaskHasAvailableAction) only. The GM's socketlib-registered
+       handler (_baphSocketResolveAdjudicate) is now the sole authority that
+       actually spends the action for this event, as part of its own gate
+       replay — spending here too would double-charge an honest attempt once
+       that replay lands. See SOCKET_AUTHORITY_HARDENING_DESIGN.md D3 §3.
+
+   On success:
      - Registers a one-time pf1ActorRollSkill hook to capture total.
      - Sets _baphResolveTaskRollActive=true so action-tracker.js
        suppresses the 'dev' no-auto-spend warning during this roll.
@@ -1226,12 +1348,17 @@ async function _baphTaskAdjudicate(combatant, taskId, task, rollTotal) {
        chat, and writes all task state changes in one setFlag call.
 
    Non-GM clients:
-     - Writes lastResolvedAttemptRound to actor flags immediately.
-     - Emits a socket message (module.baphomet-utils) with the roll
-       total and identifying context.
-     - The socket listener on the GM client picks this up and calls
-       _baphTaskAdjudicate() server-side to classify without leaking
-       the hidden DC to the player.
+     - Emits a socketlib call (module.baphomet-utils, registered handler
+       _baphSocketResolveAdjudicate) with the roll total and task context.
+       Caller identity is never taken from this payload — the GM handler
+       derives it from `this.socketdata.userId`, socketlib's own verified
+       sender (docs/reference/socket-authority/
+       VERIFIED_SENDER_PATTERN_REFERENCE.md §3).
+     - The GM handler re-verifies ownership against that verified id, then
+       replays the active-combatant, same-round, and action-spend gates on
+       its own authority (mirroring Gates 3, 8, 10 above) before calling
+       _baphTaskAdjudicate() to classify without leaking the hidden DC to
+       the player.
 
    @param {Combatant|string} combatant
    @param {string}           taskId
@@ -1321,19 +1448,39 @@ async function _baphTaskResolve(combatantOrId, taskId) {
     return false;
   }
 
-  // Gate 10: spend 1 action
-  const spent = _spendActionForCombatant(combatant.id, 1, `resolve-${task.skillKey}`);
-  if (!spent) {
-    _baphTaskDebugLog(
-      `resolveTask rejected: action spend failed for "${task.taskName}" ` +
-      `— not enough actions remaining`
-    );
-    return false;
+  // Gate 10: action available (v2.36.0 split — GOAL_v2.36.0_TASK_AUTH.md row C4).
+  // GM-direct: spend now, locally, as before. Non-GM: read-only pre-check only —
+  // the GM's socketlib handler (_baphSocketResolveAdjudicate) performs the actual,
+  // authoritative spend for this event; spending here too would double-charge an
+  // honest attempt. See docblock above and _baphTaskHasAvailableAction's own comment.
+  if (game.user.isGM) {
+    const spent = _spendActionForCombatant(combatant.id, 1, `resolve-${task.skillKey}`);
+    if (!spent) {
+      _baphTaskDebugLog(
+        `resolveTask rejected: action spend failed for "${task.taskName}" ` +
+        `— not enough actions remaining`
+      );
+      return false;
+    }
+  } else {
+    if (!_baphTaskHasAvailableAction(combatant.id)) {
+      _baphTaskDebugLog(
+        `resolveTask rejected: no action pip appears available for "${combatant.name}" ` +
+        `(read-only pre-check — the GM performs the authoritative spend)`
+      );
+      return false;
+    }
   }
 
   // ── All gates passed. Roll the resolution skill check. ────────────
 
   // Record this attempt so same-round double-clicks are blocked.
+  // GM-direct path: this mutation is what _baphTaskAdjudicate persists below.
+  // Non-GM path (v2.36.0): NOT persisted by this client anymore — the GM's
+  // socketlib handler stamps and persists this itself as part of its own
+  // same-round gate replay (mirrors Gate 8; see the docblock above and
+  // SOCKET_AUTHORITY_HARDENING_DESIGN.md D3 §3). Left as a local, unpersisted
+  // in-memory value here has no effect on the non-GM branch below.
   task.lastResolvedAttemptRound = currentRound;
 
   // Capture the roll total via pf1ActorRollSkill.
@@ -1376,11 +1523,12 @@ async function _baphTaskResolve(combatantOrId, taskId) {
     // in a single setFlag call via _baphTaskAdjudicate.
     await _baphTaskAdjudicate(combatant, taskId, task, capturedTotal);
   } else {
-    // Non-GM path: write the player's lastResolvedAttemptRound change first
-    // to block same-round retry, then request GM-side adjudication via socket.
-    tasks[taskId] = task;
-    await _baphTaskWriteActorTasks(combatant.actor, tasks);
-    _baphTaskUpdateCache(combatant.id, tasks);
+    // Non-GM path (v2.36.0): no local write here anymore — the GM's socketlib
+    // handler is now the sole authority for both the same-round stamp and the
+    // action spend (see the Gate 10 split and docblock above). Request GM-side
+    // adjudication via socketlib; caller identity travels as the verified
+    // `this.socketdata.userId` on the GM's registered handler, never as a
+    // payload field (VERIFIED_SENDER_PATTERN_REFERENCE.md §3).
 
     if (capturedTotal !== null && Number.isFinite(capturedTotal)) {
       _baphTaskDebugLog(
@@ -1391,7 +1539,6 @@ async function _baphTaskResolve(combatantOrId, taskId) {
         combatantId:        combatant.id,
         taskId,
         rollTotal:          capturedTotal,
-        requestingUserId:   game.user.id,
       });
     } else {
       // Roll total not captured — socket not emitted; GM must adjudicate manually.
@@ -1429,17 +1576,31 @@ async function _baphTaskResolve(combatantOrId, taskId) {
      6.  Target task exists, status is 'active', readyToResolve is true,
          not already terminal
      7.  Aider has not already contributed aid to this task this round
-     8.  Spend 1 action from aider via _spendActionForCombatant
+     8.  Action available from aider — see the split below (v2.36.0)
+
+   Gate 8 spend split (v2.36.0 — GOAL_v2.36.0_TASK_AUTH.md, mapping row C4,
+   mirrors the same split in _baphTaskResolve's Gate 10):
+     - GM-direct path (game.user.isGM): spends 1 action from the aider right
+       here, locally, exactly as before.
+     - Non-GM (player) path: performs a READ-ONLY availability pre-check
+       (_baphTaskHasAvailableAction) only. The GM's socketlib-registered
+       handler (_baphSocketAidAdjudicate) is the sole authority that actually
+       spends the aider's action for this event, as part of its own gate
+       replay — spending here too would double-charge an honest attempt.
 
    GM clients:
      - Write the +2 bonus directly to the target actor's task flags.
      - Post a chat message confirming aid.
 
    Non-GM clients:
-     - Action is already spent; emit a socket message (module.baphomet-utils)
-       with action 'baphTaskAidAdjudicate'.
-     - GM socket listener validates and writes the bonus.
-     - Hidden DC and hidden task metadata are never transmitted.
+     - Emits a socketlib call (module.baphomet-utils, registered handler
+       _baphSocketAidAdjudicate). Caller identity is never taken from this
+       payload — the GM handler derives it from `this.socketdata.userId`,
+       socketlib's own verified sender (VERIFIED_SENDER_PATTERN_REFERENCE.md
+       §3). The GM handler re-verifies ownership, replays the active-
+       combatant and action-spend gates (mirroring Gates 3 and 8 above), then
+       validates and writes the bonus. Hidden DC and hidden task metadata are
+       never transmitted.
 
    @param {Combatant|string} aiderCombatantOrId
    @param {Combatant|string} targetCombatantOrId
@@ -1527,13 +1688,26 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
     return false;
   }
 
-  // Gate 8: spend 1 action from aider
-  const spent = _spendActionForCombatant(aider.id, 1, `aid-${targetTask.skillKey}`);
-  if (!spent) {
-    _baphTaskDebugLog(
-      `aidTask rejected: action spend failed for aider "${aider.name}" — not enough actions remaining`
-    );
-    return false;
+  // Gate 8: action available from aider (v2.36.0 split — GOAL_v2.36.0_TASK_AUTH.md
+  // row C4). GM-direct: spend now, locally, as before. Non-GM: read-only pre-check
+  // only — the GM's socketlib handler (_baphSocketAidAdjudicate) performs the
+  // actual, authoritative spend for this event. See docblock above.
+  if (game.user.isGM) {
+    const spent = _spendActionForCombatant(aider.id, 1, `aid-${targetTask.skillKey}`);
+    if (!spent) {
+      _baphTaskDebugLog(
+        `aidTask rejected: action spend failed for aider "${aider.name}" — not enough actions remaining`
+      );
+      return false;
+    }
+  } else {
+    if (!_baphTaskHasAvailableAction(aider.id)) {
+      _baphTaskDebugLog(
+        `aidTask rejected: no action pip appears available for aider "${aider.name}" ` +
+        `(read-only pre-check — the GM performs the authoritative spend)`
+      );
+      return false;
+    }
   }
 
   // ── All gates passed. Roll the Aid Another skill check (DC 10). ─────────────
@@ -1626,9 +1800,13 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
       );
     }
   } else {
-    // Non-GM path: action already spent on player client.
-    // Emit socket with roll total for GM-side DC 10 adjudication.
-    // Hidden task DC and metadataHidden are never transmitted.
+    // Non-GM path (v2.36.0): the aider's action is NOT spent on this client
+    // anymore (see the Gate 8 split above) — the GM's socketlib handler
+    // performs the authoritative spend as part of its own gate replay.
+    // Emit via socketlib with roll total for GM-side DC 10 adjudication.
+    // Caller identity travels as the verified `this.socketdata.userId` on the
+    // GM's registered handler, never as a payload field. Hidden task DC and
+    // metadataHidden are never transmitted.
     _baphTaskDebugLog(
       `aidTask: emitting GM aid adjudication request — ` +
       `aider=${aider.id}, target=${targetCombatant.id}, task=${targetTaskId}, ` +
@@ -1642,7 +1820,6 @@ async function _baphTaskAid(aiderCombatantOrId, targetCombatantOrId, targetTaskI
         aiderActorName:    aider.actor.name,
         targetCombatantId: targetCombatant.id,
         targetTaskId,
-        requestingUserId:  game.user.id,
         roundAdded:        game.combat.round,
         rollTotal:         capturedAidTotal,  // GM uses this for public Aid threshold check
       });
@@ -2146,6 +2323,496 @@ function _baphProcessNextGMRequest() {
 }
 
 /* ============================================================
+   SOCKETLIB-REGISTERED GM HANDLERS   [v2.36.0 — GOAL_v2.36.0_TASK_AUTH.md]
+
+   Registered on socketlib (see Hooks.once('socketlib.ready', ...) near
+   the top of this file). Each of these replaces a former raw-socket
+   `else if (message?.action === ...)` branch (D2 mapping rows C1-C3,
+   SOCKET_AUTHORITY_HARDENING_DESIGN.md). All three:
+
+     - Must be `function`-declared, not arrow, so socketlib's own
+       `.call({socketdata}, ...)` binding supplies `this.socketdata.userId`
+       (socketlib-v1.1.4-source.js:190-192, 251-259).
+     - Derive the caller's identity EXCLUSIVELY from
+       `this.socketdata.userId` — never from a payload field. The former
+       `requestingUserId` payload field has been removed from every
+       emit site; nothing in this trust decision is client-claimed.
+     - Only ever actually execute for a non-GM caller: the client-side
+       functions in this file (_baphTaskResolve, _baphTaskAid,
+       _baphTaskCommit) each already branch `if (game.user.isGM) { ... }
+       else { emit socket }` — a GM never reaches these handlers via
+       socketlib, it adjudicates directly, in-process.
+   ============================================================ */
+
+/* ── baphTaskResolveAdjudicate ──────────────────────────────────────
+   Player-triggered task resolution. GM verifies the caller, re-checks
+   ownership against that verified id, then REPLAYS the client-path
+   authoritative gates the raw socket path never enforced (D2 mapping
+   row C4 / D3 §3):
+     - Gate 3 replay: the combatant must be the active combatant, per the
+       GM's own authoritative `game.combat` — mirrors _baphTaskResolve's
+       Gate 3.
+     - Gate 8 replay: same-round guard, read from the real persisted
+       task state (never from anything the payload claims) — mirrors
+       _baphTaskResolve's Gate 8. The GM stamps the attempt round itself
+       before adjudicating; the non-GM client no longer pre-writes it
+       (see _baphTaskResolve's non-GM branch comment).
+     - Gate 10 replay: the GM performs the actual action spend itself,
+       via the same _spendActionForCombatant global the client path
+       uses — the sole spend for this event (see _baphTaskResolve's
+       Gate 10 split comment for why the client no longer commits one).
+
+   v2.36.0 round 2 (FIX-01, OVERSEER RULING #3 finding 1): a synchronous
+   in-flight reservation (_baphResolveInFlight, keyed on combatant+task+
+   round, inserted before any `await`) rejects a concurrent duplicate
+   invocation for the same combatant/task/round while the first is still
+   awaiting adjudication; and the same-round stamp is persisted to the
+   actor flag immediately after the spend, before `_baphTaskAdjudicate`
+   is awaited, so its early-return paths (no hidden data / DC absent)
+   still leave the round stamped rather than open to a free retry.
+──────────────────────────────────────────────────────────────────────── */
+// Module-level in-flight reservation set (FIX-01). Keys are
+// `${combatantId}:${taskId}:${round}`. Inserted synchronously (no prior
+// `await` in this handler) so two overlapping invocations for the same
+// key cannot both pass; released in a `finally` so a thrown handler can
+// never leave a task permanently blocked.
+const _baphResolveInFlight = new Set();
+
+async function _baphSocketResolveAdjudicate(payload = {}) {
+  // FIX-02 — activeGM election, mirrors :2788-2789 unchanged. Silent
+  // return by design: this only ever declines traffic a non-active GM
+  // client is correctly ignoring (hidden store is per-GM-client; see
+  // OVERSEER RULING #3 finding 2). Do not use _baphTaskEnsureActiveGMClient
+  // here — it raises ui.notifications warnings, which must not surface to
+  // a non-active GM for traffic it correctly ignores.
+  if (!game.user.isGM) return;
+  if (game.user !== game.users?.activeGM) return;
+
+  const requestingUserId = this?.socketdata?.userId;
+  const { combatantId, taskId, rollTotal } = payload ?? {};
+
+  _baphTaskDebugLog(
+    `socketlib: baphTaskResolveAdjudicate received — ` +
+    `combatant=${combatantId}, task=${taskId}, total=${rollTotal}, from=${requestingUserId}`
+  );
+
+  if (!Number.isFinite(rollTotal)) {
+    _baphTaskDebugLog('socketlib resolveAdjudicate: rollTotal not finite — rejected');
+    return;
+  }
+
+  if (!game.combat) {
+    _baphTaskDebugLog('socketlib resolveAdjudicate: no active combat — rejected');
+    return;
+  }
+  const combatant = game.combat.combatants.get(combatantId);
+  if (!combatant?.actor) {
+    _baphTaskDebugLog(`socketlib resolveAdjudicate: combatant "${combatantId}" not found — rejected`);
+    return;
+  }
+
+  const requestingUser = game.users.get(requestingUserId);
+  if (!requestingUser) {
+    _baphTaskDebugLog(`socketlib resolveAdjudicate: requesting user "${requestingUserId}" not found — rejected`);
+    return;
+  }
+  const OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+  const actorOwnership = combatant.actor.ownership ?? {};
+  const userLevel      = actorOwnership[requestingUserId] ?? 0;
+  const defaultLevel   = actorOwnership['default'] ?? 0;
+  const effectiveLevel = Math.max(userLevel, defaultLevel);
+  if (!requestingUser.isGM && effectiveLevel < OWNER_LEVEL) {
+    _baphTaskDebugLog(
+      `socketlib resolveAdjudicate: user "${requestingUserId}" cannot control ` +
+      `"${combatant.name}" — rejected`
+    );
+    return;
+  }
+
+  // Gate 3 replay (mirror _baphTaskResolve's Gate 3) — must be the active combatant.
+  if (combatant.id !== game.combat.combatant?.id) {
+    _baphTaskDebugLog(
+      `socketlib resolveAdjudicate: "${combatant.name}" is not the active combatant ` +
+      `(active: "${game.combat.combatant?.name ?? 'none'}") — rejected`
+    );
+    return;
+  }
+
+  const tasks = _baphTaskReadActorTasks(combatant.actor);
+  const task  = tasks[taskId];
+  if (!task) {
+    _baphTaskDebugLog(`socketlib resolveAdjudicate: task "${taskId}" not found on ${combatant.actor.name}`);
+    return;
+  }
+  if (!task.readyToResolve) {
+    _baphTaskDebugLog(`socketlib resolveAdjudicate: task "${task.taskName}" is not ready to resolve`);
+    return;
+  }
+  if (task.status === 'resolved' || task.status === 'abandoned') {
+    _baphTaskDebugLog(`socketlib resolveAdjudicate: task "${task.taskName}" already ${task.status}`);
+    return;
+  }
+
+  // Gate 8 replay (mirror _baphTaskResolve's Gate 8) — same-round guard, read
+  // from the real persisted task state, never from anything the payload claims.
+  const currentRound = game.combat.round;
+  if ((task.lastResolvedAttemptRound ?? null) === currentRound) {
+    _baphTaskDebugLog(
+      `socketlib resolveAdjudicate: already attempted resolution for "${task.taskName}" ` +
+      `this round (round ${currentRound}) — rejected`
+    );
+    return;
+  }
+
+  // FIX-01 — synchronous check-and-insert reservation, before any `await` in
+  // this handler. Two overlapping baphTaskResolveAdjudicate calls for the
+  // same combatant+task+round can otherwise both pass Gate 8 above (the
+  // same-round stamp is not persisted until after this point) and both
+  // reach the spend below. JS is single-threaded, so this check-then-set is
+  // atomic with respect to any other invocation of this same function; a
+  // flag read after an `await` would not be.
+  const resolveReservationKey = `${combatantId}:${taskId}:${currentRound}`;
+  if (_baphResolveInFlight.has(resolveReservationKey)) {
+    _baphTaskDebugLog(
+      `socketlib resolveAdjudicate: duplicate concurrent resolve for "${task.taskName}" ` +
+      `(key ${resolveReservationKey}) — rejected`
+    );
+    return;
+  }
+  _baphResolveInFlight.add(resolveReservationKey);
+
+  try {
+    // Gate 10 replay (mirror _baphTaskResolve's Gate 10) — the GM performs the
+    // actual spend, authoritatively. This is the only spend for a player-
+    // triggered resolve.
+    const spent = _spendActionForCombatant(combatantId, 1, `resolve-${task.skillKey}`);
+    if (!spent) {
+      _baphTaskDebugLog(
+        `socketlib resolveAdjudicate: action spend failed for "${task.taskName}" ` +
+        `— not enough actions remaining — rejected`
+      );
+      return;
+    }
+
+    // Stamp the attempt round now, authoritatively, before adjudicating.
+    task.lastResolvedAttemptRound = currentRound;
+
+    // FIX-01 — persist the stamp to the actor flag now, BEFORE awaiting
+    // _baphTaskAdjudicate, so its early-return paths (no hidden data on this
+    // GM client; DC absent / roll not finite) still leave the round stamped
+    // rather than open to a free repeat attempt. Read fresh tasks so no
+    // concurrent sibling-task change is discarded; _baphTaskAdjudicate's own
+    // later write re-reads fresh tasks again, so this stays consistent.
+    const preAdjudicateTasks = _baphTaskReadActorTasks(combatant.actor);
+    preAdjudicateTasks[taskId] = task;
+    await _baphTaskWriteActorTasks(combatant.actor, preAdjudicateTasks);
+    _baphTaskUpdateCache(combatant.id, preAdjudicateTasks);
+
+    _baphTaskDebugLog(
+      `socketlib resolveAdjudicate: adjudicating "${task.taskName}" for ${combatant.actor.name} ` +
+      `(roll total: ${rollTotal})`
+    );
+    await _baphTaskAdjudicate(combatant, taskId, task, rollTotal);
+  } finally {
+    _baphResolveInFlight.delete(resolveReservationKey);
+  }
+}
+
+/* ── baphTaskAidAdjudicate ──────────────────────────────────────────
+   Player-triggered aid on another combatant's ready task. GM verifies
+   the caller, re-checks ownership of the aider against that verified
+   id, replays the active-combatant gate (mirror _baphTaskAid's Gate 3 —
+   not present in the pre-migration handler), the existing target-task-
+   active and duplicate-contributor checks (unchanged, already GM-side),
+   and the action-spend gate (mirror _baphTaskAid's Gate 8 — the GM is
+   now the sole authority that spends the aider's action for this event;
+   see _baphTaskAid's Gate 8 split comment).
+──────────────────────────────────────────────────────────────────────── */
+async function _baphSocketAidAdjudicate(payload = {}) {
+  // FIX-02 — activeGM election, mirrors :2788-2789 unchanged. Silent
+  // return by design: this only ever declines traffic a non-active GM
+  // client is correctly ignoring (hidden store is per-GM-client; see
+  // OVERSEER RULING #3 finding 2). Do not use _baphTaskEnsureActiveGMClient
+  // here — it raises ui.notifications warnings, which must not surface to
+  // a non-active GM for traffic it correctly ignores.
+  if (!game.user.isGM) return;
+  if (game.user !== game.users?.activeGM) return;
+
+  const requestingUserId = this?.socketdata?.userId;
+  const {
+    aiderCombatantId, aiderActorId, aiderActorName,
+    targetCombatantId, targetTaskId,
+    roundAdded,
+    rollTotal,   // received from player client; GM performs DC 10 check
+  } = payload ?? {};
+
+  _baphTaskDebugLog(
+    `socketlib: baphTaskAidAdjudicate received — ` +
+    `aider=${aiderCombatantId}, target=${targetCombatantId}, task=${targetTaskId}, ` +
+    `rollTotal=${rollTotal}, from=${requestingUserId}, round=${roundAdded}`
+  );
+
+  if (!game.combat) {
+    _baphTaskDebugLog('socketlib aidAdjudicate: no active combat — rejected');
+    return;
+  }
+
+  const aider = game.combat.combatants.get(aiderCombatantId);
+  if (!aider?.actor) {
+    _baphTaskDebugLog(`socketlib aidAdjudicate: aider "${aiderCombatantId}" not found — rejected`);
+    return;
+  }
+
+  const requestingUser = game.users.get(requestingUserId);
+  if (!requestingUser) {
+    _baphTaskDebugLog(`socketlib aidAdjudicate: requesting user "${requestingUserId}" not found — rejected`);
+    return;
+  }
+  const OWNER_LEVEL     = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+  const aiderOwnership  = aider.actor.ownership ?? {};
+  const aiderUserLevel  = aiderOwnership[requestingUserId] ?? 0;
+  const aiderDefLevel   = aiderOwnership['default'] ?? 0;
+  const aiderEffLevel   = Math.max(aiderUserLevel, aiderDefLevel);
+  if (!requestingUser.isGM && aiderEffLevel < OWNER_LEVEL) {
+    _baphTaskDebugLog(
+      `socketlib aidAdjudicate: user "${requestingUserId}" cannot control ` +
+      `aider "${aider.name}" — rejected`
+    );
+    return;
+  }
+
+  // Gate 3 replay (mirror _baphTaskAid's Gate 3 — NOT present in the
+  // pre-migration handler) — aider must be the active combatant.
+  if (aider.id !== game.combat.combatant?.id) {
+    _baphTaskDebugLog(
+      `socketlib aidAdjudicate: "${aider.name}" is not the active combatant ` +
+      `(active: "${game.combat.combatant?.name ?? 'none'}") — rejected`
+    );
+    return;
+  }
+
+  const targetCombatant = game.combat.combatants.get(targetCombatantId);
+  if (!targetCombatant?.actor) {
+    _baphTaskDebugLog(`socketlib aidAdjudicate: target combatant "${targetCombatantId}" not found — rejected`);
+    return;
+  }
+
+  if (aiderCombatantId === targetCombatantId) {
+    _baphTaskDebugLog('socketlib aidAdjudicate: aider and target are the same combatant — rejected');
+    return;
+  }
+
+  const targetTasks = _baphTaskReadActorTasks(targetCombatant.actor);
+  const targetTask  = targetTasks[targetTaskId];
+  if (!targetTask) {
+    _baphTaskDebugLog(`socketlib aidAdjudicate: task "${targetTaskId}" not found on ${targetCombatant.actor.name}`);
+    return;
+  }
+  // Eligibility: task must be active (in-progress or ready), not terminal.
+  // Unchanged from the pre-migration handler — already GM-side authoritative.
+  if (targetTask.status !== 'active') {
+    _baphTaskDebugLog(`socketlib aidAdjudicate: target task "${targetTask.taskName}" is not active (${targetTask.status}) — rejected`);
+    return;
+  }
+
+  // Duplicate check: one successful contribution per helper per pending Resolve
+  // attempt. Unchanged from the pre-migration handler — already GM-side authoritative.
+  const existingContributors = targetTask.successfulAidContributors ?? [];
+  if (existingContributors.includes(aiderCombatantId)) {
+    _baphTaskDebugLog(
+      `socketlib aidAdjudicate: duplicate successful aid from "${aiderCombatantId}" on ` +
+      `"${targetTask.taskName}" — rejected`
+    );
+    return;
+  }
+
+  // Gate 8 replay (mirror _baphTaskAid's Gate 8) — the GM performs the actual
+  // spend, authoritatively. This is the only spend for a player-triggered aid.
+  const spent = _spendActionForCombatant(aiderCombatantId, 1, `aid-${targetTask.skillKey}`);
+  if (!spent) {
+    _baphTaskDebugLog(
+      `socketlib aidAdjudicate: action spend failed for aider "${aider.name}" ` +
+      `— not enough actions remaining — rejected`
+    );
+    return;
+  }
+
+  // DC 10 comparison on GM side
+  const AID_DC = 10;
+  const aidSucceeded = Number.isFinite(rollTotal) && rollTotal >= AID_DC;
+
+  if (aidSucceeded) {
+    const bonusEntry = {
+      sourceCombatantId: aiderCombatantId,
+      sourceActorId:     aiderActorId,
+      sourceUserId:      requestingUserId,
+      amount:            2,
+      label:             'Aid Another',
+      roundAdded,
+    };
+    const existingBonuses = targetTask.pendingResolutionBonuses ?? [];
+    targetTask.pendingResolutionBonuses  = [...existingBonuses, bonusEntry];
+    targetTask.successfulAidContributors = [...existingContributors, aiderCombatantId];
+    targetTasks[targetTaskId]            = targetTask;
+    await _baphTaskWriteActorTasks(targetCombatant.actor, targetTasks);
+    _baphTaskUpdateCache(targetCombatant.id, targetTasks);
+
+    await _baphTaskCreateChatMessage({
+      content:
+        `<p><strong>${foundry.utils.escapeHTML(aiderActorName ?? aider.actor.name)}</strong> aids ` +
+        `<strong>${foundry.utils.escapeHTML(targetCombatant.actor.name)}</strong>'s ` +
+        `<em>${foundry.utils.escapeHTML(targetTask.taskName)}</em>.</p>` +
+        `<p>Aid check: <strong>${rollTotal}</strong> — ` +
+        `<strong>Success.</strong> Aid queued: +2 to the next resolution roll.</p>`,
+      speaker: { alias: 'Baphomet Tasks' },
+      whisper: [],
+    });
+
+    _baphTaskDebugLog(
+      `socketlib aidAdjudicate: SUCCESS — +2 aid applied to "${targetTask.taskName}" on ` +
+      `${targetCombatant.actor.name} (from ${aiderActorName ?? aider.actor.name}, ` +
+      `roll ${rollTotal} vs DC ${AID_DC})`
+    );
+  } else {
+    // Failed aid: no bonus, no contributor record added
+    await _baphTaskCreateChatMessage({
+      content:
+        `<p><strong>${foundry.utils.escapeHTML(aiderActorName ?? aider.actor.name)}</strong> attempts to aid ` +
+        `<strong>${foundry.utils.escapeHTML(targetCombatant.actor.name)}</strong>'s ` +
+        `<em>${foundry.utils.escapeHTML(targetTask.taskName)}</em>.</p>` +
+        `<p>Aid check: <strong>${Number.isFinite(rollTotal) ? rollTotal : '?'}</strong> — ` +
+        `<strong>Failure.</strong> No bonus queued. Action spent.</p>`,
+      speaker: { alias: 'Baphomet Tasks' },
+      whisper: [],
+    });
+
+    _baphTaskDebugLog(
+      `socketlib aidAdjudicate: FAILURE — aid failed for "${targetTask.taskName}" ` +
+      `(from ${aiderActorName ?? aider.actor.name}, roll ${rollTotal} vs DC ${AID_DC})`
+    );
+  }
+}
+
+/* ── baphTaskReadinessCheck ──────────────────────────────────────────
+   Player-driven Continue Task committed public progress. GM verifies
+   the caller, re-checks ownership against that verified id, then reads
+   hidden roundsRequired and compares against the authoritative public
+   roundsCommitted from actor flags (never from payload), flipping
+   readyToResolve when the threshold is met. Hidden duration never
+   leaves GM-side storage.
+
+   No additional gate replay beyond identity (D2 mapping row C4 / C3
+   note, confirmed during implementation against _baphTaskCommit's
+   client gates): this handler can only flip readyToResolve from real,
+   already-persisted, permission-enforced progress — it cannot fabricate
+   roundsCommitted, so a caller who is not the active combatant, or who
+   re-triggers this check redundantly, cannot gain anything a genuinely
+   idempotent recheck wouldn't already show.
+──────────────────────────────────────────────────────────────────────── */
+async function _baphSocketReadinessCheck(payload = {}) {
+  // FIX-02 — activeGM election, mirrors :2788-2789 unchanged. Silent
+  // return by design: this only ever declines traffic a non-active GM
+  // client is correctly ignoring (hidden store is per-GM-client; see
+  // OVERSEER RULING #3 finding 2). Do not use _baphTaskEnsureActiveGMClient
+  // here — it raises ui.notifications warnings, which must not surface to
+  // a non-active GM for traffic it correctly ignores.
+  if (!game.user.isGM) return;
+  if (game.user !== game.users?.activeGM) return;
+
+  const requestingUserId = this?.socketdata?.userId;
+  const { combatantId, taskId } = payload ?? {};
+
+  _baphTaskDebugLog(
+    `socketlib: baphTaskReadinessCheck received — ` +
+    `combatant=${combatantId}, task=${taskId}, from=${requestingUserId}`
+  );
+
+  if (!game.combat) {
+    _baphTaskDebugLog('socketlib readinessCheck: no active combat — rejected');
+    return;
+  }
+
+  const rcCombatant = game.combat.combatants.get(combatantId);
+  if (!rcCombatant?.actor) {
+    _baphTaskDebugLog(`socketlib readinessCheck: combatant "${combatantId}" not found — rejected`);
+    return;
+  }
+
+  const rcUser = game.users.get(requestingUserId);
+  if (!rcUser) {
+    _baphTaskDebugLog(`socketlib readinessCheck: user "${requestingUserId}" not found — rejected`);
+    return;
+  }
+  const RC_OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+  const rcActorOwnership  = rcCombatant.actor.ownership ?? {};
+  const rcUserLevel       = rcActorOwnership[requestingUserId] ?? 0;
+  const rcDefaultLevel    = rcActorOwnership['default'] ?? 0;
+  const rcEffectiveLevel  = Math.max(rcUserLevel, rcDefaultLevel);
+  if (!rcUser.isGM && rcEffectiveLevel < RC_OWNER_LEVEL) {
+    _baphTaskDebugLog(
+      `socketlib readinessCheck: user "${requestingUserId}" cannot control ` +
+      `"${rcCombatant.name}" — rejected`
+    );
+    return;
+  }
+
+  // Read authoritative public task state directly from actor flags (not payload).
+  const rcTasks = _baphTaskReadActorTasks(rcCombatant.actor);
+  const rcTask  = rcTasks[taskId];
+  if (!rcTask) {
+    _baphTaskDebugLog(`socketlib readinessCheck: task "${taskId}" not found on ${rcCombatant.actor.name} — rejected`);
+    return;
+  }
+  if (rcTask.status !== 'active') {
+    _baphTaskDebugLog(`socketlib readinessCheck: task "${rcTask.taskName}" is not active (${rcTask.status}) — no-op`);
+    return;
+  }
+  if (rcTask.readyToResolve) {
+    _baphTaskDebugLog(`socketlib readinessCheck: task "${rcTask.taskName}" already readyToResolve — no-op`);
+    return;
+  }
+
+  // Read hidden data from the active GM client store. Hidden duration never leaves GM-side storage.
+  const rcHiddenAll = _baphTaskReadHiddenAll();
+  const rcHidden    = rcHiddenAll[taskId];
+  if (!rcHidden?.roundsRequired) {
+    _baphTaskDebugLog(
+      `socketlib readinessCheck WARNING: no hidden data for task "${taskId}" on this GM client — ` +
+      `readyToResolve not evaluated`
+    );
+    ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
+    console.warn(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
+      `socketlib readinessCheck — no hidden data for task "${taskId}". ` +
+      `Was this task created by a different GM user?`
+    );
+    return;
+  }
+
+  if (rcTask.roundsCommitted >= rcHidden.roundsRequired) {
+    rcTask.readyToResolve = true;
+    rcTasks[taskId] = rcTask;
+    await _baphTaskWriteActorTasks(rcCombatant.actor, rcTasks);
+    _baphTaskUpdateCache(rcCombatant.id, rcTasks);
+
+    _baphTaskDebugLog(
+      `socketlib readinessCheck: "${rcTask.taskName}" is ready to resolve ` +
+      `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
+    );
+    console.debug(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
+      `socketlib readinessCheck — "${rcTask.taskName}" is ready to resolve ` +
+      `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
+    );
+  } else {
+    _baphTaskDebugLog(
+      `socketlib readinessCheck: "${rcTask.taskName}" not yet ready ` +
+      `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds) — no-op`
+    );
+  }
+}
+
+/* ============================================================
    HOOK: pf1PostReady
 
    - Rebuild in-memory cache from actor flags.
@@ -2161,17 +2828,21 @@ Hooks.once('pf1PostReady', async () => {
   _baphTaskHydrateHiddenStore();
   _baphTaskRebuildCache();
 
-  /* ── Socket: GM-side adjudication for player-triggered Resolve Task ──
-     Registered on all clients; only the GM client processes messages.
-     Channel: module.baphomet-utils  (requires "socket": true in module.json)
+  /* ── Socket: baphTaskRequest / baphTaskRequestResponse only ──────────
+     Registered on all clients; only the GM client processes
+     baphTaskRequest, only the requesting player's client processes
+     baphTaskRequestResponse. Channel: module.baphomet-utils (requires
+     "socket": true in module.json).
 
-     Payload received from player:
-       combatantId      string   — the Combatant document ID
-       taskId           string   — the task being resolved
-       rollTotal        number   — captured from pf1ActorRollSkill hook
-       requestingUserId string   — the player's User document ID
-
-     Hidden DC is read here on the GM client — never sent to the player.
+     v2.36.0 — GOAL_v2.36.0_TASK_AUTH.md: the three resolve/aid/readiness
+     adjudication actions that used to live in this same raw listener
+     (baphTaskResolveAdjudicate, baphTaskAidAdjudicate,
+     baphTaskReadinessCheck) have moved to the socketlib-registered
+     handlers above (_baphSocketResolveAdjudicate, _baphSocketAidAdjudicate,
+     _baphSocketReadinessCheck) and no longer flow through this listener.
+     baphTaskRequest / baphTaskRequestResponse are emitted from
+     action-tracker.js, which is outside this goal's allowlist, and are
+     untouched here — only the migration target's own three actions moved.
   ──────────────────────────────────────────────────────────────────── */
   game.socket.on(`module.${BAPH_TASK_MODULE_ID}`, async (message) => {
 
@@ -2197,306 +2868,6 @@ Hooks.once('pf1PostReady', async () => {
     ─────────────────────────────────────────────────────────────────── */
     if (message?.action === 'baphTaskRequest') {
       _baphHandleTaskRequest(message.payload ?? {});
-
-    /* ── baphTaskResolveAdjudicate ────────────────────────────────────
-       Player-triggered task resolution. GM classifies roll total
-       against hidden DC and writes outcome. (v2.17.2)
-    ─────────────────────────────────────────────────────────────────── */
-    } else if (message?.action === 'baphTaskResolveAdjudicate') {
-      const { combatantId, taskId, rollTotal, requestingUserId } = message.payload ?? {};
-
-      _baphTaskDebugLog(
-        `socket: baphTaskResolveAdjudicate received — ` +
-        `combatant=${combatantId}, task=${taskId}, total=${rollTotal}, from=${requestingUserId}`
-      );
-
-      if (!Number.isFinite(rollTotal)) {
-        _baphTaskDebugLog('socket resolveAdjudicate: rollTotal not finite — rejected');
-        return;
-      }
-
-      if (!game.combat) {
-        _baphTaskDebugLog('socket resolveAdjudicate: no active combat — rejected');
-        return;
-      }
-      const combatant = game.combat.combatants.get(combatantId);
-      if (!combatant?.actor) {
-        _baphTaskDebugLog(`socket resolveAdjudicate: combatant "${combatantId}" not found — rejected`);
-        return;
-      }
-
-      const requestingUser = game.users.get(requestingUserId);
-      if (!requestingUser) {
-        _baphTaskDebugLog(`socket resolveAdjudicate: requesting user "${requestingUserId}" not found — rejected`);
-        return;
-      }
-      const OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
-      const actorOwnership = combatant.actor.ownership ?? {};
-      const userLevel      = actorOwnership[requestingUserId] ?? 0;
-      const defaultLevel   = actorOwnership['default'] ?? 0;
-      const effectiveLevel = Math.max(userLevel, defaultLevel);
-      if (!requestingUser.isGM && effectiveLevel < OWNER_LEVEL) {
-        _baphTaskDebugLog(
-          `socket resolveAdjudicate: user "${requestingUserId}" cannot control ` +
-          `"${combatant.name}" — rejected`
-        );
-        return;
-      }
-
-      const tasks = _baphTaskReadActorTasks(combatant.actor);
-      const task  = tasks[taskId];
-      if (!task) {
-        _baphTaskDebugLog(`socket resolveAdjudicate: task "${taskId}" not found on ${combatant.actor.name}`);
-        return;
-      }
-      if (!task.readyToResolve) {
-        _baphTaskDebugLog(`socket resolveAdjudicate: task "${task.taskName}" is not ready to resolve`);
-        return;
-      }
-      if (task.status === 'resolved' || task.status === 'abandoned') {
-        _baphTaskDebugLog(`socket resolveAdjudicate: task "${task.taskName}" already ${task.status}`);
-        return;
-      }
-
-      _baphTaskDebugLog(
-        `socket resolveAdjudicate: adjudicating "${task.taskName}" for ${combatant.actor.name} ` +
-        `(roll total: ${rollTotal})`
-      );
-      await _baphTaskAdjudicate(combatant, taskId, task, rollTotal);
-
-    /* ── baphTaskAidAdjudicate ────────────────────────────────────────
-       Player-triggered aid on another combatant's ready task.
-       GM writes the +2 pending bonus to the target actor's task flags. (v2.18.0)
-    ─────────────────────────────────────────────────────────────────── */
-    } else if (message?.action === 'baphTaskAidAdjudicate') {
-      const {
-        aiderCombatantId, aiderActorId, aiderActorName,
-        targetCombatantId, targetTaskId,
-        requestingUserId, roundAdded,
-        rollTotal,   // received from player client; GM performs DC 10 check
-      } = message.payload ?? {};
-
-      _baphTaskDebugLog(
-        `socket: baphTaskAidAdjudicate received — ` +
-        `aider=${aiderCombatantId}, target=${targetCombatantId}, task=${targetTaskId}, ` +
-        `rollTotal=${rollTotal}, from=${requestingUserId}, round=${roundAdded}`
-      );
-
-      if (!game.combat) {
-        _baphTaskDebugLog('socket aidAdjudicate: no active combat — rejected');
-        return;
-      }
-
-      const aider = game.combat.combatants.get(aiderCombatantId);
-      if (!aider?.actor) {
-        _baphTaskDebugLog(`socket aidAdjudicate: aider "${aiderCombatantId}" not found — rejected`);
-        return;
-      }
-
-      const requestingUser = game.users.get(requestingUserId);
-      if (!requestingUser) {
-        _baphTaskDebugLog(`socket aidAdjudicate: requesting user "${requestingUserId}" not found — rejected`);
-        return;
-      }
-      const OWNER_LEVEL     = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
-      const aiderOwnership  = aider.actor.ownership ?? {};
-      const aiderUserLevel  = aiderOwnership[requestingUserId] ?? 0;
-      const aiderDefLevel   = aiderOwnership['default'] ?? 0;
-      const aiderEffLevel   = Math.max(aiderUserLevel, aiderDefLevel);
-      if (!requestingUser.isGM && aiderEffLevel < OWNER_LEVEL) {
-        _baphTaskDebugLog(
-          `socket aidAdjudicate: user "${requestingUserId}" cannot control ` +
-          `aider "${aider.name}" — rejected`
-        );
-        return;
-      }
-
-      const targetCombatant = game.combat.combatants.get(targetCombatantId);
-      if (!targetCombatant?.actor) {
-        _baphTaskDebugLog(`socket aidAdjudicate: target combatant "${targetCombatantId}" not found — rejected`);
-        return;
-      }
-
-      if (aiderCombatantId === targetCombatantId) {
-        _baphTaskDebugLog('socket aidAdjudicate: aider and target are the same combatant — rejected');
-        return;
-      }
-
-      const targetTasks = _baphTaskReadActorTasks(targetCombatant.actor);
-      const targetTask  = targetTasks[targetTaskId];
-      if (!targetTask) {
-        _baphTaskDebugLog(`socket aidAdjudicate: task "${targetTaskId}" not found on ${targetCombatant.actor.name}`);
-        return;
-      }
-      // Eligibility: task must be active (in-progress or ready), not terminal
-      if (targetTask.status !== 'active') {
-        _baphTaskDebugLog(`socket aidAdjudicate: target task "${targetTask.taskName}" is not active (${targetTask.status}) — rejected`);
-        return;
-      }
-
-      // Duplicate check: one successful contribution per helper per pending Resolve attempt
-      const existingContributors = targetTask.successfulAidContributors ?? [];
-      if (existingContributors.includes(aiderCombatantId)) {
-        _baphTaskDebugLog(
-          `socket aidAdjudicate: duplicate successful aid from "${aiderCombatantId}" on ` +
-          `"${targetTask.taskName}" — rejected`
-        );
-        return;
-      }
-
-      // DC 10 comparison on GM side
-      const AID_DC = 10;
-      const aidSucceeded = Number.isFinite(rollTotal) && rollTotal >= AID_DC;
-
-      if (aidSucceeded) {
-        const bonusEntry = {
-          sourceCombatantId: aiderCombatantId,
-          sourceActorId:     aiderActorId,
-          sourceUserId:      requestingUserId,
-          amount:            2,
-          label:             'Aid Another',
-          roundAdded,
-        };
-        const existingBonuses = targetTask.pendingResolutionBonuses ?? [];
-        targetTask.pendingResolutionBonuses  = [...existingBonuses, bonusEntry];
-        targetTask.successfulAidContributors = [...existingContributors, aiderCombatantId];
-        targetTasks[targetTaskId]            = targetTask;
-        await _baphTaskWriteActorTasks(targetCombatant.actor, targetTasks);
-        _baphTaskUpdateCache(targetCombatant.id, targetTasks);
-
-        await _baphTaskCreateChatMessage({
-          content:
-            `<p><strong>${foundry.utils.escapeHTML(aiderActorName ?? aider.actor.name)}</strong> aids ` +
-            `<strong>${foundry.utils.escapeHTML(targetCombatant.actor.name)}</strong>'s ` +
-            `<em>${foundry.utils.escapeHTML(targetTask.taskName)}</em>.</p>` +
-            `<p>Aid check: <strong>${rollTotal}</strong> — ` +
-            `<strong>Success.</strong> Aid queued: +2 to the next resolution roll.</p>`,
-          speaker: { alias: 'Baphomet Tasks' },
-          whisper: [],
-        });
-
-        _baphTaskDebugLog(
-          `socket aidAdjudicate: SUCCESS — +2 aid applied to "${targetTask.taskName}" on ` +
-          `${targetCombatant.actor.name} (from ${aiderActorName ?? aider.actor.name}, ` +
-          `roll ${rollTotal} vs DC ${AID_DC})`
-        );
-      } else {
-        // Failed aid: no bonus, no contributor record added
-        await _baphTaskCreateChatMessage({
-          content:
-            `<p><strong>${foundry.utils.escapeHTML(aiderActorName ?? aider.actor.name)}</strong> attempts to aid ` +
-            `<strong>${foundry.utils.escapeHTML(targetCombatant.actor.name)}</strong>'s ` +
-            `<em>${foundry.utils.escapeHTML(targetTask.taskName)}</em>.</p>` +
-            `<p>Aid check: <strong>${Number.isFinite(rollTotal) ? rollTotal : '?'}</strong> — ` +
-            `<strong>Failure.</strong> No bonus queued. Action spent.</p>`,
-          speaker: { alias: 'Baphomet Tasks' },
-          whisper: [],
-        });
-
-        _baphTaskDebugLog(
-          `socket aidAdjudicate: FAILURE — aid failed for "${targetTask.taskName}" ` +
-          `(from ${aiderActorName ?? aider.actor.name}, roll ${rollTotal} vs DC ${AID_DC})`
-        );
-      }
-
-    /* ── baphTaskReadinessCheck ─────────────────────────────────────
-       Player-driven Continue Task committed public progress.
-       GM reads hidden roundsRequired, compares against the authoritative
-       public roundsCommitted from actor flags, and flips readyToResolve
-       when the threshold is met. Hidden duration never leaves GM-side
-       storage. (v2.20.1)
-    ─────────────────────────────────────────────────────────────────── */
-    } else if (message?.action === 'baphTaskReadinessCheck') {
-      const { combatantId, taskId, requestingUserId } = message.payload ?? {};
-
-      _baphTaskDebugLog(
-        `socket: baphTaskReadinessCheck received — ` +
-        `combatant=${combatantId}, task=${taskId}, from=${requestingUserId}`
-      );
-
-      if (!game.combat) {
-        _baphTaskDebugLog('socket readinessCheck: no active combat — rejected');
-        return;
-      }
-
-      const rcCombatant = game.combat.combatants.get(combatantId);
-      if (!rcCombatant?.actor) {
-        _baphTaskDebugLog(`socket readinessCheck: combatant "${combatantId}" not found — rejected`);
-        return;
-      }
-
-      const rcUser = game.users.get(requestingUserId);
-      if (!rcUser) {
-        _baphTaskDebugLog(`socket readinessCheck: user "${requestingUserId}" not found — rejected`);
-        return;
-      }
-      const RC_OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
-      const rcActorOwnership  = rcCombatant.actor.ownership ?? {};
-      const rcUserLevel       = rcActorOwnership[requestingUserId] ?? 0;
-      const rcDefaultLevel    = rcActorOwnership['default'] ?? 0;
-      const rcEffectiveLevel  = Math.max(rcUserLevel, rcDefaultLevel);
-      if (!rcUser.isGM && rcEffectiveLevel < RC_OWNER_LEVEL) {
-        _baphTaskDebugLog(
-          `socket readinessCheck: user "${requestingUserId}" cannot control ` +
-          `"${rcCombatant.name}" — rejected`
-        );
-        return;
-      }
-
-      // Read authoritative public task state directly from actor flags (not payload).
-      const rcTasks = _baphTaskReadActorTasks(rcCombatant.actor);
-      const rcTask  = rcTasks[taskId];
-      if (!rcTask) {
-        _baphTaskDebugLog(`socket readinessCheck: task "${taskId}" not found on ${rcCombatant.actor.name} — rejected`);
-        return;
-      }
-      if (rcTask.status !== 'active') {
-        _baphTaskDebugLog(`socket readinessCheck: task "${rcTask.taskName}" is not active (${rcTask.status}) — no-op`);
-        return;
-      }
-      if (rcTask.readyToResolve) {
-        _baphTaskDebugLog(`socket readinessCheck: task "${rcTask.taskName}" already readyToResolve — no-op`);
-        return;
-      }
-
-      // Read hidden data from the active GM client store. Hidden duration never leaves GM-side storage.
-      const rcHiddenAll = _baphTaskReadHiddenAll();
-      const rcHidden    = rcHiddenAll[taskId];
-      if (!rcHidden?.roundsRequired) {
-        _baphTaskDebugLog(
-          `socket readinessCheck WARNING: no hidden data for task "${taskId}" on this GM client — ` +
-          `readyToResolve not evaluated`
-        );
-        ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
-        console.warn(
-          `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
-          `socket readinessCheck — no hidden data for task "${taskId}". ` +
-          `Was this task created by a different GM user?`
-        );
-        return;
-      }
-
-      if (rcTask.roundsCommitted >= rcHidden.roundsRequired) {
-        rcTask.readyToResolve = true;
-        rcTasks[taskId] = rcTask;
-        await _baphTaskWriteActorTasks(rcCombatant.actor, rcTasks);
-        _baphTaskUpdateCache(rcCombatant.id, rcTasks);
-
-        _baphTaskDebugLog(
-          `socket readinessCheck: "${rcTask.taskName}" is ready to resolve ` +
-          `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
-        );
-        console.debug(
-          `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
-          `socket readinessCheck — "${rcTask.taskName}" is ready to resolve ` +
-          `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
-        );
-      } else {
-        _baphTaskDebugLog(
-          `socket readinessCheck: "${rcTask.taskName}" not yet ready ` +
-          `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds) — no-op`
-        );
-      }
     }
   });
 

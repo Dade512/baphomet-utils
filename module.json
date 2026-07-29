@@ -2,7 +2,7 @@
   "id": "baphomet-utils",
   "title": "Baphomet Utils — Echoes of Baphomet's Fall",
   "description": "Campaign utilities and Gaslamp Gothic theme for Echoes of Baphomet's Fall. Includes condition overlays, action tracker, multi-round task tracker, roll card styler, custom XP progression, weather engine with GM config UI, and full Croaker's Ledger CSS theme for Foundry V13 + PF1e.",
-  "version": "2.35.0",
+  "version": "2.36.0",
   "compatibility": {
     "minimum": "13.350",
     "verified": "13.350"
@@ -43,6 +43,13 @@
         "compatibility": {
           "minimum": "11",
           "verified": "11.11"
+        }
+      },
+      {
+        "id": "socketlib",
+        "type": "module",
+        "compatibility": {
+          "minimum": "1.0.0"
         }
       }
     ]

@@ -166,11 +166,15 @@ Player-visible task state is stored on actor flags. Hidden duration (`roundsRequ
 
 Foundry has no server-side dice: when a player rolls their skill check, the resulting **total is reported by the player's own client** over the socket. A player who tampers with their client could therefore inflate the total on a check **for a creature they control and that is not a GM-secret roll** — the same property that lets any Foundry player fudge an ordinary attack or save. This is inherent to Foundry, not specific to this module.
 
-What that exposure does *not* grant: a player cannot read the hidden DC or hidden `roundsRequired`, cannot adjudicate or commit actions for an actor they do not control (ownership and turn-eligibility are re-checked on the GM client before any authoritative write), and cannot exfiltrate hidden task data through the socket payloads (which carry only identity and public progress). GM-secret rolls stay GM-side. The trade-off is deliberate: players drive their own turns from their own clients while the GM stays the authority for everything hidden.
+What that exposure does *not* grant: a player cannot read the hidden DC or hidden `roundsRequired`, cannot adjudicate or commit actions for an actor they do not control, and cannot force an outcome onto another player's task by naming that player's combatant/task IDs. The GM's resolve/aid/readiness handlers verify the caller through socketlib's verified-sender identity (never a value the requesting client's payload claims), then independently re-run ownership, active-combatant, same-round, and action-cost gates on the GM's own authority before any authoritative write — not merely trusting that the requesting client already checked them. Hidden task data is never transmitted through the socket payloads (which carry only identity and public progress). GM-secret rolls stay GM-side. The trade-off is deliberate: players drive their own turns from their own clients while the GM stays the authority for everything hidden.
 
 ---
 
 ## Changelog
+
+### v2.36.0 — No Word Taken
+
+Task-socket sender identity now comes from socketlib's verified sender rather than the requesting client's payload, and the GM re-runs every eligibility gate on its own authority. A forged resolve naming another player as its sender is rejected — proven live on a non-GM seat.
 
 ### v2.35.0 — On Your Own Time
 
