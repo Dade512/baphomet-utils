@@ -187,13 +187,16 @@ round-01's guard was disproven live and superseded (kept in history on purpose, 
 shipped guard is a module-owned turn-sequence tracker, proven live across delay, mid-round insertion,
 reload, and single-combatant-round-advance cases.
 
-**Known limitation, stated plainly rather than implied away:** player-driven pip spends do not yet
-persist to the server in every case -- a role-2 (player) client's attempt to save a spent pip can be
-silently rejected while the GM's own view still shows it available, with no visible warning to
-either side. GM-driven spends are unaffected. This release does not fix that; it is accepted for now
-because the module is in prep/learning use with no play sessions imminent. The proper fix routes
-player spends through the GM via socketlib (the same verified-sender pattern already used
-elsewhere in this repo), tracked as the next major goal.
+**Fixed by `GOAL_v2.37.0_PIP_AUTHORITY.md` ("Whose Hand Moves"), candidate implemented, runtime
+verification pending.** Earlier releases could silently fail to persist a player-driven pip spend --
+a role-2 (player) client's attempt to save a spent pip could be rejected server-side while the GM's
+own view still showed it available, with no visible warning to either side (`combatant.isOwner ===
+true` did not predict the server-side write permission). Player-originated pip, off-hand-budget, and
+manual-toggle writes now relay through the active GM using the same verified-sender socketlib
+pattern already used for task adjudication: the GM re-derives the caller's identity from socketlib
+(never a client-claimed payload field) and re-runs ownership/availability checks before writing. On
+rejection or with no active GM connected, the optimistic client render is reverted and the player is
+warned once. GM-driven spends are unaffected -- unchanged, no socket round-trip.
 
 ### v2.34.0 — The Single Tally
 
