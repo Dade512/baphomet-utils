@@ -88,16 +88,33 @@
      off-hand `(round, activeId)` staleness key (`_currentActiveCombatantId`)
      are byte-unchanged — only the flag-write calls at the tail of
      `_maybeResetForNewTurn` were touched.
-   - [Known, accepted limitation, out of this goal's required scope] An
-     automation-triggered attack spend that would have drawn on the Haste
-     bonus pip (`_spendActionForCombatant(..., allowBonus: true)`) relays
-     as a plain normal-pool spend (`kind: 'action'`, no bonus flag in the
-     wire payload) — the GM's redo always calls the public `spendAction`,
-     which never allows the bonus pool. On a non-GM client whose local
-     spend genuinely needed the bonus pip, the GM's stricter redo can
-     reject and the optimistic mutation reverts even though the local
-     pool had room. Not exercised by any required runtime case; recorded
-     here rather than silently accepted.
+   - [FIX-4, round-02 — OVERSEER FIX BRIEF Defect A] `_togglePip` now
+     rejects, before any mutation, any `toggleIndex` that is not an integer
+     in range for the array `toggleType` selects (`0 <= toggleIndex <
+     arr.length`) — on every path, including the GM's own call. `bonusPip`
+     is `[]` when nothing has been granted, so this closes a forged-toggle
+     self-grant at the root (an out-of-range index into an empty array
+     previously created and persisted a pip that was never granted); the
+     same guard also rejects out-of-range `actions`/`reaction`/`reflexPip`
+     indices so none of those arrays can grow. Every existing UI click
+     passes an index produced by the render loop and is therefore in
+     range — behavior for in-range slots is unchanged.
+   - [FIX-5, round-02 — OVERSEER FIX BRIEF Defect B] The previous entry
+     here described a "known, accepted limitation": an automation-triggered
+     Haste-bonus attack spend relayed as a plain normal-pool spend and
+     could be refused by the GM's stricter redo even though the client's
+     local pool had room. **That limitation is fixed and this entry no
+     longer describes current behavior.** `_spendActionCore`'s non-GM
+     branch now carries its own `allowBonus` value on the relay payload,
+     and the GM handler's `'action'` case calls the private
+     `_spendActionCore` directly (never the public `spendAction`, which
+     stays hard-wired `allowBonus = false`) so the GM re-runs the SAME
+     availability check — `bonusUsable` — the client itself ran, per Trap 1
+     (GOAL:151-152). `bonusUsable` is unweakened: it still requires the
+     GM's own authoritative `state.bonusPip[0] === true` and a
+     non-incapacitated actor, so a client-claimed `allowBonus` confers no
+     capability the sender lacks — it only selects which already-granted
+     pool a spend may draw from.
 
    v1.27 Changes (GOAL_v2.35.0_REACTION_RETIME — "On Your Own Time"):
    - [CONFLICT-1] Reaction + Combat Reflexes (AoO) pip refresh MOVED off
@@ -1457,6 +1474,24 @@ function _togglePip(combatantId, type, index) {
     return false;
   }
 
+  // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect A): a toggle may only flip a
+  // pip slot that ALREADY EXISTS. This is the single choke point for that
+  // rule — it runs on every path, including the GM's own call, so a GM
+  // console call is covered too. `bonusPip` is `[]` when nothing has been
+  // granted, so length 0 rejects every index here and closes the self-grant
+  // at the root; out-of-range `actions`/`reaction`/`reflexPip` indices are
+  // likewise rejected so none of those arrays can grow. Every existing UI
+  // click passes an index produced by the render loop and is therefore
+  // in-range — behavior for in-range slots is unchanged by this guard.
+  const _toggleArr = type === 'action' ? state.actions
+    : type === 'reaction' ? state.reaction
+    : type === 'reflex' ? state.reflexPip
+    : type === 'bonus' ? state.bonusPip
+    : null;
+  if (!Array.isArray(_toggleArr) || !Number.isInteger(index) || index < 0 || index >= _toggleArr.length) {
+    return false;
+  }
+
   let priorValue;
   if (type === 'action') {
     priorValue = state.actions[index];
@@ -1944,6 +1979,22 @@ Hooks.once('ready', () => {
        kind: 'reaction' | 'combatReflex' | 'action' | 'offHandReserve'
              | 'offHandRollback' | 'toggle',                          // optional, default 'action'
        count: number,                                                 // 'action' only, default 1
+       allowBonus: boolean,                                           // 'action' only, default false —
+                                                                        // v2.37.0 round-02 (OVERSEER FIX
+                                                                        // BRIEF Defect B). Carries the
+                                                                        // client's own eligibility (set
+                                                                        // ONLY by _spendActionForCombatant
+                                                                        // for a validated single ordinary
+                                                                        // Strike). The GM re-runs
+                                                                        // _spendActionCore's own
+                                                                        // `bonusUsable` check against its
+                                                                        // OWN authoritative
+                                                                        // state.bonusPip[0] — this field
+                                                                        // only selects which
+                                                                        // already-granted pool may be
+                                                                        // drawn from; it cannot create a
+                                                                        // bonus pip that doesn't already
+                                                                        // exist in the GM's state.
        tier: 'base' | 'improved' | 'greater',                         // 'offHandReserve' only
        toggleType: 'action' | 'reaction' | 'reflex' | 'bonus',        // 'toggle' only
        toggleIndex: number,                                           // 'toggle' only
@@ -2117,7 +2168,7 @@ async function _baphSocketPipSpendRelay(payload = {}) {
   if (game.user !== game.users?.activeGM) return; // silent — non-active GM correctly ignores
 
   const requestingUserId = this?.socketdata?.userId; // verified sender — NEVER payload.requestingUserId
-  const { combatantId, kind = 'action', count = 1, tier, toggleType, toggleIndex } = payload ?? {};
+  const { combatantId, kind = 'action', count = 1, tier, toggleType, toggleIndex, allowBonus } = payload ?? {};
 
   const combat = game.combat;
   if (!combat) {
@@ -2165,8 +2216,18 @@ async function _baphSocketPipSpendRelay(payload = {}) {
     // signature reproduced inside this fix. _togglePip now returns the real
     // outcome (see its own comment block).
     case 'toggle':          ok = _togglePip(combatantId, toggleType, toggleIndex); break;
+    // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect B): call the PRIVATE
+    // _spendActionCore directly (never the public spendAction, which is
+    // hard-wired allowBonus=false) so the GM's replay re-runs the SAME
+    // availability check the client ran — Trap 1, GOAL:151-152 — instead of
+    // a stricter one that would refuse a Haste-bonus Strike the client
+    // legitimately permitted. `bonusUsable` inside _spendActionCore is
+    // UNWEAKENED: it still requires the GM's own authoritative
+    // `state.bonusPip[0] === true`. `allowBonus === true` here only selects
+    // which already-granted pool this spend may draw from — it cannot
+    // create a pip that doesn't already exist in the GM's own state.
     case 'action':
-    default:                ok = game.baphometActions.spendAction(combatantId, Number(count) || 1); break;
+    default:                ok = _spendActionCore(combatantId, Number(count) || 1, allowBonus === true); break;
   }
   _debugLog(`pipSpendRelay: ${kind} for "${combatant.name}" (from ${requestingUser.name}, verified id ${requestingUserId}) -> ${ok}`);
   return ok ? { ok: true } : { ok: false, reason: 'spend-failed' };
@@ -2434,7 +2495,15 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   // shared rationale comment on the _togglePip revert closure below.
   const capturedRound = game.combat?.round ?? 0;
   const capturedActiveId = _currentActiveCombatantId(game.combat);
-  _baphActionEmitPipRelay(combatantId, 'action', { count }, () => {
+  // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect B): carry this call's own
+  // `allowBonus` on the wire so the GM's replay can re-run the SAME
+  // availability check the client just ran (Trap 1, GOAL:151-152) instead
+  // of a stricter one that refuses a Haste-bonus Strike the client
+  // legitimately permitted. This confers no new capability: the GM still
+  // requires its own authoritative `state.bonusPip[0] === true` in
+  // `bonusUsable` above (unweakened) — `allowBonus` only selects which
+  // already-granted pool the GM is allowed to draw the spend from.
+  _baphActionEmitPipRelay(combatantId, 'action', { count, allowBonus }, () => {
     if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
     if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
     state.actions  = priorActions;
