@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.35.0
+**Current Version:** 2.37.0
 
 ---
 
@@ -172,6 +172,12 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 
 ## Changelog
 
+### v2.37.0 — Whose Hand Moves
+
+Player-driven pip spends now persist. Earlier releases could silently fail to save one: a role-2 (player) client's attempt to write a spent pip was rejected server-side while the GM's own tracker still showed it available, and neither side was warned -- `combatant.isOwner === true` did not predict server-side write permission. Pip, off-hand-budget, and manual-toggle writes originating from a player now relay through the active GM using the same verified-sender socketlib pattern already used for task adjudication: the GM re-derives the caller's identity from socketlib rather than from any client-claimed payload field, then re-runs ownership and availability checks on its own authority before writing. A forged relay naming another user as its sender is rejected and logged against the *verified* sender -- proven live on a genuine non-GM seat, alongside a player-originated task resolve measured at exactly one action, the reading the previous release could not take. On rejection, or with no active GM connected, the optimistic client render is reverted and the player is warned once. GM-driven spends are unchanged and still write directly, with no socket round-trip.
+
+Two limits ship with this deliberately, disclosed rather than quietly carried. The manual pip-click path is exercised by no test case -- every verified case drives the API from the console -- and now that these writes persist, an owner clicking an already-spent pip can flip it back to available and have that stick. Separately, the relay still takes the off-hand `tier` and the spend `count` from the payload handed to it, so a player can request a larger off-hand budget than their feats allow. Validating every relayed parameter against the GM's own state, rather than the client's claim, is the next patch.
+
 ### v2.36.0 — No Word Taken
 
 Task-socket sender identity now comes from socketlib's verified sender rather than the requesting client's payload, and the GM re-runs every eligibility gate on its own authority. A forged resolve naming another player as its sender is rejected — proven live on a non-GM seat.
@@ -187,13 +193,10 @@ round-01's guard was disproven live and superseded (kept in history on purpose, 
 shipped guard is a module-owned turn-sequence tracker, proven live across delay, mid-round insertion,
 reload, and single-combatant-round-advance cases.
 
-**Known limitation, stated plainly rather than implied away:** player-driven pip spends do not yet
-persist to the server in every case -- a role-2 (player) client's attempt to save a spent pip can be
-silently rejected while the GM's own view still shows it available, with no visible warning to
-either side. GM-driven spends are unaffected. This release does not fix that; it is accepted for now
-because the module is in prep/learning use with no play sessions imminent. The proper fix routes
-player spends through the GM via socketlib (the same verified-sender pattern already used
-elsewhere in this repo), tracked as the next major goal.
+**FD-06 is fixed as of v2.37.0 ("Whose Hand Moves") -- see that entry above.** Releases through
+v2.36.0 could silently fail to persist a player-driven pip spend: a role-2 client's write was rejected
+server-side while the GM's own tracker still showed the pip available, and neither side was told. That
+divergence is closed.
 
 ### v2.34.0 — The Single Tally
 

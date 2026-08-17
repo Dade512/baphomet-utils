@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.28
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.29
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
@@ -15,6 +15,106 @@
              Paralyzed/Nauseated from baphomet-utils condition buffs/flags
              to auto-lock pips. Staggered is not a live tracked condition
              (folds into Slowed 1 — see v1.26 Changes / MECH-3).
+
+   v1.29 Changes (GOAL_v2.37.0_PIP_AUTHORITY — "Whose Hand Moves", the FD-06
+   fix):
+   - [FD-06] `combatant.isOwner === true` does not predict server-side
+     Combatant-update permission for a role-2 client in this world/version
+     (live evidence: GOAL_v2.35.0_REACTION_RETIME round-01,
+     `docs/ai-council/GOAL_v2.35.0_REACTION_RETIME/20260725-104515/RUNTIME_RESULT.md`).
+     Every write path that could run on a non-GM client now branches on
+     `game.user.isGM`: the GM path is byte-identical to before (direct
+     `_writePipFlag`/`_writeOffBudget`, no socket). A non-GM client applies
+     its mutation optimistically (same local state change + render as
+     before — the return value keeps its old synchronous meaning, Trap 2)
+     and relays the request to the active GM via socketlib's
+     verified-sender pattern (action name `baphPipSpendRelay` — see the
+     "PIP-WRITE SOCKET RELAY" block below), instead of attempting the
+     doomed direct write. Touched: `spendReaction`, `spendCombatReflex`,
+     `reserveOffHandSwing`, `rollbackOffHandSwing`, `_spendActionCore`
+     (covers both the public `spendAction` and the
+     `_spendActionForCombatant` automation path), `_togglePip` (the manual
+     pip-click path).
+   - [Reset path] `_maybeResetForNewTurn` and the public `reset()` fire
+     identically on every connected client (turn/round state is not
+     player-specific), so the GM's own client already performs the
+     correct write on its own authority — a non-GM client now skips the
+     write there entirely rather than attempting a second, doomed copy of
+     it. No relay needed for this one; this is "the flag write itself"
+     Trap 4 names, not a change to the turn-sequence guard logic above it.
+   - [Trap 3 — pipState supersede] A client-local `state.pipSeq` counter
+     (mirrors the existing off-hand `state.offSeq` pattern) guards every
+     optimistic pip-mutation revert: a revert closure captures the seq
+     value at the moment it mutated, plus (round, activeId) at that same
+     moment, and only actually reverts if BOTH `state.pipSeq` still equals
+     the captured value AND (round, activeId) are still unchanged when the
+     (async) relay response arrives. **Round-02 correction: `pipSeq` is
+     bumped by (1) every optimistic non-GM mutation itself, (2) `_resetState`
+     (the manual `reset()` path), and (3) the `updateCombatant` pip
+     hydrator — i.e. EVERY authoritative pip-flag write this client
+     observes, including its own relayed spend echoing back, another
+     client's spend, or a turn-start reset written from
+     `_maybeResetForNewTurn`.** It does NOT itself distinguish "an incoming
+     cross-client echo" as a category — an earlier draft of this comment
+     overstated that. The turn-start-reset case specifically is covered by
+     the added (round, activeId) re-check in each revert closure (the same
+     test `rollbackOffHandSwing` already used), not by a dedicated echo
+     detector, because `_maybeResetForNewTurn` mutates the pip arrays
+     in-place without going through `_resetState` and is Trap-4 protected
+     (no line was added inside it beyond the pre-existing flag write, which
+     was already the one permitted exception).
+   - [FIX-1, round-02] `rollbackOffHandSwing`'s non-GM path now relays the
+     release through the active GM (`kind: 'offHandRollback'`) instead of
+     attempting the doomed direct write it used unchanged through round-01
+     — see `_releaseOffHandSwingForCombatant` for how the GM validates it
+     from its own state rather than the client's token `seq`.
+   - [FIX-3, round-02] `_togglePip` now returns its real outcome (`false`
+     at any preflight guard, `true` once applied) instead of the GM
+     relay handler's `case 'toggle'` always reporting `ok: true`
+     regardless of what happened — a GM-side refusal now correctly
+     reverts the requester's optimistic toggle and warns once.
+   - [Trap 1] The GM handler (`_baphSocketPipSpendRelay`) re-derives the
+     caller from socketlib's verified `this.socketdata.userId`, never
+     `payload.requestingUserId`, and re-checks both actor ownership
+     (mirrors task-tracker.js's `_baphSocketResolveAdjudicate`) and
+     active-combat membership before re-running the exact same public
+     spend function a GM's own click would call.
+   - [Trap 2, accepted limitation] The public spend API stays fully
+     synchronous — the relay round trip and any revert happen after the
+     call already returned. A caller reading the return value still only
+     ever learns "applied locally," never "persisted."
+   - [Trap 4] `_advanceTurnSeq`, the `advanced`/dedupe guard inside
+     `_maybeResetForNewTurn`, `_turnSeqTrack`, `_resetForSeq`, and the
+     off-hand `(round, activeId)` staleness key (`_currentActiveCombatantId`)
+     are byte-unchanged — only the flag-write calls at the tail of
+     `_maybeResetForNewTurn` were touched.
+   - [FIX-4, round-02 — OVERSEER FIX BRIEF Defect A] `_togglePip` now
+     rejects, before any mutation, any `toggleIndex` that is not an integer
+     in range for the array `toggleType` selects (`0 <= toggleIndex <
+     arr.length`) — on every path, including the GM's own call. `bonusPip`
+     is `[]` when nothing has been granted, so this closes a forged-toggle
+     self-grant at the root (an out-of-range index into an empty array
+     previously created and persisted a pip that was never granted); the
+     same guard also rejects out-of-range `actions`/`reaction`/`reflexPip`
+     indices so none of those arrays can grow. Every existing UI click
+     passes an index produced by the render loop and is therefore in
+     range — behavior for in-range slots is unchanged.
+   - [FIX-5, round-02 — OVERSEER FIX BRIEF Defect B] The previous entry
+     here described a "known, accepted limitation": an automation-triggered
+     Haste-bonus attack spend relayed as a plain normal-pool spend and
+     could be refused by the GM's stricter redo even though the client's
+     local pool had room. **That limitation is fixed and this entry no
+     longer describes current behavior.** `_spendActionCore`'s non-GM
+     branch now carries its own `allowBonus` value on the relay payload,
+     and the GM handler's `'action'` case calls the private
+     `_spendActionCore` directly (never the public `spendAction`, which
+     stays hard-wired `allowBonus = false`) so the GM re-runs the SAME
+     availability check — `bonusUsable` — the client itself ran, per Trap 1
+     (GOAL:151-152). `bonusUsable` is unweakened: it still requires the
+     GM's own authoritative `state.bonusPip[0] === true` and a
+     non-incapacitated actor, so a client-claimed `allowBonus` confers no
+     capability the sender lacks — it only selects which already-granted
+     pool a spend may draw from.
 
    v1.27 Changes (GOAL_v2.35.0_REACTION_RETIME — "On Your Own Time"):
    - [CONFLICT-1] Reaction + Combat Reflexes (AoO) pip refresh MOVED off
@@ -733,6 +833,13 @@ function _initState(combatantId) {
     // v2.30.0 TWF off-hand budget — persisted via the isolated OFF_BUDGET_FLAG_KEY flag.
     offHandUsed,
     offSeq,
+    // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY, Trap 3): client-local, in-memory-only
+    // generation counter for pipState (reaction/reflex/action/bonus). Bumped by
+    // every optimistic non-GM mutation; a pending relay-failure revert only acts
+    // if this still matches the value it captured — see spendReaction et al.
+    // Deliberately NOT persisted (unlike offSeq) — this guards only against a
+    // local revert clobbering a local newer write, never a cross-client compare.
+    pipSeq: 0,
   });
 }
 
@@ -756,6 +863,10 @@ function _resetState(combatantId) {
   state.swingsTaken = 0;
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1;
+  // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): bump pipSeq here too —
+  // a manual reset() replaces the pip arrays wholesale, and any pending relay
+  // revert captured BEFORE this call must never clobber it (Trap 3).
+  state.pipSeq = (Number(state.pipSeq) || 0) + 1;
   const _rsActor = game.combat?.combatants?.get(combatantId)?.actor;
   if (_rsActor) { _mapArmCrit.delete(_rsActor.id); _mapPendingConfirm.delete(_rsActor.id); }
   // _resetForSeq is metadata, not pip state — DO NOT touch it here.
@@ -1164,8 +1275,19 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   }
 
   // Persist reset state so remote clients hydrate the fresh full pips.
-  _writePipFlag(combatantId);
-  _writeOffBudget(combatantId); // v2.30.0: persist the reset off-hand budget (isolated flag)
+  // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06, Trap 4's "the flag write
+  // itself"): this whole function already fires identically and independently
+  // on EVERY connected client — turn/round state is not player-specific, so
+  // the GM's own client detects the same turn-start and performs this same
+  // write on its own authority. A non-GM client attempting it too would just
+  // be FD-06's doomed direct write a second time for no benefit; no relay is
+  // needed here (contrast the player-driven spend paths below, which ARE
+  // player-specific and do relay). The turn-sequence guard above this block
+  // (_advanceTurnSeq / the `advanced` check / _resetForSeq) is untouched.
+  if (game.user.isGM) {
+    _writePipFlag(combatantId);
+    _writeOffBudget(combatantId); // v2.30.0: persist the reset off-hand budget (isolated flag)
+  }
 
   _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${combat.round ?? 0}, seq ${seq})`);
 }
@@ -1328,25 +1450,96 @@ function _buildPipRow(combatantId, isOwner) {
 
 function _togglePip(combatantId, type, index) {
   const state = _getState(combatantId);
-  if (!state) return;
+  if (!state) return false;
 
-  if (type === 'action') {
-    if (index < state.conditionLocked && !state.actions[index]) return;
-    state.actions[index] = !state.actions[index];
-  } else if (type === 'reaction') {
-    state.reaction[index] = !state.reaction[index];
-  } else if (type === 'reflex') {
-    state.reflexPip[index] = !state.reflexPip[index];
-  } else if (type === 'bonus') {
+  // Preflight guards that block the toggle entirely (unchanged from pre-v2.37.0).
+  // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-3): these early returns
+  // now report `false` — this function's return value is the real outcome.
+  // The GM-side relay handler's `case 'toggle'` reads it directly (see
+  // _baphSocketPipSpendRelay); its pre-existing UI click-handler callers
+  // still ignore the return, unchanged.
+  if (type === 'action' && index < state.conditionLocked && !state.actions[index]) return false;
+  if (type === 'bonus') {
     // v2.29.0: can't use the Haste bonus while fully incapacitated (derived guard).
     const _bActor = game.combat?.combatants?.get(combatantId)?.actor;
-    if (_readConditionActionLoss(_bActor).fullyIncapacitated) return;
-    if (!Array.isArray(state.bonusPip)) return;
-    state.bonusPip[index] = !state.bonusPip[index];
+    if (_readConditionActionLoss(_bActor).fullyIncapacitated) return false;
+    if (!Array.isArray(state.bonusPip)) return false;
+  }
+
+  // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): a locally-knowable fact (is
+  // there an active GM at all) is checked BEFORE mutating, same as the spend
+  // functions below — no active GM means no mutation, no relay, one warning.
+  if (!game.user.isGM && !game.users.activeGM) {
+    _baphActionWarnPipRelayFailure('no-active-gm');
+    return false;
+  }
+
+  // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect A): a toggle may only flip a
+  // pip slot that ALREADY EXISTS. This is the single choke point for that
+  // rule — it runs on every path, including the GM's own call, so a GM
+  // console call is covered too. `bonusPip` is `[]` when nothing has been
+  // granted, so length 0 rejects every index here and closes the self-grant
+  // at the root; out-of-range `actions`/`reaction`/`reflexPip` indices are
+  // likewise rejected so none of those arrays can grow. Every existing UI
+  // click passes an index produced by the render loop and is therefore
+  // in-range — behavior for in-range slots is unchanged by this guard.
+  const _toggleArr = type === 'action' ? state.actions
+    : type === 'reaction' ? state.reaction
+    : type === 'reflex' ? state.reflexPip
+    : type === 'bonus' ? state.bonusPip
+    : null;
+  if (!Array.isArray(_toggleArr) || !Number.isInteger(index) || index < 0 || index >= _toggleArr.length) {
+    return false;
+  }
+
+  let priorValue;
+  if (type === 'action') {
+    priorValue = state.actions[index];
+    state.actions[index] = !priorValue;
+  } else if (type === 'reaction') {
+    priorValue = state.reaction[index];
+    state.reaction[index] = !priorValue;
+  } else if (type === 'reflex') {
+    priorValue = state.reflexPip[index];
+    state.reflexPip[index] = !priorValue;
+  } else if (type === 'bonus') {
+    priorValue = state.bonusPip[index];
+    state.bonusPip[index] = !priorValue;
+  } else {
+    return false;
   }
 
   _refreshPipRow(combatantId);
-  _writePipFlag(combatantId);
+
+  if (game.user.isGM) {
+    _writePipFlag(combatantId);
+    return true;
+  }
+
+  // Player path: relay through the active GM instead of the doomed direct
+  // write (FD-06). On rejection/no-active-GM, revert this specific toggle
+  // locally — never via _writePipFlag, which would attempt the same doomed
+  // write again.
+  const seq = ++state.pipSeq;
+  // v2.37.0 round-02 (FIX-2): a pending revert must not fire after this
+  // combatant's own turn has ended and the pips have been reset in place by
+  // _maybeResetForNewTurn (Trap-4 protected — not edited here). That reset
+  // writes the flag on the GM's client, which does bump pipSeq via the
+  // updateCombatant hydrator (FIX-2 above) once the write round-trips back
+  // to this client — but a rejection response racing ahead of that echo
+  // must not be allowed to clobber the fresh post-reset pips in the
+  // meantime. Capturing and re-checking (round, activeId) here closes that
+  // race without touching _maybeResetForNewTurn itself — the identical test
+  // rollbackOffHandSwing already uses for the same reason.
+  const capturedRound = game.combat?.round ?? 0;
+  const capturedActiveId = _currentActiveCombatantId(game.combat);
+  _baphActionEmitPipRelay(combatantId, 'toggle', { toggleType: type, toggleIndex: index }, () => {
+    if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
+    if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+    _baphActionApplyPipValue(state, type, index, priorValue);
+    _refreshPipRow(combatantId);
+  });
+  return true;
 }
 
 /* ----------------------------------------------------------
@@ -1574,8 +1767,14 @@ Hooks.once('ready', () => {
     reset: (combatantId) => {
       _resetState(combatantId);
       _refreshPipRow(combatantId);
-      _writePipFlag(combatantId);
-      _writeOffBudget(combatantId); // v2.30.0: persist the off-hand-budget reset (isolated flag)
+      // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): same reasoning as
+      // _maybeResetForNewTurn — reset is not player-specific, the GM's own
+      // client independently performs the same write, so a non-GM client
+      // skips it (no relay needed, unlike the spend paths below).
+      if (game.user.isGM) {
+        _writePipFlag(combatantId);
+        _writeOffBudget(combatantId); // v2.30.0: persist the off-hand-budget reset (isolated flag)
+      }
     },
     // Public spend is NORMAL-pool only (never the Haste bonus). Bonus eligibility is
     // enforced privately in _spendActionCore, reachable only via _spendActionForCombatant
@@ -1584,9 +1783,35 @@ Hooks.once('ready', () => {
     spendReaction: (combatantId) => {
       const state = _getState(combatantId);
       if (!state || !state.reaction[0]) return false;
+      // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): "is a GM connected at
+      // all" is locally knowable synchronously — refuse cleanly, no
+      // mutation, no relay, one warning. Contrast case 7 (ownership), which
+      // cannot be known client-side and is why the relay round trip exists.
+      if (!game.user.isGM && !game.users.activeGM) {
+        _baphActionWarnPipRelayFailure('no-active-gm');
+        return false;
+      }
+      const priorReaction = [...state.reaction];
       state.reaction[0] = false;
       _refreshPipRow(combatantId);
-      _writePipFlag(combatantId);
+      if (game.user.isGM) {
+        _writePipFlag(combatantId);
+        return true;
+      }
+      // Player path: relay through the active GM (FD-06) instead of the
+      // doomed direct write. Trap 2: still returns true synchronously here;
+      // the relay/revert below happens after this call has already returned.
+      const seq = ++state.pipSeq;
+      // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
+      // shared rationale comment on the _togglePip revert closure below.
+      const capturedRound = game.combat?.round ?? 0;
+      const capturedActiveId = _currentActiveCombatantId(game.combat);
+      _baphActionEmitPipRelay(combatantId, 'reaction', {}, () => {
+        if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
+        if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+        state.reaction = priorReaction;
+        _refreshPipRow(combatantId);
+      });
       return true;
     },
     // v1.25: spend one available Combat Reflexes (jade) AoO pip. Mirrors
@@ -1596,9 +1821,28 @@ Hooks.once('ready', () => {
       if (!state) return false;
       const idx = state.reflexPip.findIndex(p => p);
       if (idx === -1) return false;
+      if (!game.user.isGM && !game.users.activeGM) {
+        _baphActionWarnPipRelayFailure('no-active-gm');
+        return false;
+      }
+      const priorReflexPip = [...state.reflexPip];
       state.reflexPip[idx] = false;
       _refreshPipRow(combatantId);
-      _writePipFlag(combatantId);
+      if (game.user.isGM) {
+        _writePipFlag(combatantId);
+        return true;
+      }
+      const seq = ++state.pipSeq;
+      // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
+      // shared rationale comment on the _togglePip revert closure below.
+      const capturedRound = game.combat?.round ?? 0;
+      const capturedActiveId = _currentActiveCombatantId(game.combat);
+      _baphActionEmitPipRelay(combatantId, 'combatReflex', {}, () => {
+        if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
+        if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+        state.reflexPip = priorReflexPip;
+        _refreshPipRow(combatantId);
+      });
       return true;
     },
 
@@ -1623,12 +1867,33 @@ Hooks.once('ready', () => {
       if (!state) return null;
       const budget = TWF_OFF_BUDGET[tier] ?? 0;
       if ((Number(state.offHandUsed) || 0) >= budget) return null; // pool spent this turn
+      if (!game.user.isGM && !game.users.activeGM) {
+        _baphActionWarnPipRelayFailure('no-active-gm');
+        return null;
+      }
       state.offHandUsed = (Number(state.offHandUsed) || 0) + 1;
       state.offSeq = (Number(state.offSeq) || 0) + 1;
-      _writeOffBudget(combatantId);
       // v2.35.0 round-03 (FD-01): token carries activeId, not turn — the sole producer of
       // this token, so no legacy-token compatibility is needed (in-memory only, one session).
-      return { combatantId, round: game.combat?.round ?? 0, activeId: _currentActiveCombatantId(game.combat), seq: state.offSeq };
+      const token = { combatantId, round: game.combat?.round ?? 0, activeId: _currentActiveCombatantId(game.combat), seq: state.offSeq };
+      if (game.user.isGM) {
+        _writeOffBudget(combatantId);
+        return token;
+      }
+      // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): player path — relay
+      // through the active GM. On rejection, revert LOCALLY ONLY, mirroring
+      // rollbackOffHandSwing's own supersede check exactly (same token
+      // shape) but WITHOUT its final _writeOffBudget call — a non-GM client
+      // calling that would just attempt the same doomed direct write this
+      // goal exists to route around. The token returned below is otherwise
+      // unchanged in shape (A14).
+      _baphActionEmitPipRelay(combatantId, 'offHandReserve', { tier }, () => {
+        if ((Number(state.offSeq) || 0) !== token.seq) return; // superseded by a newer write
+        if ((game.combat?.round ?? 0) !== token.round || _currentActiveCombatantId(game.combat) !== token.activeId) return;
+        state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
+        state.offSeq = (Number(state.offSeq) || 0) + 1;
+      });
+      return token;
     },
     // rollback a reservation when its off-hand use() was cancelled — only if it is still the
     // latest write for this combatant and the same round/active-combatant (else a newer
@@ -1643,7 +1908,28 @@ Hooks.once('ready', () => {
       if ((game.combat?.round ?? 0) !== token.round || _currentActiveCombatantId(game.combat) !== token.activeId) return false;
       state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
       state.offSeq = (Number(state.offSeq) || 0) + 1;
-      _writeOffBudget(token.combatantId);
+      if (game.user.isGM) {
+        _writeOffBudget(token.combatantId);
+        return true;
+      }
+      // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-1): non-GM client
+      // relays the release through the active GM instead of attempting the
+      // doomed direct write (FD-06) — this call was previously byte-unchanged
+      // from before the FD-06 fix and left a cancelled off-hand swing stuck
+      // spent on the server and every other client. The local decrement above
+      // is already applied optimistically (Trap 2); on rejection/no-active-GM
+      // it is undone by re-incrementing offHandUsed, guarded by THIS client's
+      // own offSeq value captured just now (Trap 3 — a purely local
+      // supersede check; the GM cannot be handed this client's token `seq` at
+      // all — see `_releaseOffHandSwingForCombatant`'s doc comment for how
+      // the GM instead validates from its own authoritative state that it is
+      // releasing this same turn's reservation).
+      const localSeq = state.offSeq;
+      _baphActionEmitPipRelay(token.combatantId, 'offHandRollback', {}, () => {
+        if ((Number(state.offSeq) || 0) !== localSeq) return; // superseded by a newer local write
+        state.offHandUsed = (Number(state.offHandUsed) || 0) + 1;
+        state.offSeq = (Number(state.offSeq) || 0) + 1;
+      });
       return true;
     },
     // v2.30.0 named bridge for settings.js: clear the in-memory MAP swing counter (and the
@@ -1658,6 +1944,294 @@ Hooks.once('ready', () => {
 
   _debugLog('Action Tracker v1.8 ready');
 });
+
+/* ============================================================
+   PIP-WRITE SOCKET RELAY   [v2.37.0 — GOAL_v2.37.0_PIP_AUTHORITY,
+   "Whose Hand Moves" — the FD-06 fix]
+
+   FD-06 (established live 2026-07-25, GOAL_v2.35.0_REACTION_RETIME
+   round-01 evidence): combatant.isOwner === true does NOT predict
+   server-side Combatant-update permission for a role-2 client in this
+   world/version. Every write path above that could run on a non-GM
+   client (spendReaction, spendCombatReflex, reserveOffHandSwing,
+   rollbackOffHandSwing, _spendActionCore, _togglePip) now branches on
+   game.user.isGM: the GM path is byte-identical to before (direct
+   _writePipFlag/_writeOffBudget, no socket). A non-GM client applies its
+   mutation optimistically (same local state change + render as before) and
+   relays the request here instead of attempting the doomed direct write.
+   Success is NOT echoed back on a bespoke channel — the existing
+   updateCombatant hydrators (pip state hydrator; off-hand-budget hydrator,
+   further down this file) already propagate the GM's authoritative write
+   to every client, including the requester. Only failure/no-active-GM
+   reverts the optimistic mutation, guarded by each caller's own
+   `state.pipSeq` capture PLUS a re-check that (round, activeId) is
+   unchanged since capture (or, for off-hand, the existing `state.offSeq`
+   token, which already carries round/activeId) so a late revert can never
+   clobber a spend — or a turn-start reset — that landed after it (Trap 3;
+   see the `_togglePip` and `updateCombatant`-hydrator comment blocks for
+   what the pipSeq guard actually covers, round-02 corrected).
+
+   SOCKET ACTION NAME: 'baphPipSpendRelay'
+
+   PAYLOAD SHAPE:
+     {
+       combatantId: string,                                          // required
+       kind: 'reaction' | 'combatReflex' | 'action' | 'offHandReserve'
+             | 'offHandRollback' | 'toggle',                          // optional, default 'action'
+       count: number,                                                 // 'action' only, default 1
+       allowBonus: boolean,                                           // 'action' only, default false —
+                                                                        // v2.37.0 round-02 (OVERSEER FIX
+                                                                        // BRIEF Defect B). Carries the
+                                                                        // client's own eligibility (set
+                                                                        // ONLY by _spendActionForCombatant
+                                                                        // for a validated single ordinary
+                                                                        // Strike). The GM re-runs
+                                                                        // _spendActionCore's own
+                                                                        // `bonusUsable` check against its
+                                                                        // OWN authoritative
+                                                                        // state.bonusPip[0] — this field
+                                                                        // only selects which
+                                                                        // already-granted pool may be
+                                                                        // drawn from; it cannot create a
+                                                                        // bonus pip that doesn't already
+                                                                        // exist in the GM's state.
+       tier: 'base' | 'improved' | 'greater',                         // 'offHandReserve' only
+       toggleType: 'action' | 'reaction' | 'reflex' | 'bonus',        // 'toggle' only
+       toggleIndex: number,                                           // 'toggle' only
+       requestingUserId: string                                       // OPTIONAL, CLIENT-CLAIMED.
+                                                                        // Advisory/logging only — NEVER
+                                                                        // read for authority. The verified
+                                                                        // sender is always socketlib's own
+                                                                        // this.socketdata.userId (§3,
+                                                                        // VERIFIED_SENDER_PATTERN_REFERENCE.md).
+     }
+
+   Registration/emit/handler shape copied from task-tracker.js's
+   TD-04/v2.36.0 migration, itself copied from
+   docs/reference/socket-authority/VERIFIED_SENDER_PATTERN_REFERENCE.md:
+     - COPIED: Hooks.once('socketlib.ready', ...) registration
+       (task-tracker.js:144-150); socketlib.registerModule(...) is
+       idempotent per module id (socketlib-v1.1.4-source.js:32-35), so
+       this returns the SAME Socket instance task-tracker.js already
+       registered — one shared functions map, two independent action
+       names ('baphPipSpendRelay' here; baphTaskResolveAdjudicate /
+       baphTaskAidAdjudicate / baphTaskReadinessCheck there).
+     - COPIED: executeAsGM(action, payload) as the emit call
+       (task-tracker.js:527), not a raw game.socket.emit.
+     - COPIED: the GM handler re-derives the caller from
+       `this?.socketdata?.userId` (task-tracker.js:2391) — the verified
+       sender, sourced from Foundry's own socket/session layer
+       (socketlib-v1.1.4-source.js:190-192, 251-259) — NEVER from
+       `payload.requestingUserId` — and re-checks ownership against that
+       verified id via combatant.actor.ownership /
+       CONST.DOCUMENT_OWNERSHIP_LEVELS.OWNER (task-tracker.js:2419-2424).
+     - NOT COPIED: the raw `game.socket.on('module.baphomet-utils', ...)`
+       listener further down this file (baphTaskRequest /
+       baphTaskRequestResponse, TRUST-1 unfixed / TD-23) — that pattern
+       is explicitly out of scope and is not the shape reused here.
+   ============================================================ */
+
+let _baphActionSocket = null;
+
+Hooks.once('socketlib.ready', () => {
+  _baphActionSocket = socketlib.registerModule(AT_MODULE_ID);
+  _baphActionSocket.register('baphPipSpendRelay', _baphSocketPipSpendRelay);
+  _debugLog('socketlib: registered baphPipSpendRelay handler');
+});
+
+/**
+ * Distinguishable, exactly-once "Say So" warning for a reverted relay
+ * spend — never fired for an ordinary exhausted-pool click (those return
+ * false/no-op above with no notification, unchanged pre-v2.37.0
+ * behavior), so this is never ambiguous with that case.
+ */
+function _baphActionWarnPipRelayFailure(reason) {
+  const messages = {
+    'no-active-gm': 'No GM is connected — this action could not be saved and was undone.',
+    'not-owner':    'The GM rejected this action (ownership check failed) — it was undone.',
+    'rejected':     'The GM could not process this action — it was undone.',
+  };
+  ui.notifications?.warn?.(messages[reason] ?? messages.rejected);
+  _debugLog(`pipSpendRelay: reverted (${reason})`);
+}
+
+// Shared apply for a _togglePip-shaped revert (type/index -> pipState array).
+function _baphActionApplyPipValue(state, type, index, value) {
+  if (type === 'action') state.actions[index] = value;
+  else if (type === 'reaction') state.reaction[index] = value;
+  else if (type === 'reflex') state.reflexPip[index] = value;
+  else if (type === 'bonus' && Array.isArray(state.bonusPip)) state.bonusPip[index] = value;
+}
+
+/**
+ * Player-path emit helper. The caller has ALREADY applied its optimistic
+ * local mutation and returned synchronously (Trap 2) before this runs.
+ * `onFailure` is invoked at most once, only when the GM rejects the
+ * request or no active GM ever answers it — never for success, since the
+ * existing updateCombatant hydrators already reconcile the happy path (no
+ * bespoke response path for that case, by design).
+ *
+ * @param {string} combatantId
+ * @param {'reaction'|'combatReflex'|'action'|'offHandReserve'|'offHandRollback'|'toggle'} kind
+ * @param {object} extra           - kind-specific payload fields (count/tier/toggleType/toggleIndex)
+ * @param {() => void} onFailure   - reverts the optimistic mutation; must itself
+ *                                   re-check supersession (Trap 3) before acting
+ */
+function _baphActionEmitPipRelay(combatantId, kind, extra, onFailure) {
+  if (!_baphActionSocket) {
+    console.warn(`${AT_MODULE_ID} | pipSpendRelay: socketlib module not yet registered — "${kind}" not sent.`);
+    onFailure();
+    _baphActionWarnPipRelayFailure('no-active-gm');
+    return;
+  }
+  _baphActionSocket.executeAsGM('baphPipSpendRelay', { combatantId, kind, ...extra })
+    .then((result) => {
+      if (result?.ok) return; // happy path — the updateCombatant hydrator reconciles this client
+      onFailure();
+      _baphActionWarnPipRelayFailure(result?.reason ?? 'rejected');
+    })
+    .catch((err) => {
+      console.error(`${AT_MODULE_ID} | pipSpendRelay ("${kind}") failed: ${err}`);
+      onFailure();
+      _baphActionWarnPipRelayFailure('no-active-gm');
+    });
+}
+
+/**
+ * v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-1): GM-side release for a
+ * relayed off-hand-swing rollback (`rollbackOffHandSwing` on a non-GM
+ * client). The requester's own reservation token carries a `seq` value, but
+ * that value is NOT comparable to the GM's own `state.offSeq` — the GM's
+ * offSeq already advanced independently when it relayed (and wrote) the
+ * original `reserveOffHandSwing` call, so handing the client's token `seq`
+ * to the existing token-based supersede check would silently no-op every
+ * relayed rollback (a false-negative "superseded," not a real one). This
+ * instead validates entirely from the GM's OWN authoritative state, never
+ * from anything the payload claims:
+ *
+ *   - `state.offHandUsed > 0` on the GM's own client is true ONLY within the
+ *     SAME turn as the reservation that produced it. `_resetState` (the
+ *     manual reset() path) and the inline reset inside
+ *     `_maybeResetForNewTurn` (Trap-4 protected, not touched) both always
+ *     zero `offHandUsed` first, on every turn boundary, on every client
+ *     including the GM's own. So a nonzero value already PROVES "this is
+ *     still the current turn's reservation" — establishing that the
+ *     release is for the same turn without trusting any round/activeId the
+ *     client might send.
+ *   - `combatantId` must still be the GM's own live
+ *     `_currentActiveCombatantId(game.combat)` — the identical invariant
+ *     `reserveOffHandSwing` itself enforces (via the token it mints), here
+ *     re-derived fresh from the GM's own combat object rather than read
+ *     from the client's token.
+ *
+ * @param {string} combatantId
+ * @returns {boolean}
+ */
+function _releaseOffHandSwingForCombatant(combatantId) {
+  const state = _getState(combatantId);
+  if (!state) return false;
+  if ((Number(state.offHandUsed) || 0) <= 0) return false; // nothing reserved this turn — GM's own state says so
+  if (_currentActiveCombatantId(game.combat) !== combatantId) return false; // not this combatant's turn on the GM's own client
+  state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
+  state.offSeq = (Number(state.offSeq) || 0) + 1;
+  _writeOffBudget(combatantId);
+  return true;
+}
+
+/**
+ * GM-side handler for a relayed pip/off-hand spend. socketlib's
+ * executeAsGM/ONE_GM routing already guarantees this only runs on the
+ * elected active GM client; the isGM/activeGM checks mirror
+ * task-tracker.js's FIX-02 pattern defensively rather than rely on that
+ * alone. Trap 1: re-derives the caller from the VERIFIED sender
+ * (`this.socketdata.userId`), never `payload.requestingUserId`, and
+ * re-checks both ownership of the target combatant's actor and combat
+ * membership before doing anything.
+ *
+ * The actual spend re-runs the SAME public game.baphometActions.spend*
+ * function (or, for 'toggle', the same private _togglePip) a GM's own
+ * click would call. Because this handler only ever executes on a genuine
+ * active-GM client, that function takes its unchanged "GM path: write
+ * directly" branch — so the availability checks really are re-run
+ * against the GM's own authoritative state, not merely replayed from
+ * anything the client claimed.
+ *
+ * Declared with `function`, not arrow syntax, so socketlib's
+ * `.call({socketdata}, ...)` binding supplies `this.socketdata.userId`
+ * (VERIFIED_SENDER_PATTERN_REFERENCE.md §3).
+ *
+ * @param {object} payload
+ * @returns {{ok: boolean, reason?: string}|undefined}
+ */
+async function _baphSocketPipSpendRelay(payload = {}) {
+  if (!game.user.isGM) return { ok: false, reason: 'not-gm' };
+  if (game.user !== game.users?.activeGM) return; // silent — non-active GM correctly ignores
+
+  const requestingUserId = this?.socketdata?.userId; // verified sender — NEVER payload.requestingUserId
+  const { combatantId, kind = 'action', count = 1, tier, toggleType, toggleIndex, allowBonus } = payload ?? {};
+
+  const combat = game.combat;
+  if (!combat) {
+    _debugLog(`pipSpendRelay: no active combat — rejected (kind=${kind}, from ${requestingUserId})`);
+    return { ok: false, reason: 'no-active-combat' };
+  }
+  const combatant = combat.combatants.get(combatantId);
+  if (!combatant || combatant.parent?.id !== combat.id) {
+    console.warn(`${AT_MODULE_ID} | pipSpendRelay: combatant "${combatantId}" not in the active combat — rejected (from ${requestingUserId})`);
+    return { ok: false, reason: 'combatant-not-in-active-combat' };
+  }
+
+  const requestingUser = game.users.get(requestingUserId);
+  if (!requestingUser) {
+    console.warn(`${AT_MODULE_ID} | pipSpendRelay: requesting user "${requestingUserId}" not found — rejected`);
+    return { ok: false, reason: 'unknown-user' };
+  }
+
+  // Trap 1 — re-derive ownership from the VERIFIED sender, never the payload.
+  const OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+  const actorOwnership = combatant.actor?.ownership ?? {};
+  const userLevel      = actorOwnership[requestingUserId] ?? 0;
+  const defaultLevel   = actorOwnership['default'] ?? 0;
+  const effectiveLevel = Math.max(userLevel, defaultLevel);
+  if (!requestingUser.isGM && effectiveLevel < OWNER_LEVEL) {
+    console.warn(
+      `${AT_MODULE_ID} | pipSpendRelay: user "${requestingUser.name}" (${requestingUserId}) does not own ` +
+      `"${combatant.name}" — rejected (kind=${kind})`
+    );
+    return { ok: false, reason: 'not-owner' };
+  }
+
+  if (!_getState(combatantId)) _initState(combatantId);
+
+  let ok = false;
+  switch (kind) {
+    case 'reaction':       ok = game.baphometActions.spendReaction(combatantId); break;
+    case 'combatReflex':   ok = game.baphometActions.spendCombatReflex(combatantId); break;
+    case 'offHandReserve': ok = !!game.baphometActions.reserveOffHandSwing(combatantId, tier); break;
+    case 'offHandRollback': ok = _releaseOffHandSwingForCombatant(combatantId); break;
+    // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-3): report _togglePip's
+    // ACTUAL result. It previously always reported `ok = true`, so a refusal
+    // (a locked/incapacitated pip, or an unknown toggle type) never reverted
+    // the requester's optimistic toggle and never warned — FD-06's exact
+    // signature reproduced inside this fix. _togglePip now returns the real
+    // outcome (see its own comment block).
+    case 'toggle':          ok = _togglePip(combatantId, toggleType, toggleIndex); break;
+    // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect B): call the PRIVATE
+    // _spendActionCore directly (never the public spendAction, which is
+    // hard-wired allowBonus=false) so the GM's replay re-runs the SAME
+    // availability check the client ran — Trap 1, GOAL:151-152 — instead of
+    // a stricter one that would refuse a Haste-bonus Strike the client
+    // legitimately permitted. `bonusUsable` inside _spendActionCore is
+    // UNWEAKENED: it still requires the GM's own authoritative
+    // `state.bonusPip[0] === true`. `allowBonus === true` here only selects
+    // which already-granted pool this spend may draw from — it cannot
+    // create a pip that doesn't already exist in the GM's own state.
+    case 'action':
+    default:                ok = _spendActionCore(combatantId, Number(count) || 1, allowBonus === true); break;
+  }
+  _debugLog(`pipSpendRelay: ${kind} for "${combatant.name}" (from ${requestingUser.name}, verified id ${requestingUserId}) -> ${ok}`);
+  return ok ? { ok: true } : { ok: false, reason: 'spend-failed' };
+}
 
 /* ============================================================
    AUTOMATION PREP SCAFFOLD — v1.8
@@ -1893,13 +2467,49 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   const bonusUsable = allowBonus && !incap && Array.isArray(state.bonusPip) && state.bonusPip[0] === true;
   const bonusAvail  = bonusUsable ? 1 : 0;
   if (normalAvail + bonusAvail < count) return false; // all-or-nothing across both pools
+  // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): "is a GM connected at all"
+  // is locally knowable synchronously — refuse cleanly before mutating.
+  if (!game.user.isGM && !game.users.activeGM) {
+    _baphActionWarnPipRelayFailure('no-active-gm');
+    return false;
+  }
+  const priorActions  = [...state.actions];
+  const priorBonusPip = Array.isArray(state.bonusPip) ? [...state.bonusPip] : [];
   let remaining = count;
   for (let i = 0; i < 3 && remaining > 0; i++) {
     if (state.actions[i] && i >= state.conditionLocked) { state.actions[i] = false; remaining--; }
   }
   if (remaining > 0 && bonusUsable) { state.bonusPip[0] = false; remaining--; }
   _refreshPipRow(combatantId);
-  _writePipFlag(combatantId);
+  if (game.user.isGM) {
+    _writePipFlag(combatantId);
+    return true;
+  }
+  // Player path (covers both the public spendAction and the
+  // _spendActionForCombatant automation path — see the Haste-bonus known
+  // limitation noted in the v1.29 changelog block above): relay through the
+  // active GM instead of the doomed direct write. Trap 2: still returns
+  // true synchronously; the relay/revert happens after this returns.
+  const seq = ++state.pipSeq;
+  // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
+  // shared rationale comment on the _togglePip revert closure below.
+  const capturedRound = game.combat?.round ?? 0;
+  const capturedActiveId = _currentActiveCombatantId(game.combat);
+  // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect B): carry this call's own
+  // `allowBonus` on the wire so the GM's replay can re-run the SAME
+  // availability check the client just ran (Trap 1, GOAL:151-152) instead
+  // of a stricter one that refuses a Haste-bonus Strike the client
+  // legitimately permitted. This confers no new capability: the GM still
+  // requires its own authoritative `state.bonusPip[0] === true` in
+  // `bonusUsable` above (unweakened) — `allowBonus` only selects which
+  // already-granted pool the GM is allowed to draw the spend from.
+  _baphActionEmitPipRelay(combatantId, 'action', { count, allowBonus }, () => {
+    if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
+    if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+    state.actions  = priorActions;
+    state.bonusPip = priorBonusPip;
+    _refreshPipRow(combatantId);
+  });
   return true;
 }
 
@@ -3754,6 +4364,19 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   if ('bonusAuto'   in saved) existing.bonusAuto   = !!saved.bonusAuto;
   if (Array.isArray(saved.bonusPip)) existing.bonusPip = [...saved.bonusPip];
   if ('resetForSeq' in saved) existing._resetForSeq = saved.resetForSeq; // v1.27 round-02
+
+  // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): this hook fires for
+  // EVERY authoritative pip-flag write this client observes — the requester's
+  // own relayed spend echoing back, another client's spend, a manual reset(),
+  // or (via this same flag key) a turn-start reset written from
+  // _maybeResetForNewTurn (Trap-4 protected — not edited; it already goes
+  // through _writePipFlag, so its write lands here like any other). Bumping
+  // pipSeq on every such hydration means a pending local revert captured
+  // before this authoritative state landed can never fire after it and
+  // clobber it (Trap 3) — this is the guard's actual coverage; it is NOT
+  // limited to "an incoming cross-client echo" as a prior draft of this
+  // comment block overstated.
+  existing.pipSeq = (Number(existing.pipSeq) || 0) + 1;
 
   // Refresh the pip row in the combat tracker sidebar for this combatant.
   _refreshPipRow(combatant.id);
