@@ -3,7 +3,17 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.1
+**Current Version:** 2.37.1 — *By Whose Measure*
+
+<!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
+     Two or three sentences, table-facing: what changed for someone using the module,
+     not what changed in the code. Details belong in the changelog. -->
+
+Relay parameter validation. A player's client asks the active GM to write their pip spends; this
+release makes the GM check *what* is being asked as well as *who* is asking. The off-hand
+Two-Weapon-Fighting tier is now derived from the character's own feats rather than taken from the
+request, spend counts are range-checked at the boundary, and pips are one-way for players: you spend
+your own pip, but only the GM returns a spent one. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -56,7 +66,7 @@ version-history / SYNC_STAMP notes if you suspect drift.
 
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
 - **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
-- **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic
+- **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic. Players click their own pips to spend them; **returning a spent pip is a GM action**, so a mis-click is undone by the GM rather than by the player who made it
 - **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll)
 - **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
 - **Roll Card Styler** — Dark leather result bar on all roll cards; nat 20 gold bar and nat 1 blood bar with flavor labels
@@ -176,7 +186,7 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 
 A verified identity was not a verified request. The GM now derives the off-hand Two-Weapon-Fighting `tier` for a relayed reserve from the combatant's own actor (`bFlags`, the same shape `macros/twf-tier-aware.js` already uses) instead of trusting the payload's claimed `tier` -- a base-TWF player forging `tier: 'greater'` now still only gets the base budget, and an actor with no TWF feat at all is refused outright rather than silently landing on a zero-budget pool that reads as already spent. A relayed spend `count` outside integer `1..3` is also refused at the boundary now, with a distinct reason -- though re-examination found `count` was never itself exploitable: `_spendActionCore`'s own arithmetic already refused any count larger than the pool, and a negative or fractional count already granted nothing. This is hardening, not a closed privilege escalation.
 
-Michael ruled on the third disclosed parameter, `toggleType` (`F7`): a player may flip a pip available -> spent freely, but only a GM may flip a pip spent -> available, on any pool -- directional, not pool-scoped. The rule is enforced twice: once inside `_togglePip` itself, on the player's own client, for immediate feedback with no round trip; and again, load-bearing, inside the GM's relay handler against the GM's own authoritative pip state, so a forged relay that skips the client entirely is still refused. The GM keeps the full bidirectional flip, by click, by console, and over the relay. This release is also the first to exercise the pip's actual click path live, rather than driving every case from the console.
+The third disclosed parameter, `toggleType` (`F7`), was ruled on rather than patched: a player may flip a pip available -> spent freely, but only a GM may flip a pip spent -> available, on any pool -- directional, not pool-scoped. The rule is enforced twice: once inside `_togglePip` itself, on the player's own client, for immediate feedback with no round trip; and again, load-bearing, inside the GM's relay handler against the GM's own authoritative pip state, so a forged relay that skips the client entirely is still refused. The GM keeps the full bidirectional flip, by click, by console, and over the relay. This release is also the first to exercise the pip's actual click path live, rather than driving every case from the console.
 
 One limit ships with this deliberately, disclosed rather than quietly carried. The no-feat refusal -- an actor with no Two-Weapon-Fighting feat at all being turned away with its own distinct reason, instead of falling through to a zero budget that reads as an already-spent pool -- is implemented and confirmed by reading the code, but no live test case reaches it. Every runtime case requires the character to *have* a TWF feat before the tier derivation is worth testing at all, so the branch that fires when they do not was never exercised on a running server. It is written here rather than left in a commit message because each of the last three releases disclosed something, and each disclosure is what made the next release's test plan honest.
 
