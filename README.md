@@ -3,7 +3,7 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.0
+**Current Version:** 2.37.1
 
 ---
 
@@ -172,11 +172,19 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 
 ## Changelog
 
+### v2.37.1 — By Whose Measure
+
+A verified identity was not a verified request. The GM now derives the off-hand Two-Weapon-Fighting `tier` for a relayed reserve from the combatant's own actor (`bFlags`, the same shape `macros/twf-tier-aware.js` already uses) instead of trusting the payload's claimed `tier` -- a base-TWF player forging `tier: 'greater'` now still only gets the base budget, and an actor with no TWF feat at all is refused outright rather than silently landing on a zero-budget pool that reads as already spent. A relayed spend `count` outside integer `1..3` is also refused at the boundary now, with a distinct reason -- though re-examination found `count` was never itself exploitable: `_spendActionCore`'s own arithmetic already refused any count larger than the pool, and a negative or fractional count already granted nothing. This is hardening, not a closed privilege escalation.
+
+Michael ruled on the third disclosed parameter, `toggleType` (`F7`): a player may flip a pip available -> spent freely, but only a GM may flip a pip spent -> available, on any pool -- directional, not pool-scoped. The rule is enforced twice: once inside `_togglePip` itself, on the player's own client, for immediate feedback with no round trip; and again, load-bearing, inside the GM's relay handler against the GM's own authoritative pip state, so a forged relay that skips the client entirely is still refused. The GM keeps the full bidirectional flip, by click, by console, and over the relay. This release is also the first to exercise the pip's actual click path live, rather than driving every case from the console.
+
+One limit ships with this deliberately, disclosed rather than quietly carried. The no-feat refusal -- an actor with no Two-Weapon-Fighting feat at all being turned away with its own distinct reason, instead of falling through to a zero budget that reads as an already-spent pool -- is implemented and confirmed by reading the code, but no live test case reaches it. Every runtime case requires the character to *have* a TWF feat before the tier derivation is worth testing at all, so the branch that fires when they do not was never exercised on a running server. It is written here rather than left in a commit message because each of the last three releases disclosed something, and each disclosure is what made the next release's test plan honest.
+
 ### v2.37.0 — Whose Hand Moves
 
 Player-driven pip spends now persist. Earlier releases could silently fail to save one: a role-2 (player) client's attempt to write a spent pip was rejected server-side while the GM's own tracker still showed it available, and neither side was warned -- `combatant.isOwner === true` did not predict server-side write permission. Pip, off-hand-budget, and manual-toggle writes originating from a player now relay through the active GM using the same verified-sender socketlib pattern already used for task adjudication: the GM re-derives the caller's identity from socketlib rather than from any client-claimed payload field, then re-runs ownership and availability checks on its own authority before writing. A forged relay naming another user as its sender is rejected and logged against the *verified* sender -- proven live on a genuine non-GM seat, alongside a player-originated task resolve measured at exactly one action, the reading the previous release could not take. On rejection, or with no active GM connected, the optimistic client render is reverted and the player is warned once. GM-driven spends are unchanged and still write directly, with no socket round-trip.
 
-Two limits ship with this deliberately, disclosed rather than quietly carried. The manual pip-click path is exercised by no test case -- every verified case drives the API from the console -- and now that these writes persist, an owner clicking an already-spent pip can flip it back to available and have that stick. Separately, the relay still takes the off-hand `tier` and the spend `count` from the payload handed to it, so a player can request a larger off-hand budget than their feats allow. Validating every relayed parameter against the GM's own state, rather than the client's claim, is the next patch.
+Two limits ship with this deliberately, disclosed rather than quietly carried. The manual pip-click path is exercised by no test case -- every verified case drives the API from the console -- and now that these writes persist, an owner clicking an already-spent pip can flip it back to available and have that stick. Separately, the relay took the off-hand `tier` and the spend `count` straight from the payload handed to it, so a player could request a larger off-hand budget than their feats allowed. Validating the off-hand `tier` against the GM's own actor state, rather than the client's claim, shipped as v2.37.1 ("By Whose Measure") -- see that entry above; `count` was hardened in the same patch, though re-checked against HEAD it was found not to have been exploitable on its own.
 
 ### v2.36.0 — No Word Taken
 

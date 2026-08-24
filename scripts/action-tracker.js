@@ -1492,6 +1492,21 @@ function _togglePip(combatantId, type, index) {
     return false;
   }
 
+  // v2.37.1 (GOAL_v2.37.1_RELAY_PARAMS FIX-3 / F7 ruling, 2026-08-23): a
+  // non-GM may flip a pip available -> spent freely (spending is presumed
+  // valid), but only a GM may flip spent -> available. "Am I a GM" and "is
+  // this slot already spent" are both locally knowable, so this is refused
+  // HERE rather than round-tripped — same reasoning as the no-active-gm
+  // guard above. This sits ADJACENT to the round-02 bounds guard immediately
+  // above, not inside it: that guard answers "does this slot exist?"; this
+  // one answers "may this caller move it in that direction?".
+  // _maybeResetForNewTurn does not call _togglePip and is untouched by this
+  // guard — it must keep returning pips to available on every client.
+  if (!game.user.isGM && _toggleArr[index] === false) {
+    _baphActionWarnPipRelayFailure('not-gm-return');
+    return false;
+  }
+
   let priorValue;
   if (type === 'action') {
     priorValue = state.actions[index];
@@ -2047,9 +2062,13 @@ Hooks.once('socketlib.ready', () => {
  */
 function _baphActionWarnPipRelayFailure(reason) {
   const messages = {
-    'no-active-gm': 'No GM is connected — this action could not be saved and was undone.',
-    'not-owner':    'The GM rejected this action (ownership check failed) — it was undone.',
-    'rejected':     'The GM could not process this action — it was undone.',
+    'no-active-gm':  'No GM is connected — this action could not be saved and was undone.',
+    'not-owner':     'The GM rejected this action (ownership check failed) — it was undone.',
+    'rejected':      'The GM could not process this action — it was undone.',
+    // v2.37.1 (GOAL_v2.37.1_RELAY_PARAMS FIX-3 / F7 ruling): a non-GM tried
+    // to flip a spent pip back to available. Distinguishable from an
+    // ordinary exhausted-pool no-op (which never reaches this function).
+    'not-gm-return': 'Only the GM may return a spent pip — this click was undone.',
   };
   ui.notifications?.warn?.(messages[reason] ?? messages.rejected);
   _debugLog(`pipSpendRelay: reverted (${reason})`);
@@ -2207,7 +2226,28 @@ async function _baphSocketPipSpendRelay(payload = {}) {
   switch (kind) {
     case 'reaction':       ok = game.baphometActions.spendReaction(combatantId); break;
     case 'combatReflex':   ok = game.baphometActions.spendCombatReflex(combatantId); break;
-    case 'offHandReserve': ok = !!game.baphometActions.reserveOffHandSwing(combatantId, tier); break;
+    case 'offHandReserve': {
+      // v2.37.1 (GOAL_v2.37.1_RELAY_PARAMS FIX-1 / D-1a): the payload's
+      // `tier` is DISCARDED — the GM derives it fresh from the combatant's
+      // own actor, the identical bFlags shape macros/twf-tier-aware.js:56-57
+      // uses (a read-only reference, copied here, not edited).
+      // reserveOffHandSwing(combatantId, tier) itself is UNCHANGED — this
+      // only fixes what value this relay boundary hands to it. An actor with
+      // no TWF feat at all is refused with a distinct reason rather than
+      // falling through to `?? 0`, which would silently pass a zero budget
+      // that reads as an already-spent pool.
+      const bf = combatant.actor?.getRollData()?.bFlags ?? {};
+      const derivedTier = bf.twfGreater ? 'greater' : bf.twfImproved ? 'improved' : bf.twf ? 'base' : null;
+      if (!derivedTier) {
+        console.warn(
+          `${AT_MODULE_ID} | pipSpendRelay: "${combatant.name}" has no PF1.5 Two-Weapon Fighting feat — ` +
+          `offHandReserve rejected (from ${requestingUser.name}, verified id ${requestingUserId})`
+        );
+        return { ok: false, reason: 'no-twf-feat' };
+      }
+      ok = !!game.baphometActions.reserveOffHandSwing(combatantId, derivedTier);
+      break;
+    }
     case 'offHandRollback': ok = _releaseOffHandSwingForCombatant(combatantId); break;
     // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-3): report _togglePip's
     // ACTUAL result. It previously always reported `ok = true`, so a refusal
@@ -2215,7 +2255,34 @@ async function _baphSocketPipSpendRelay(payload = {}) {
     // the requester's optimistic toggle and never warned — FD-06's exact
     // signature reproduced inside this fix. _togglePip now returns the real
     // outcome (see its own comment block).
-    case 'toggle':          ok = _togglePip(combatantId, toggleType, toggleIndex); break;
+    case 'toggle': {
+      // v2.37.1 (GOAL_v2.37.1_RELAY_PARAMS FIX-3 / F7 ruling, 2026-08-23):
+      // LOAD-BEARING — a forged executeAsGM payload never runs the
+      // client-side guard inside _togglePip (that guard lives on the
+      // requester's own client), so the directional rule (players spend;
+      // only a GM returns) must be re-enforced here against the GM's OWN
+      // authoritative slot value, never the payload's claim.
+      // _maybeResetForNewTurn does not call _togglePip and is not routed
+      // through this case, so the turn-start reset is unaffected.
+      const toggleState = _getState(combatantId);
+      const toggleArr = toggleType === 'action' ? toggleState?.actions
+        : toggleType === 'reaction' ? toggleState?.reaction
+        : toggleType === 'reflex' ? toggleState?.reflexPip
+        : toggleType === 'bonus' ? toggleState?.bonusPip
+        : null;
+      const slotExists = Array.isArray(toggleArr) && Number.isInteger(toggleIndex)
+        && toggleIndex >= 0 && toggleIndex < toggleArr.length;
+      if (!requestingUser.isGM && slotExists && toggleArr[toggleIndex] === false) {
+        console.warn(
+          `${AT_MODULE_ID} | pipSpendRelay: user "${requestingUser.name}" (${requestingUserId}) tried to ` +
+          `return an already-spent ${toggleType} pip (index ${toggleIndex}) on "${combatant.name}" — ` +
+          `only a GM may do that — rejected`
+        );
+        return { ok: false, reason: 'return-requires-gm' };
+      }
+      ok = _togglePip(combatantId, toggleType, toggleIndex);
+      break;
+    }
     // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect B): call the PRIVATE
     // _spendActionCore directly (never the public spendAction, which is
     // hard-wired allowBonus=false) so the GM's replay re-runs the SAME
@@ -2227,7 +2294,23 @@ async function _baphSocketPipSpendRelay(payload = {}) {
     // which already-granted pool this spend may draw from — it cannot
     // create a pip that doesn't already exist in the GM's own state.
     case 'action':
-    default:                ok = _spendActionCore(combatantId, Number(count) || 1, allowBonus === true); break;
+    default: {
+      // v2.37.1 (GOAL_v2.37.1_RELAY_PARAMS FIX-2 / D-1b): hardening, NOT a
+      // closed exploit — _spendActionCore:2469 already refuses any count
+      // larger than the pool, and a negative/fractional count already grants
+      // nothing (see the goal's D-1b analysis). This still refuses junk AT
+      // THE BOUNDARY with a distinct reason instead of silently coercing it
+      // via the previous `Number(count) || 1`.
+      if (!Number.isInteger(count) || count < 1 || count > 3) {
+        console.warn(
+          `${AT_MODULE_ID} | pipSpendRelay: count ${JSON.stringify(count)} out of range (expected integer ` +
+          `1..3) for "${combatant.name}" — rejected (from ${requestingUser.name}, verified id ${requestingUserId})`
+        );
+        return { ok: false, reason: 'count-out-of-range' };
+      }
+      ok = _spendActionCore(combatantId, count, allowBonus === true);
+      break;
+    }
   }
   _debugLog(`pipSpendRelay: ${kind} for "${combatant.name}" (from ${requestingUser.name}, verified id ${requestingUserId}) -> ${ok}`);
   return ok ? { ok: true } : { ok: false, reason: 'spend-failed' };
