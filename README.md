@@ -3,17 +3,17 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.1 — *By Whose Measure*
+**Current Version:** 2.37.3 — *What the Card Claims*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-Relay parameter validation. A player's client asks the active GM to write their pip spends; this
-release makes the GM check *what* is being asked as well as *who* is asking. The off-hand
-Two-Weapon-Fighting tier is now derived from the character's own feats rather than taken from the
-request, spend counts are range-checked at the boundary, and pips are one-way for players: you spend
-your own pip, but only the GM returns a spent one. See the [changelog](#changelog) for the full entry.
+Conditions now do what their cards say. Blinded, Stunned and Paralyzed all confer Off-Guard, and
+Off-Guard itself is derived from whatever is currently causing it — so a creature that is blinded
+*and* stunned takes one −2 to AC, not two. Where a card claimed a penalty the module never actually
+applied, either the penalty is real now or the claim is gone. See the [changelog](#changelog) for
+the full entry, including one known limit around deleting condition buffs straight from the sheet.
 
 ---
 
@@ -181,6 +181,16 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.37.3 — What the Card Claims
+
+A condition card that promises a penalty should deliver it, and a condition that stops applying one should stop saying so. This release reconciles the two. **Blinded** applied no Off-Guard and carried a change target the module had long since stopped honouring; **Stunned** built an empty change list and delivered nothing at all; **Paralyzed** never conferred Off-Guard despite the rules saying it should. All three now do what their cards claim, and the dead change targets were **deleted rather than quietly repointed at something that happens to work** -- repointing a dead key silently changes what a condition does at the table, which is how a "cleanup" becomes a balance change nobody voted on.
+
+**Off-Guard is now derived rather than stamped on.** One helper is the sole writer of the Off-Guard effect, and it works out whether any source currently justifies it -- Blinded, Stunned, Paralyzed, or a GM's manual override, which is now a force-on flag feeding the same helper instead of a second writer racing the first. The practical result is the one that matters at the table: **a creature that is blinded *and* stunned takes a single −2 to AC, not −2 twice.** Verified live at −6 total against a −8 stacking failure, with three turn transitions on a real player seat showing no churn: no repeated create/delete of the effect, and no permission errors on either screen.
+
+The Perception dead key is **deleted, not repointed**, and the cards that claimed a −4 Perception penalty no longer claim one, because the module was not applying it.
+
+**Known limit (F-10):** deleting a Blinded, Stunned, or Paralyzed buff directly from the character sheet does not immediately clear the derived Off-Guard item — the −2 AC persists until that creature's next end-of-turn sync (at most one round). Removing conditions through the token HUD panel clears it immediately. Sheet-deletion cleanup is docketed for the next milestone with a frozen assertion to cover it.
 
 ### v2.37.1 — By Whose Measure
 

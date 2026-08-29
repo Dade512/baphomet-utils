@@ -1,6 +1,52 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.8
+   ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.9
    Applies PF2e-style conditions as PF1e system Buffs.
+
+   v2.9 Changes (GOAL_v2.37.3_CONDITION_CANON — "What the Card Claims"):
+   - [FIX-5] Off-Guard is now fully helper-managed. `_syncOffGuard(actor)` is the SOLE writer of
+     the `offGuard` buff Item, derived from (blinded present) OR (stunnedCountdown > 0) OR
+     (paralyzed present), OR the new `offGuardForced` actor flag (module-scoped, boolean) written
+     only by the manual GM toggle / macro API force-on path. `applyCondition`/`removeCondition`
+     no longer create or delete the `offGuard` Item directly for the `offGuard` key — they only
+     set/unset `offGuardForced` and delegate. Idempotent (zero document writes when derived/forced
+     inputs are unchanged), non-re-entrant (never calls back into `applyCondition`/
+     `removeCondition`), and GM-gated via `_isActiveGMClient()` (mirrors `_handleAutoDecrement`).
+     This closes D-5 THE STACKING TRAP: multiple simultaneous sources (e.g. Blinded + Stunned)
+     now produce exactly ONE derived `-2 ac` instance, matching canon's non-stacking rule, instead
+     of each source emitting its own `-2 ac` independently. Derived-transition chat is posted only
+     on an actual create/delete transition (never on a no-op sync) and names the deriving source
+     rather than reading as a manual GM action.
+   - [FIX-1] `blinded`: deleted the dead `-2 allAttack` change — probe-confirmed (GOAL v2.37.3
+     probe 1/2) to resolve to ZERO pf1 `ItemChange` data paths on either actor type, so it has
+     never once applied; per the STANDING PRINCIPLE and RULED-1 it is DELETED, not repointed to a
+     live key, because repointing would activate an unauthorized penalty that has never applied at
+     the table. Also deleted the dead `-4 skills.per` change (RULED-4/FIX-6 — canon grants a
+     sense-specific sight-based auto-fail on Perception, not a flat penalty; `skills.per` was also
+     independently dead, 0 data paths). `buildChanges` now emits only `-4 ac`; Off-Guard's `-2`
+     comes from FIX-5's helper, landing on canon's net −6 (probe-3-confirmed stacking shape, no
+     modifier tuning needed). Card text rewritten to drop three unenforced claims (DEX-bonus loss,
+     total concealment, STR/DEX skill penalty) and mark half-speed / attackers'-+2-to-hit as
+     table-adjudicated, not enforced.
+   - [FIX-6/RULED-4] `deafened`: deleted the same dead `-4 skills.per` change (0 data paths, never
+     applied to Perception). `-4 init` is UNCHANGED. Card no longer claims a flat Perception
+     penalty; the hearing-based auto-fail canon actually grants is table-adjudicated, not
+     expressible as an `ItemChange`. The unenforced 20% arcane spell failure claim is left
+     unchanged — out of scope, docketed, not fixed here.
+   - [FIX-4] `offGuard` card: removed the false claim that flanking is an Off-Guard source in
+     PF1.5 (canon: Improved Uncanny Dodge's flanking immunity does not interact with Off-Guard at
+     all — that is PF2 bleed-through). Surprise stays — it is canon. Reworded to describe the buff
+     as derived (FIX-5) and the GM toggle as a force-on override, not a direct write.
+   - `stunned` (FIX-2) / `paralyzed` (FIX-3): `buildChanges` UNCHANGED (`[]` / `-20 dex`
+     respectively) — both are now Off-Guard SOURCES read by FIX-5's helper instead of each
+     emitting its own `-2 ac`. `stunned`'s countdown lifecycle and `paralyzed`'s Dex-0
+     approximation are untouched.
+   - `nauseated`'s dead `-20 allAttack` is DELIBERATELY UNTOUCHED — see STANDING PRINCIPLE and
+     RULED-1. Repointing it would activate an unauthorized -20 attack penalty that has never once
+     applied at the table. Docketed as an activation decision, not fixed as a typo.
+   - `_decrementStunnedCountdown`'s call site (inside `_handleAutoDecrement`) now also calls
+     `_syncOffGuard` after the countdown pays down, so a countdown reaching zero without routing
+     back through `removeCondition` (it does route through `removeCondition('stunned')` at zero,
+     which itself re-syncs) still cannot leave a stale derived Off-Guard behind.
 
    v2.8 Changes (GOAL_v2.34.0_CONDITION_CANON — "The Single Tally"):
    - [MECH-3] Removed the `staggered` CONDITIONS entry entirely. Canon
@@ -251,6 +297,9 @@ const CONDITIONS = {
     // generic per-tier -1 loop — the real decrement is the bespoke, multi-action
     // `_decrementStunnedCountdown` (see that function's comment block below), driven by the
     // separate `stunnedCountdown` actor flag, not this buff's own `tier`.
+    // v2.37.3 FIX-2: `buildChanges` stays `[]`, unchanged. `stunned` is now one of FIX-5's
+    // Off-Guard SOURCES — `_syncOffGuard` derives Off-Guard from `stunnedCountdown > 0` directly,
+    // rather than this condition emitting its own `-2 ac`. No change to the countdown lifecycle.
     autoDecrement: true,
     buildChanges(_tier) {
       return [];
@@ -307,7 +356,13 @@ const CONDITIONS = {
     icon: 'icons/svg/target.svg',
     maxTier: 1,
     type: 'toggle',
-    description: '–2 circumstance penalty to AC. (Formerly Flat-Footed.) Applied by flanking, surprise, or other conditions.',
+    // v2.37.3 FIX-4: 'flanking' deleted from the source list — canon (master :867) is explicit
+    // that flanking is NOT an Off-Guard source in PF1.5 (Improved Uncanny Dodge's flanking
+    // immunity does not interact with Off-Guard at all; that claim was PF2 bleed-through).
+    // 'Surprise' stays — canon (master :658). Reworded: v2.37.3 FIX-5 makes this buff fully
+    // derived (Blinded / Stunned-countdown>0 / Paralyzed) via _syncOffGuard, the sole writer; the
+    // GM toggle below is now a force-on override feeding that helper, never a direct write.
+    description: '–2 circumstance penalty to AC. (Formerly Flat-Footed.) Automatically derived from Blinded, Stunned, or Paralyzed; also granted by surprise or other conditions. The GM toggle force-applies Off-Guard as an override — it no longer writes the buff directly.',
     autoDecrement: false,
     buildChanges() {
       return [
@@ -333,12 +388,32 @@ const CONDITIONS = {
     icon: 'icons/svg/blind.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'Cannot see. Loses DEX bonus to AC. All opponents have total concealment (50% miss chance). –4 penalty to STR/DEX-based skill checks. Automatically fails sight-based Perception checks.',
+    // v2.37.3 FIX-1: three unenforced claims removed — 'Loses DEX bonus to AC' (canon v1.6
+    // replaced this with Off-Guard), 'total concealment (50% miss chance)' (appears in neither
+    // authority), and the attack-penalty implication that backed the now-deleted 'allAttack'
+    // change below. FIX-6/RULED-4 also drops the flat Perception-penalty claim — canon grants a
+    // sight-based auto-fail, not a flat -4. Sentence order below is deliberate: the auto-fail
+    // clause precedes the '-4' AC figure so no dead numeric substring reads as a Perception
+    // penalty claim.
+    description: 'Cannot see. Automatically fails sight-based Perception checks (table-adjudicated, not enforced). –4 penalty to AC (plus Off-Guard, net –6 AC total). Half speed and attackers\' +2 to hit are table-adjudicated, not enforced.',
     autoDecrement: false,
     buildChanges() {
       return [
-        { formula: '-2', operator: 'add', target: 'allAttack',   modifier: 'penalty', priority: 0 },
-        { formula: '-4', operator: 'add', target: 'skills.per',  modifier: 'penalty', priority: 0 },
+        // v2.37.3 FIX-1 / RULED-1: '-2 allAttack' DELETED here, not repointed. Probe 1/2
+        // (GOAL_v2.37.3_CONDITION_CANON.md, live against Foundry 13.351 / pf1 11.11) confirmed
+        // 'allAttack' resolves to ZERO pf1 ItemChange data paths on both character and npc actors
+        // — this change has NEVER applied, on any actor, ever. Per the STANDING PRINCIPLE, a dead
+        // key is not silently repointed to a live one: doing so would activate a -2 attack
+        // penalty that has never once applied at the table. OPEN CANON QUESTION, docketed and
+        // NOT resolved here (see "Follow-up docket items" in GOAL_v2.37.3_CONDITION_CANON.md):
+        // whether Blinded should carry an enforced attack penalty at all. Do not re-derive this
+        // change from the card's old description text and re-introduce it.
+        { formula: '-4', operator: 'add', target: 'ac', modifier: 'penalty', priority: 0 },
+        // v2.37.3 FIX-6 / RULED-4: '-4 skills.per' DELETED here, not repointed to 'skill.per'.
+        // Canon (master :656, :815) grants a SENSE-SPECIFIC auto-fail on sight-based Perception,
+        // not a flat -4 — a flat -4 would also wrongly penalise this creature's hearing-based
+        // Perception. 'skills.per' was independently dead (probe 2: 0 data paths), so this moves
+        // no numbers. The auto-fail itself is table-adjudicated; no ItemChange expresses it.
       ];
     }
   },
@@ -348,12 +423,24 @@ const CONDITIONS = {
     icon: 'icons/svg/deaf.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'Cannot hear. –4 penalty to initiative and Perception. 20% arcane spell failure on spells with verbal components. Automatically fails hearing-based Perception checks.',
+    // v2.37.3 FIX-6/RULED-4: flat Perception-penalty claim removed — canon (master :657, :816)
+    // grants a hearing-based auto-fail, not a flat -4 (see buildChanges comment below). The 20%
+    // arcane spell failure claim is left UNCHANGED — unenforced and out of scope for this
+    // release (see GOAL_v2.37.3_CONDITION_CANON.md "Explicitly out of scope" / follow-up docket).
+    // Sentence order is deliberate: the auto-fail clause precedes the '-4' initiative figure so
+    // no dead numeric substring reads as a Perception penalty claim.
+    description: 'Cannot hear. Automatically fails hearing-based Perception checks (table-adjudicated, not enforced). –4 penalty to initiative. 20% arcane spell failure on spells with verbal components.',
     autoDecrement: false,
     buildChanges() {
       return [
-        { formula: '-4', operator: 'add', target: 'skills.per',  modifier: 'penalty', priority: 0 },
-        { formula: '-4', operator: 'add', target: 'init',        modifier: 'penalty', priority: 0 },
+        { formula: '-4', operator: 'add', target: 'init', modifier: 'penalty', priority: 0 },
+        // v2.37.3 FIX-6 / RULED-4: '-4 skills.per' DELETED here, not repointed to 'skill.per'.
+        // Canon (master :657, :816) grants a SENSE-SPECIFIC auto-fail on hearing-based
+        // Perception, not a flat -4 — a flat -4 would also wrongly penalise this creature's
+        // sight-based Perception. 'skills.per' was independently dead (probe 2: 0 data paths),
+        // so this moves no numbers. The auto-fail itself is table-adjudicated; no ItemChange
+        // expresses it. deafened is NOT an Off-Guard source (FIX-5) — this deletion is the only
+        // scope for this condition in this release.
       ];
     }
   },
@@ -392,6 +479,10 @@ const CONDITIONS = {
     description: 'Cannot move, speak, or take any physical action. Helpless (effective DEX 0, –5 modifier). Melee attackers get +4 to hit. Vulnerable to coup de grace.',
     autoDecrement: false,
     buildChanges() {
+      // v2.37.3 FIX-3: `-20 dex` UNCHANGED — it approximates but does not equal true Dex 0 (a
+      // Dex 24 creature lands at 4, not 0); recorded in D-3, out of scope to change here.
+      // `paralyzed` is now one of FIX-5's Off-Guard SOURCES — `_syncOffGuard` derives Off-Guard
+      // from this buff's presence directly, rather than this condition emitting its own `-2 ac`.
       return [
         { formula: '-20', operator: 'add', target: 'dex', modifier: 'penalty', priority: 0 },
       ];
@@ -416,6 +507,126 @@ function _findExistingBuff(actor, condKey) {
   );
 }
 
+/* ----------------------------------------------------------
+   OFF-GUARD — FIX-5, v2.37.3 (GOAL_v2.37.3_CONDITION_CANON, D-5 THE STACKING TRAP)
+
+   Off-Guard is fully helper-managed. `_syncOffGuard` is the SOLE writer of the `offGuard` buff
+   Item. Canon states, twice, that Off-Guard does not stack (master :869, reference :306): four
+   simultaneous sources still produce exactly ONE `-2 ac` instance. `applyCondition('offGuard', n)`
+   and `removeCondition('offGuard')` (below) do NOT create or delete the Item themselves — they
+   only set/unset the `offGuardForced` actor flag (the manual GM toggle / macro API's force-on
+   override) and delegate here.
+
+     derived = blinded buff present OR (stunnedCountdown > 0) OR paralyzed buff present
+     forced  = actor.getFlag(MODULE_ID, 'offGuardForced') === true
+     want    = derived || forced
+     have    = the existing offGuard buff, if any
+
+     want && !have  -> create the buff (the single -2 ac change, unchanged from CONDITIONS.offGuard)
+     !want && have  -> delete the buff
+     otherwise      -> NO-OP. No rewrite, no re-create, no chat. This is what makes repeat calls
+                       with unchanged inputs perform zero document writes (idempotency — the
+                       property that prevents TD-24's churn shape and is what case 7's non-GM-seat
+                       churn guard tests).
+
+   Call sites: the end of `applyCondition`/`removeCondition` for any of the three source keys
+   (`blinded`, `stunned`, `paralyzed`) and the `offGuard` key itself, and after
+   `_decrementStunnedCountdown` runs (inside `_handleAutoDecrement`, below).
+
+   Non-re-entrant: this function manipulates the Item directly via `createEmbeddedDocuments`/
+   `delete()` and must NEVER call `applyCondition`/`removeCondition` — the same discipline
+   `_decrementStunnedCountdown` already follows (see that function's comment block).
+
+   GM-gated: guarded by `_isActiveGMClient()` (defined further below in this file; a function
+   declaration, so hoisting makes it available here), mirroring `_handleAutoDecrement`'s own gate.
+   An ungated helper writing Items from every connected GM-role client, or from a non-GM client
+   whose flag write happened to go through, would reproduce the FD-06/TD-24 churn signature this
+   goal's case 7 exists to guard against.
+   ---------------------------------------------------------- */
+
+function _offGuardDerived(actor) {
+  return !!_findExistingBuff(actor, 'blinded')
+    || (Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0) > 0
+    || !!_findExistingBuff(actor, 'paralyzed');
+}
+
+function _offGuardSourceLabel(actor) {
+  const sources = [];
+  if (_findExistingBuff(actor, 'blinded')) sources.push('Blinded');
+  if ((Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0) > 0) sources.push('Stunned');
+  if (_findExistingBuff(actor, 'paralyzed')) sources.push('Paralyzed');
+  if (actor.getFlag(MODULE_ID, 'offGuardForced') === true) sources.push('manual override');
+  return sources.length ? sources.join(' + ') : 'unknown';
+}
+
+// Named as a distinct function from `_postConditionChat`: a derived Off-Guard transition is not
+// a GM action (nobody clicked anything) and must be named as what it is — the chat-noise call the
+// goal leaves to the implementer, recorded in the delivery report.
+function _postOffGuardSyncChat(actor, created, sourceLabel) {
+  const cond = CONDITIONS.offGuard;
+  const color = created ? 'var(--baph-gold, #b8943e)' : 'var(--baph-success-bright, #5a9a5a)';
+  const label = created
+    ? `Off-Guard — derived (${sourceLabel})`
+    : 'Off-Guard cleared — no active source';
+
+  const safeActorName = foundry.utils.escapeHTML(actor.name);
+
+  ChatMessage.create({
+    content: `<div style="font-family: var(--baph-font-heading, 'Courier Prime', monospace); text-transform: uppercase; letter-spacing: 0.05em; color: ${color}; font-size: 13px;">
+      ${safeActorName} — ${label}
+    </div>
+    ${created ? `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); color: var(--baph-text-secondary, #8a919d); font-size: 12px; margin-top: 2px;">
+      ${cond.description}
+    </div>` : ''}`,
+    speaker: ChatMessage.getSpeaker({ actor })
+  });
+}
+
+async function _syncOffGuard(actor) {
+  if (!actor) return;
+  if (!_isActiveGMClient()) return;
+
+  const cond = CONDITIONS.offGuard;
+  const derived = _offGuardDerived(actor);
+  const forced = actor.getFlag(MODULE_ID, 'offGuardForced') === true;
+  const want = derived || forced;
+  const have = _findExistingBuff(actor, 'offGuard');
+
+  if (want && !have) {
+    const changes = cond.buildChanges();
+    const descHtml = `<p><strong>${cond.name}:</strong> ${cond.description}</p>`;
+
+    const [created] = await actor.createEmbeddedDocuments('Item', [{
+      img: cond.icon,
+      name: _buffName('offGuard', 1),
+      type: 'buff',
+      system: {
+        subType: 'temp',
+        description: { value: descHtml },
+      },
+      flags: {
+        [MODULE_ID]: {
+          conditionKey: 'offGuard',
+          tier: 1,
+          autoDecrement: cond.autoDecrement,
+          conditionType: cond.type,
+        }
+      }
+    }]);
+
+    if (changes.length > 0) {
+      await pf1.components.ItemChange.create(changes, { parent: created });
+    }
+    await created.setActive(true);
+
+    _postOffGuardSyncChat(actor, true, _offGuardSourceLabel(actor));
+  } else if (!want && have) {
+    await have.delete();
+    _postOffGuardSyncChat(actor, false, null);
+  }
+  // otherwise: NO-OP. No rewrite, no re-create, no chat — idempotent by construction.
+}
+
 async function applyCondition(actor, condKey, tier) {
   if (!actor || !CONDITIONS[condKey]) return;
 
@@ -423,6 +634,17 @@ async function applyCondition(actor, condKey, tier) {
   tier = Math.clamp(tier, 0, cond.maxTier);
 
   if (tier === 0) return removeCondition(actor, condKey);
+
+  // v2.37.3 FIX-5: Off-Guard is fully helper-managed. This branch does NOT create/update the
+  // buff Item — it only sets the force-on override flag and delegates to `_syncOffGuard`, the
+  // buff's sole writer. Preserves the public API (`game.baphometConditions.apply(actor,
+  // 'offGuard', 1)`) and the GM panel toggle while leaving exactly one code path that touches
+  // the Item. `_syncOffGuard` posts its own transition chat; no generic chat is posted here.
+  if (condKey === 'offGuard') {
+    await actor.setFlag(MODULE_ID, 'offGuardForced', true);
+    await _syncOffGuard(actor);
+    return;
+  }
 
   const existing = _findExistingBuff(actor, condKey);
 
@@ -489,9 +711,26 @@ async function applyCondition(actor, condKey, tier) {
   }
 
   _postConditionChat(actor, cond, tier, 'apply');
+
+  // v2.37.3 FIX-5: 'blinded'/'stunned'/'paralyzed' are the three Off-Guard SOURCE conditions —
+  // resync the derived buff after any external (re)application of one of them. Placed after the
+  // stunnedCountdown flag write above so a fresh 'stunned' application is visible to the derive
+  // check immediately.
+  if (condKey === 'blinded' || condKey === 'stunned' || condKey === 'paralyzed') {
+    await _syncOffGuard(actor);
+  }
 }
 
 async function removeCondition(actor, condKey) {
+  // v2.37.3 FIX-5: Off-Guard is fully helper-managed. This branch does NOT delete the buff Item
+  // itself — it only unsets the force-on override flag and delegates to `_syncOffGuard`, which
+  // leaves the buff in place if a derived source (blinded/stunned/paralyzed) is still active.
+  if (condKey === 'offGuard') {
+    await actor.unsetFlag(MODULE_ID, 'offGuardForced');
+    await _syncOffGuard(actor);
+    return;
+  }
+
   const existing = _findExistingBuff(actor, condKey);
 
   // v2.34.0: clear the Stunned countdown lifecycle flags regardless of whether a buff was
@@ -503,11 +742,23 @@ async function removeCondition(actor, condKey) {
     await actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
   }
 
-  if (!existing) return;
+  if (!existing) {
+    // v2.37.3 FIX-5: still resync — e.g. a 'stunned' removal with no buff present (defensive
+    // path above) may have just cleared stunnedCountdown and changed the derived state.
+    if (condKey === 'blinded' || condKey === 'stunned' || condKey === 'paralyzed') {
+      await _syncOffGuard(actor);
+    }
+    return;
+  }
 
   const cond = CONDITIONS[condKey];
   await existing.delete();
   _postConditionChat(actor, cond, 0, 'remove');
+
+  // v2.37.3 FIX-5: resync the derived Off-Guard buff after removing a source condition.
+  if (condKey === 'blinded' || condKey === 'stunned' || condKey === 'paralyzed') {
+    await _syncOffGuard(actor);
+  }
 }
 
 async function adjustCondition(actor, condKey, delta) {
@@ -697,7 +948,7 @@ function _refreshPanel(element) {
    ---------------------------------------------------------- */
 
 Hooks.once('init', () => {
-  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.8`);
+  console.log(`${MODULE_ID} | Initializing PF1.5 Condition Overlay v2.9`);
 });
 
 Hooks.once('ready', () => {
@@ -724,7 +975,7 @@ Hooks.once('ready', () => {
     }
   };
 
-  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.8 ready.`);
+  console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.9 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.adjust(actor, 'sickened', -1)`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.remove(actor, 'clumsy')`);
@@ -997,6 +1248,14 @@ async function _handleAutoDecrement(combat, priorCombatantId, source, breadcrumb
   }
 
   await _decrementStunnedCountdown(actor, breadcrumb);
+
+  // v2.37.3 FIX-5: explicit call site named by the goal. `_decrementStunnedCountdown` already
+  // routes through `removeCondition('stunned')` (which itself re-syncs) when the countdown hits
+  // zero, but when it only pays the countdown DOWN to a still-positive remainder it writes the
+  // `stunnedCountdown` flag directly with no callback — this call is the idempotent safety net
+  // for that path. A no-op here (the common case, since `> 0` is unchanged either side of a
+  // partial pay-down) performs zero document writes, per `_syncOffGuard`'s idempotency contract.
+  await _syncOffGuard(actor);
 
   if (!decremented) {
     console.debug(`${MODULE_ID} | Auto-decrement (${source}): ${actor.name} has no auto-decrement conditions active`);
