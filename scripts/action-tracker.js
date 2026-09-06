@@ -3188,8 +3188,9 @@ function _getCombatantForActor(actor) {
 
 /**
  * Derive the PF1.5 action cost of an action-use.
- * Attacks: 1. Spells: action.activation.unchained.cost (casting time),
- * with a chained-type fallback. Never reads spell.level.
+ * Attacks: 1. Spells: with unchainedActionEconomy ON, the numeric cost on
+ * pf1's substituted activation shape read by the guard below; with it off,
+ * the chained casting-type fallback below. Never reads spell.level.
  */
 function _deriveActionUseCost(actionUse) {
   const item = actionUse?.item;
@@ -3210,14 +3211,59 @@ function _deriveActionUseCost(actionUse) {
 
   const act = actionUse?.action;
   const actData = act?.data ?? act?.system ?? act ?? {};
-  const uc = actData?.activation?.unchained?.cost ?? act?.activation?.unchained?.cost;
-  if (typeof uc === 'number' && uc >= 1) return uc;
+  const activation = actData?.activation ?? act?.activation;
+
+  // FIX-2 (GOAL_v2.37.4, D-3): with pf1.unchainedActionEconomy ON, pf1
+  // substitutes the owned item's activation for the unchained object itself
+  // at data-prep time (`this.activation = this.activation.unchained`), so the
+  // substituted shape carries its own numeric `cost` directly and has no
+  // nested `.unchained` key of its own. Read that substituted cost here.
+  // (round 2 fix, GOAL_v2.37.4 A08 regression: the prior unconditional
+  // `activation?.unchained?.cost` read above this comment fired even with the
+  // setting OFF, because the chained/off-setting activation shape carries its
+  // own nested `.unchained.cost` annotation alongside its chained `type`/
+  // `cost` — e.g. a swift spell's chained activation already has an
+  // `unchained: { cost: 2, ... }` sibling. That unconditional read returned
+  // the unchained cost regardless of setting state, short-circuiting the
+  // chained `swift` -> 1 fallback below and mis-charging a quickened spell 2
+  // actions instead of 1 with the setting OFF. It is removed rather than
+  // guarded: it can never fire validly here in either setting state — ON,
+  // the substituted shape has no nested `.unchained` key so the read was
+  // always `undefined`; OFF, the chained fallback below is the correct path
+  // and this short-circuit only ever pre-empted it wrongly.)
+  // A reaction-typed substituted activation is NOT a numeric action cost —
+  // it is a reaction-cost spell (see _isReactionCostSpell / FIX-1) and is
+  // excluded so it falls through to the `return 0` below instead.
+  if (activation && !activation.unchained && activation.type !== 'reaction'
+      && typeof activation.cost === 'number' && activation.cost >= 1) {
+    return activation.cost;
+  }
 
   // Fallback by chained casting-time type if unchained.cost is absent.
-  const t = actData?.activation?.type ?? act?.activation?.type;
-  if (t === 'round') return 3;                      // full-round
-  if (t === 'swift' || t === 'immediate') return 1; // swift / quickened
-  return 2;                                         // standard default
+  const t = activation?.type;
+  if (t === 'round') return 3;      // full-round
+  if (t === 'swift') return 1;      // swift / quickened — FIX-1: split from immediate, unchanged
+  if (t === 'immediate' || t === 'reaction') return 0; // reaction-cost spell (FIX-1) — no action cost; caller routes it to the Reaction
+  return 2;                         // standard default
+}
+
+/**
+ * FIX-1 (GOAL_v2.37.4, D-1/D-2): is this action-use a reaction-cost spell —
+ * spends the base Reaction, never an action and never a Combat Reflexes
+ * (jade) pip (Homebrew_Master_File.md, "Combat Reflexes & Extra Reactions" —
+ * counterspells named explicitly)? True for the chained casting-time
+ * 'immediate', or (FIX-2, D-3) the pf1.unchainedActionEconomy-substituted
+ * activation shape reporting the unchained 'reaction' type. The two
+ * vocabularies never overlap (chained never reports 'reaction'; the
+ * substituted/unchained shape never reports 'immediate'), so a single type
+ * check safely covers both setting states.
+ */
+function _isReactionCostSpell(actionUse) {
+  if (actionUse?.item?.type !== 'spell') return false;
+  const act = actionUse?.action;
+  const actData = act?.data ?? act?.system ?? act ?? {};
+  const t = (actData?.activation ?? act?.activation)?.type;
+  return t === 'immediate' || t === 'reaction';
 }
 
 // PF1.5 TWF attack penalty (R6). Advisory-only: ADDS the two-weapon to-hit penalty to the
@@ -3454,6 +3500,23 @@ Hooks.on('pf1AttackRoll', (action, roll) => {
   }
 });
 
+// FIX-1 (GOAL_v2.37.4, D-1/D-2): spend the base Reaction for a reaction-cost
+// spell. ONE spend path for both turn states — only
+// game.baphometActions.spendReaction is called here; it must never reach
+// spendCombatReflex, which is Combat Reflexes (jade) AoO capacity only and
+// cannot pay for a spell. When the Reaction is unavailable: warn once,
+// charge nothing, and do NOT cancel the use — the 2026-08-29 "SOFTEN CANON"
+// ruling lets the GM adjudicate rather than blocking the roll.
+function _baphSpendReactionForSpell(combatant, actor, item) {
+  const r = game.baphometActions?.spendReaction?.(combatant.id);
+  if (r) {
+    _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — Reaction spent`);
+  } else {
+    _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — no Reaction available, not charged`);
+    ui.notifications?.warn?.(`${actor.name}: no Reaction available to cast ${item.name} — not charged.`);
+  }
+}
+
 /**
  * Live pf1PreActionUse handler — attack & spell auto-spend.
  * OBSERVE-ONLY. Never returns false.
@@ -3521,6 +3584,14 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         _debugLog(`auto-spend: user cannot control "${actor.name}" — no spend`);
         return;
       }
+      if (isSpell && _isReactionCostSpell(actionUse)) {
+        // FIX-1 (GOAL_v2.37.4, D-1): an immediate-action (reaction-cost)
+        // spell spends the base Reaction, never an action — on turn the
+        // same as off it. Self-contained: spend/warn via the shared helper
+        // and return; never falls through to the action-cost spend below.
+        _baphSpendReactionForSpell(activeCombatant, actor, item);
+        return;
+      }
       const spent = _spendActionForCombatant(
         activeCombatant.id, cost, isSpell ? `spell-${item.name}` : `attack-${item.name}`
       );
@@ -3532,7 +3603,26 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       }
       // NOTE: swing-counter / MAP tracking deferred (GOAL_v2.22.0 Out of Scope).
     } else {
-      // Off-turn → reaction (AoO). Only attacks consume a reaction.
+      // Off-turn → reaction. FIX-1 (GOAL_v2.37.4, D-2): a reaction-cost spell
+      // spends the Reaction here too — the archetypal immediate-action spell
+      // use (Feather Fall, a readied counterspell) is off-turn. Self-
+      // contained: resolved and RETURNS here, before the shared attack/AoO
+      // path below — that path never sees a spell. Any other spell is still
+      // not charged, as before; this narrows the old !isAttack early return
+      // rather than removing it.
+      if (isSpell && _isReactionCostSpell(actionUse)) {
+        const ownForSpell = _getCombatantForActor(actor);
+        if (!ownForSpell) {
+          _debugLog(`auto-spend: off-turn reaction-cost spell but "${actor.name}" not in combat — no spend`);
+          return;
+        }
+        if (!_canUserControlCombatant(ownForSpell)) {
+          _debugLog(`auto-spend: cannot control "${actor.name}" — no reaction spend for spell "${item.name}"`);
+          return;
+        }
+        _baphSpendReactionForSpell(ownForSpell, actor, item);
+        return;
+      }
       if (!isAttack) {
         _debugLog(`auto-spend: off-turn spell by "${actor.name}" — not charged (no active-turn action)`);
         return;
@@ -3552,7 +3642,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       // v2.25.1: the AoO intent was read + consumed once before the branch
       // (actor-scoped) — a stale on-turn tick can't survive, and actor A's
       // attack never eats actor B's open-dialog flag.
-      const wantsCR = aooIntentForActor && _combatReflexCount(actor) > 0;
+      const wantsCR = isAttack && aooIntentForActor && _combatReflexCount(actor) > 0;
       if (wantsCR && game.baphometActions?.spendCombatReflex?.(own.id)) {
         _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — Combat Reflexes (jade) pip spent`);
       } else {

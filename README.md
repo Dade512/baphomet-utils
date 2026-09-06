@@ -3,17 +3,18 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.3 — *What the Card Claims*
+**Current Version:** 2.37.4 — *What the Casting Costs*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-Conditions now do what their cards say. Blinded, Stunned and Paralyzed all confer Off-Guard, and
-Off-Guard itself is derived from whatever is currently causing it — so a creature that is blinded
-*and* stunned takes one −2 to AC, not two. Where a card claimed a penalty the module never actually
-applied, either the penalty is real now or the claim is gone. See the [changelog](#changelog) for
-the full entry, including one known limit around deleting condition buffs straight from the sheet.
+Spells now cost what the rules say. An **immediate-action** spell spends your **Reaction** and none
+of your three actions, on your turn or off it -- before this it took a full action on your turn and,
+off your turn, cost nothing at all -- and a **quickened** spell costs one action instead of two. Your
+Combat Reflexes pips stay attack-of-opportunity capacity: a spell can no longer eat one, and with the
+Reaction already spent an immediate spell warns and charges nothing rather than blocking the roll.
+See the [changelog](#changelog) for the full entry, including one deprecation left docketed.
 
 ---
 
@@ -181,6 +182,20 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.37.4 — What the Casting Costs
+
+Spells now cost what the rules say they cost, and the module stops spending pips that were never its to spend. An **immediate-action spell** -- Feather Fall, a counterspell -- spends your **Reaction** and none of your three actions, on your turn or off it. Before this it took a full action on your turn, and off your turn it cost **nothing at all**, which is the half that actually mattered: an off-turn reaction spell was free. A **quickened (swift) spell** now costs **one** action rather than two. Standard and full-round spells are unchanged.
+
+**Combat Reflexes pips are attack-of-opportunity capacity and nothing else.** The jade pool is AoO capacity by canon (`Homebrew_Master_File.md`, "Combat Reflexes & Extra Reactions"), and the shared spend path could previously reach it from a spell, because the intent flag alone cannot tell a weapon from a spell. Reaction-cost spells are now handled in their own branch and return before the attack path is entered, so the jade/blue preference block never sees a spell. Proven adversarially: the case covering it casts off-turn with the AoO flag deliberately set.
+
+**With your Reaction already spent, an immediate spell warns and charges nothing -- it does not block the roll.** The GM adjudicates. A fix that cancelled the cast would have satisfied a careless reading of "cannot cast it" and is explicitly wrong here.
+
+**The regression this release exists to guard.** A swift spell reads a chained casting time of `swift` with a `cost` of 1, but also carries an `unchained` annotation of 2 alongside it. The cost helper read that annotation unconditionally and returned it, short-circuiting the `swift -> 1` path below -- so a quickened spell was charged 2 with `pf1.unchainedActionEconomy` **off**, the very setting under which the chained path is supposed to win. Those two lines are **deleted, not guarded**: with the setting on, pf1 substitutes the activation for the unchained object itself and the nested key does not exist, so the read was always `undefined`; with it off, the chained fallback is correct and the read only ever pre-empted it. There is no setting state in which it fires correctly.
+
+Verified live: twenty of twenty assertions met across ten cases, both economy settings, two seats, with the system setting captured and restored on the probe world and read back after a settle. **Production is not flipped by this release.**
+
+**Known limit:** `ItemPF.firstAction` is deprecated in favour of `ItemPF.defaultAction` and is still called on one path. It is docketed rather than swept into this release, because changing it touches a function this milestone deliberately froze.
 
 ### v2.37.3 — What the Card Claims
 
