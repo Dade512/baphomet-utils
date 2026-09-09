@@ -3151,8 +3151,10 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
    Gated behind 'autoAttackSpend' / 'autoSpellSpend' (default OFF).
    Cost:
      - attack/weapon item → 1 action (1 Strike = 1 action).
-     - spell item → action.activation.unchained.cost
-       (standard 2 / full-round 3 / swift 1), NOT spell.level.
+     - spell item → with pf1.unchainedActionEconomy ON, the numeric cost on
+       pf1's substituted activation shape (the FIX-2 guard in
+       _deriveActionUseCost); with it OFF, the CHAINED_CASTING_TIME_ACTION_COST
+       map keyed on activation.type (GOAL_v2.37.6 FIX-1). NOT spell.level.
    Reaction: an off-turn action-use (acting actor is not the active
    combatant — confirmed via activeCombatantMatch=false in Pilot 45)
    is an AoO: spend 1 reaction on the acting actor's own combatant,
@@ -3186,11 +3188,52 @@ function _getCombatantForActor(actor) {
   return game.combat.combatants.find((c) => c.actor?.id === actor.id) ?? null;
 }
 
+// FIX-1 (GOAL_v2.37.6, D-1/D-2/D-3): the nine chained casting-time -> action-cost
+// entries canon establishes, as a single named map — not an inline chain — so a
+// future reader can diff it against pf1's fourteen-value chained
+// abilityActivationTypes menu in one glance. See
+// docs/reference/foundry-v13/pf1-activation-types-and-unchained-substitution.md
+// for the full fourteen-value menu this was checked against (pf1 11.11).
+//   nonaction/passive: 0 — not actions, by pf1's own definition.
+//   swift/move/standard/full/round: the chained per-type costs.
+//   attack: 1 — CLAUDE.md, "Every attack is a single Strike that costs 1
+//     action and produces 1 swing." Citation-only; no fixture exercises it.
+//   immediate: 0 — a reaction-cost spell. _isReactionCostSpell has already
+//     routed it to the Reaction before this map's value would be used
+//     (FIX-1a); it is listed for completeness of the nine-type map only.
+// free, aoo, minute, hour and special are deliberately NOT here — each is
+// ambiguous for a documented reason (GOAL_v2.37.6 FIX-1) and takes the
+// unknown-type path (FIX-2) below instead of a guessed value. 'reaction' is
+// unchained vocabulary, never a chained activation.type, and is not one of
+// the fourteen either.
+const CHAINED_CASTING_TIME_ACTION_COST = Object.freeze({
+  nonaction: 0,
+  passive: 0,
+  swift: 1,
+  move: 1,
+  standard: 2,
+  full: 3,
+  round: 3,
+  attack: 1,
+  immediate: 0,
+});
+
+// FIX-2 (GOAL_v2.37.6, RULE-2): dedupe store for the unenumerated-casting-time
+// warning. Client-local, in-memory ONLY — never an actor flag, never a
+// setting (constraint 2: a persisted store would add a mutated surface the
+// cleanup contract must then cover, and would make an observe-only handler
+// write world data). Keyed on `${actor.id}:${activation.type}` so the
+// warning fires once per actor+type and survives within a client session
+// (constraint 3) — see GOAL_v2.37.6 "### Re-entry rules".
+const _unknownCastingTypeWarned = new Set();
+
 /**
  * Derive the PF1.5 action cost of an action-use.
  * Attacks: 1. Spells: with unchainedActionEconomy ON, the numeric cost on
  * pf1's substituted activation shape read by the guard below; with it off,
- * the chained casting-type fallback below. Never reads spell.level.
+ * the chained casting-type map below (CHAINED_CASTING_TIME_ACTION_COST), or
+ * the FIX-2 unknown-type path for anything the map does not enumerate.
+ * Never reads spell.level.
  */
 function _deriveActionUseCost(actionUse) {
   const item = actionUse?.item;
@@ -3239,12 +3282,48 @@ function _deriveActionUseCost(actionUse) {
     return activation.cost;
   }
 
-  // Fallback by chained casting-time type if unchained.cost is absent.
+  // FIX-A (GOAL_v2.37.6 round 2, PRIOR_FAILURES 1/2A): an unchained
+  // 'reaction' substituted activation is not a numeric action cost — it is
+  // a reaction-cost spell (_isReactionCostSpell / FIX-1) whose cost is spent
+  // entirely via _baphSpendReactionForSpell before this function's return
+  // value is ever consumed. It must not fall into the chained-map lookup
+  // below (the map does not enumerate it — canon holds exactly nine chained
+  // types) nor the FIX-2 unknown-type path (which would warn falsely and
+  // insert a dedupe key for a type that was never actually mischarged).
+  // Mirrors the vocabulary exclusion the guard above already makes and
+  // returns 0, the exact value HEAD returned for this type.
+  if (activation?.type === 'reaction') {
+    return 0;
+  }
+
+  // Fallback by chained casting-time type if the substituted-shape read above
+  // did not fire (setting OFF). FIX-1 (GOAL_v2.37.6, D-1/D-2/D-3): a single
+  // lookup against CHAINED_CASTING_TIME_ACTION_COST, replacing the four-branch
+  // chain that used to sit here and silently mischarged every type it did not
+  // enumerate (D-3), including `full` (D-1) and `move` (D-2).
   const t = activation?.type;
-  if (t === 'round') return 3;      // full-round
-  if (t === 'swift') return 1;      // swift / quickened — FIX-1: split from immediate, unchanged
-  if (t === 'immediate' || t === 'reaction') return 0; // reaction-cost spell (FIX-1) — no action cost; caller routes it to the Reaction
-  return 2;                         // standard default
+  if (Object.prototype.hasOwnProperty.call(CHAINED_CASTING_TIME_ACTION_COST, t)) {
+    return CHAINED_CASTING_TIME_ACTION_COST[t];
+  }
+
+  // FIX-2 (GOAL_v2.37.6, RULE-2, closed): an activation.type the map above
+  // does not enumerate. Warn once per actor.id + activation.type (naming the
+  // actor, the offending type, and the first triggering item — constraint 1),
+  // charge the standard 2 (unchanged from today), and never block — the GM
+  // adjudicates, same disposition as an immediate spell cast with the
+  // Reaction already spent.
+  const warnActor = actionUse?.actor ?? item?.actor;
+  const warnKey = `${warnActor?.id ?? '?'}:${t}`;
+  if (!_unknownCastingTypeWarned.has(warnKey)) {
+    _unknownCastingTypeWarned.add(warnKey);
+    console.warn(
+      `baphomet-utils | _deriveActionUseCost: actor "${warnActor?.name ?? '?'}" cast `
+      + `"${item?.name ?? '?'}" with unenumerated activation.type "${t}" — charging the `
+      + `standard 2 actions. This casting time is not in the canon nine-type map `
+      + `(GOAL_v2.37.6 FIX-1); adjudicate manually if 2 is wrong for this cast.`
+    );
+  }
+  return 2; // standard default — unchanged; only the silence is fixed (D-3)
 }
 
 /**

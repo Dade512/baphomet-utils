@@ -3,18 +3,17 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.4 — *What the Casting Costs*
+**Current Version:** 2.37.6 — *What Falls Through*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-Spells now cost what the rules say. An **immediate-action** spell spends your **Reaction** and none
-of your three actions, on your turn or off it -- before this it took a full action on your turn and,
-off your turn, cost nothing at all -- and a **quickened** spell costs one action instead of two. Your
-Combat Reflexes pips stay attack-of-opportunity capacity: a spell can no longer eat one, and with the
-Reaction already spent an immediate spell warns and charges nothing rather than blocking the roll.
-See the [changelog](#changelog) for the full entry, including one deprecation left docketed.
+A **full-round** spell now costs the three actions it should, and a **move-action** spell costs the
+one it should -- both were mischarged since the last release. Every other casting time pf1 doesn't
+recognize still costs the standard 2, but now warns once on your own console instead of charging
+quietly. See the [changelog](#changelog) for the full entry, including a corrected claim about a
+deprecated call the module never made.
 
 ---
 
@@ -183,6 +182,32 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 
 ## Changelog
 
+### v2.37.6 — What Falls Through
+
+Two live mischarges and one silent one, all in the same fallback the module uses when a spell's
+chained casting time has no numeric cost of its own. A **full-round** cast was charged 2 actions
+instead of 3 -- an action the player never paid for. A **move-action** cast was charged 2 instead
+of 1 -- an action taken that should not have been, and the direction more likely to be noticed at
+the table. Both are corrected: the four-branch chain that produced them is now a single named map
+holding the nine casting times canon actually establishes (`nonaction`, `passive`, `swift`,
+`move`, `standard`, `full`, `round`, `attack`, `immediate`). `standard` and `swift` costs, and an
+`immediate` cast spending the Reaction and no action, are unchanged.
+
+**Every other casting time pf1 does not enumerate -- `free`, `aoo`, `minute`, `hour`, `special`, or
+anything a future system update adds -- still costs the standard 2, but no longer costs it in
+silence.** The first time an actor casts with an unrecognized `activation.type` in a client
+session, the module warns once on the caster's own console, naming the actor, the offending type,
+and the spell that triggered it. The charge is unchanged and the roll is never blocked -- the GM
+adjudicates, the same disposition an immediate spell already gets with the Reaction spent.
+
+With `pf1.unchainedActionEconomy` **on**, none of this changes: pf1's own substituted-cost read
+still wins and the chained map is never consulted.
+
+**Known limit, corrected.** The previous entry claimed the module still calls the deprecated
+`ItemPF.firstAction` on one path. It does not, and never did on any shipped path -- that
+deprecation warning came from that release's own runtime probe, not from the module. The claim is
+withdrawn here.
+
 ### v2.37.4 — What the Casting Costs
 
 Spells now cost what the rules say they cost, and the module stops spending pips that were never its to spend. An **immediate-action spell** -- Feather Fall, a counterspell -- spends your **Reaction** and none of your three actions, on your turn or off it. Before this it took a full action on your turn, and off your turn it cost **nothing at all**, which is the half that actually mattered: an off-turn reaction spell was free. A **quickened (swift) spell** now costs **one** action rather than two. Standard and full-round spells are unchanged.
@@ -195,7 +220,7 @@ Spells now cost what the rules say they cost, and the module stops spending pips
 
 Verified live: twenty of twenty assertions met across ten cases, both economy settings, two seats, with the system setting captured and restored on the probe world and read back after a settle. **Production is not flipped by this release.**
 
-**Known limit:** `ItemPF.firstAction` is deprecated in favour of `ItemPF.defaultAction` and is still called on one path. It is docketed rather than swept into this release, because changing it touches a function this milestone deliberately froze.
+**Known limit, corrected in v2.37.6:** this entry originally claimed `ItemPF.firstAction` is deprecated in favour of `ItemPF.defaultAction` and is still called on one path. The module calls it on no path. The `msgid=3360` deprecation warning seen during this release's own runtime run was emitted by that run's probe, not by the module -- see the v2.37.6 entry above.
 
 ### v2.37.3 — What the Card Claims
 
