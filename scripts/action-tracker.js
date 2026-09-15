@@ -2642,14 +2642,40 @@ function _spendActionForCombatant(combatantId, count = 1, reason = '') {
    kno  →  Knowledge (Nobility)     →  1
    kpl  →  Knowledge (Planes)       →  1
    kre  →  Knowledge (Religion)     →  1
-   
+
+   FIX-2 (GOAL_v2.37.7, D-2) — twelve more, all cost 1. Nine flat, three
+   sub-skilled entered as the BASE key (Perform/Lore/Artistry are
+   sub-skilled skills; a roll arrives "base.sub" and is normalised to its
+   base by the pf1ActorRollSkill handler below, BEFORE Gate 5, per the
+   supplied payload-shape fact —
+   docs/ai-council/GOAL_v2.37.7_COSTS_AND_ESCAPES/SUPPLIED_FACT_20260912_pf1ActorRollSkill_subskill_keys.md):
+   clm  →  Climb                    →  1
+   swm  →  Swim                     →  1
+   fly  →  Fly                      →  1
+   esc  →  Escape Artist            →  1
+   rid  →  Ride                     →  1
+   han  →  Handle Animal            →  1
+   sen  →  Sense Motive             →  1
+   spl  →  Spellcraft               →  1
+   sur  →  Survival                 →  1
+   prf  →  Perform (base key)       →  1
+   lor  →  Lore (base key)          →  1
+   art  →  Artistry (base key)      →  1
+
    Excluded from auto-spend:
    per  →  Perception — passive/reactive sense; excluded
            intentionally from action economy tracking.
    dev  →  Disable Device — uses PF1.5 multi-round task pattern.
            Not auto-spendable. Live handler warns user when dev
            is rolled in combat. Re-add once task subsystem is built.
-   
+
+   "Cannot be used in combat" (GOAL_v2.37.7, D-2) — not allowlisted, not
+   costed, warned instead (see _COMBAT_FORBIDDEN_SKILLS below):
+   dip  →  Diplomacy
+   dis  →  Disguise
+   lin  →  Linguistics
+   pro  →  Profession
+
    Any skills added in future must be verified against the
    pf1ActorRollSkill payload before adding here.
    ---------------------------------------------------------- */
@@ -2672,8 +2698,41 @@ const SKILL_ACTION_COSTS = {
   kna: 1,  // Knowledge Nature
   kno: 1,  // Knowledge Nobility
   kpl: 1,  // Knowledge Planes
-  kre: 1   // Knowledge Religion
+  kre: 1,  // Knowledge Religion
+  // FIX-2 (GOAL_v2.37.7, D-2) — nine flat keys, all cost 1.
+  clm: 1,  // Climb
+  swm: 1,  // Swim
+  fly: 1,  // Fly
+  esc: 1,  // Escape Artist
+  rid: 1,  // Ride
+  han: 1,  // Handle Animal
+  sen: 1,  // Sense Motive
+  spl: 1,  // Spellcraft
+  sur: 1,  // Survival
+  // FIX-2 (GOAL_v2.37.7, D-2) — three sub-skilled keys, entered as the BASE
+  // key. The pf1ActorRollSkill handler normalises "base.sub" rolls (e.g.
+  // "prf.prf1") to "base" before Gate 5, so these are reached by every
+  // real sub-skilled roll and are never looked up dotted.
+  prf: 1,  // Perform (base key)
+  lor: 1,  // Lore (base key)
+  art: 1   // Artistry (base key)
 };
+
+// FIX-2 (GOAL_v2.37.7, D-2): Diplomacy, Disguise, Linguistics and Profession
+// are canonically "cannot be used in combat" (PF1.5_Combat_Skill_Action_Costs.md,
+// line 16 and the per-skill table rows). Not allowlisted, not costed. The
+// live handler below warns once per actor+skill (client-local, in-memory —
+// the RULE-2 dedupe pattern), charges nothing, and never blocks the roll.
+const _COMBAT_FORBIDDEN_SKILLS = {
+  dip: 'Diplomacy',
+  dis: 'Disguise',
+  lin: 'Linguistics',
+  pro: 'Profession'
+};
+
+// Dedupe store for the "cannot be used in combat" warning. Client-local,
+// in-memory ONLY, mirroring _unknownCastingTypeWarned's pattern.
+const _combatForbiddenSkillWarned = new Set();
 
 /* ============================================================
    ACTION AUTOMATION DIAGNOSTICS — v1.11
@@ -3084,18 +3143,44 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
     return;
   }
 
+  // FIX-2 edit 4 (GOAL_v2.37.7, D-2): normalise skillKey to its base skill
+  // BEFORE Gate 5. Sub-skilled rolls (Perform/Lore/Artistry) arrive as
+  // "base.sub" (e.g. "prf.prf1"); SKILL_ACTION_COSTS and skillAutoAllowlist
+  // store only the base key. Flat keys carry no dot, so split('.')[0]
+  // returns them unchanged — the existing seventeen and the nine new flat
+  // keys are unaffected. Confirmed payload shape (live capture 2026-09-12):
+  // docs/ai-council/GOAL_v2.37.7_COSTS_AND_ESCAPES/SUPPLIED_FACT_20260912_pf1ActorRollSkill_subskill_keys.md
+  const baseSkillKey = skillKey.split('.')[0];
+
+  // FIX-2 (GOAL_v2.37.7, D-2): "cannot be used in combat" skills — not
+  // allowlisted, not costed. Warn once per actor+skill (client-local,
+  // in-memory dedupe), charge nothing, never block the roll.
+  if (Object.prototype.hasOwnProperty.call(_COMBAT_FORBIDDEN_SKILLS, baseSkillKey)) {
+    const forbidWarnKey = `${actor.id}:${baseSkillKey}`;
+    if (!_combatForbiddenSkillWarned.has(forbidWarnKey)) {
+      _combatForbiddenSkillWarned.add(forbidWarnKey);
+      console.warn(
+        `baphomet-utils | skill auto-spend: actor "${actor.name}" rolled `
+        + `${_COMBAT_FORBIDDEN_SKILLS[baseSkillKey]} — this skill cannot be `
+        + `used in combat (PF1.5 table rule). Not charged; roll is not blocked.`
+      );
+    }
+    _debugLog(`skill auto-spend: "${baseSkillKey}" cannot be used in combat — no spend, warned`);
+    return;
+  }
+
   // Gate 5: skill in allowlist
   const allowlistRaw = game.settings.get(AT_MODULE_ID, 'skillAutoAllowlist') ?? '';
   const allowlist = allowlistRaw.split(',').map(s => s.trim()).filter(Boolean);
-  if (!allowlist.includes(skillKey)) {
-    _debugLog(`skill auto-spend: "${skillKey}" not in allowlist — no spend`);
+  if (!allowlist.includes(baseSkillKey)) {
+    _debugLog(`skill auto-spend: "${baseSkillKey}" not in allowlist — no spend`);
     return;
   }
 
   // Gate 6: skill has a known cost
-  const cost = SKILL_ACTION_COSTS[skillKey];
+  const cost = SKILL_ACTION_COSTS[baseSkillKey];
   if (cost === undefined) {
-    _debugLog(`skill auto-spend: "${skillKey}" has no cost mapping — no spend`);
+    _debugLog(`skill auto-spend: "${baseSkillKey}" has no cost mapping — no spend`);
     return;
   }
 
@@ -3306,24 +3391,92 @@ function _deriveActionUseCost(actionUse) {
     return CHAINED_CASTING_TIME_ACTION_COST[t];
   }
 
-  // FIX-2 (GOAL_v2.37.6, RULE-2, closed): an activation.type the map above
-  // does not enumerate. Warn once per actor.id + activation.type (naming the
-  // actor, the offending type, and the first triggering item — constraint 1),
-  // charge the standard 2 (unchanged from today), and never block — the GM
-  // adjudicates, same disposition as an immediate spell cast with the
+  // FIX-4/FIX-5 (GOAL_v2.37.7, D-4(a), D-4(b), RULE-4, RULE-5): an
+  // activation.type the map above does not enumerate, OR an absent one
+  // (null/undefined/"" — RULE-5: "" must normalise the same as null/undefined,
+  // not fall through to the map lookup above and land on the "unenumerated"
+  // label instead of the "absent" one). ONE message template, not two
+  // branches — the label varies, the disposition does not. RULE-4: this
+  // function COMPUTES a cost; whether it is actually charged is decided
+  // ~300 lines downstream in the pf1PreActionUse routing, so the text names
+  // the cost without asserting the charge. (Moving this warning to the spend
+  // site was considered and deferred — that distance crosses into the
+  // routing v2.37.6 just stabilized, and is a separate change with its own
+  // runtime surface.) Charges the standard 2 either way, and never blocks —
+  // the GM adjudicates, same disposition as an immediate spell cast with the
   // Reaction already spent.
   const warnActor = actionUse?.actor ?? item?.actor;
-  const warnKey = `${warnActor?.id ?? '?'}:${t}`;
+  const isAbsentType = t === null || t === undefined || t === '';
+  const warnKey = `${warnActor?.id ?? '?'}:${isAbsentType ? 'absent' : t}`;
   if (!_unknownCastingTypeWarned.has(warnKey)) {
     _unknownCastingTypeWarned.add(warnKey);
+    const label = isAbsentType ? 'no activation.type declared' : `unenumerated activation.type "${t}"`;
     console.warn(
       `baphomet-utils | _deriveActionUseCost: actor "${warnActor?.name ?? '?'}" cast `
-      + `"${item?.name ?? '?'}" with unenumerated activation.type "${t}" — charging the `
-      + `standard 2 actions. This casting time is not in the canon nine-type map `
-      + `(GOAL_v2.37.6 FIX-1); adjudicate manually if 2 is wrong for this cast.`
+      + `"${item?.name ?? '?'}" with ${label} — this computes a cost of 2 actions for `
+      + `it (whether that cost is actually charged is decided by the pf1PreActionUse `
+      + `routing downstream, not here). This casting time is not in the canon nine-type `
+      + `map (GOAL_v2.37.6 FIX-1); adjudicate manually if 2 is wrong for this cast.`
     );
   }
   return 2; // standard default — unchanged; only the silence is fixed (D-3)
+}
+
+// FIX-1 (GOAL_v2.37.7, D-1): dedupe store for the unknown-consumable-subType /
+// unmapped-wand-casting-type warning. Client-local, in-memory ONLY, mirroring
+// the FIX-2 dedupe pattern above — a distinct mechanism from it because the
+// condition being warned about is different (an unrecognised consumable
+// subType, not an unenumerated spell casting time).
+const _unknownConsumableWarned = new Set();
+
+function _warnUnknownConsumable(actor, item, label) {
+  const warnKey = `${actor?.id ?? '?'}:${item?.id ?? item?.name ?? '?'}`;
+  if (_unknownConsumableWarned.has(warnKey)) return;
+  _unknownConsumableWarned.add(warnKey);
+  console.warn(
+    `baphomet-utils | _deriveConsumableActionCost: actor "${actor?.name ?? '?'}" used `
+    + `${label} — this computes a cost of 2 actions for it. This subType/casting time `
+    + `is not in the canon FIX-1 table (GOAL_v2.37.7); adjudicate manually if 2 is `
+    + `wrong for this use. Never blocks the use.`
+  );
+}
+
+/**
+ * FIX-1 (GOAL_v2.37.7, D-1): cost a consumable item-use by system.subType.
+ * potion -> 2 (Draw 1 + Drink 1). scroll -> 3 (Draw 1 + Cast 2). wand -> the
+ * wand action's OWN activation.type, looked up through
+ * CHAINED_CASTING_TIME_ACTION_COST — the same route every chained spell cost
+ * takes, NOT a hardcoded number (pf1 stamps a wand action's activation.type
+ * "standard", so both fixtures answer 2 today, but a wand of a full-round
+ * spell would answer 3 without a second table). The map itself is read only,
+ * never modified (GOAL_v2.37.6 settled its nine entries). Any subType outside
+ * the three above, or a wand action whose activation.type the map does not
+ * enumerate, takes the unknown path: warn once per actor+item, charge the
+ * standard 2, never block — the same disposition FIX-2 gives an
+ * unenumerated casting time, for the same reason.
+ */
+function _deriveConsumableActionCost(actionUse) {
+  const item = actionUse?.item;
+  const subType = item?.system?.subType ?? null;
+  const actor = actionUse?.actor ?? item?.actor;
+
+  if (subType === 'potion') return 2; // Draw 1 + Drink 1
+  if (subType === 'scroll') return 3; // Draw 1 + Cast 2
+
+  if (subType === 'wand') {
+    const act = actionUse?.action;
+    const actData = act?.data ?? act?.system ?? act ?? {};
+    const activation = actData?.activation ?? act?.activation;
+    const t = activation?.type;
+    if (Object.prototype.hasOwnProperty.call(CHAINED_CASTING_TIME_ACTION_COST, t)) {
+      return CHAINED_CASTING_TIME_ACTION_COST[t];
+    }
+    _warnUnknownConsumable(actor, item, `a wand action with unenumerated activation.type "${t}"`);
+    return 2;
+  }
+
+  _warnUnknownConsumable(actor, item, `a consumable with unrecognised subType "${subType}"`);
+  return 2;
 }
 
 /**
@@ -3606,9 +3759,92 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     const actor = actionUse?.actor ?? item?.actor;
     if (!item || !actor || !game.combat?.active) return;
 
-    const isSpell  = item.type === 'spell';
-    const isAttack = item.type === 'attack' || item.type === 'weapon';
-    if (!isSpell && !isAttack) return; // only attacks and spells
+    const isSpell      = item.type === 'spell';
+    const isAttack     = item.type === 'attack' || item.type === 'weapon';
+    // FIX-1 (GOAL_v2.37.7, D-1): a consumable (potion/scroll/wand/other) is
+    // really drawn and activated by item.use(), so it costs actions too.
+    const isConsumable = item.type === 'consumable';
+    if (!isSpell && !isAttack && !isConsumable) return; // only attacks, spells and consumables
+
+    // FIX-3 (GOAL_v2.37.7, D-3, Mechanics Ref §14): the skip-dialog
+    // multi-swing escape. item.use({ skipDialog: true }) on a weapon/natural
+    // attack can roll a full PF1 attack — Token Action HUD PF1's own toggle
+    // writes the same client-scoped pf1.skipActionDialogs setting the module
+    // cannot prevent and should not try. Gated on isAttack (the same test
+    // above already makes), never a spell — Magic Missile's extraAttacks
+    // resolves as one Standard action correctly charged, not an escape, and
+    // must never card. Also gated on actor.type === 'character'
+    // (docs/reference/foundry-v13/foundry-and-pf1.md; confirmed Actor types
+    // "character"/"npc").
+    //
+    // FIELD READ, cited under No API Invention: this reads
+    // actionUse.shared.attacks.length — the field named in
+    // docs/specs/action-economy/R6_OPEN_QUESTIONS.md:164 ("The reliable
+    // per-use roll count is the pf1AttackRoll firing count /
+    // shared.attacks.length"), NOT chat-message systemRolls.attacks.length
+    // (a different field, read off the posted ChatMessage rather than the
+    // hook payload). R6:164's own capture recorded shared.attacks.length ===
+    // 1 for every use in that cycle (a single Strike, and each of two
+    // SEPARATE macro-bridged item.use() calls for a TWF pair) — it never
+    // captured a single item.use() on a natural attack configured with 2+
+    // attacks in the SAME action (the Claw fixture below), which is a
+    // different case R6 left open. GOAL_v2.37.7 (D-3) supplies its own
+    // live-verified fact for exactly that case — a skeleton claw's
+    // skipDialog use rolling systemRolls.attacks.length === 2 on the
+    // resulting chat message — and directs reading the equivalent hook-time
+    // count off actionUse.shared.attacks.length so the module never has to
+    // wait for, or parse, the chat message. This follows that directive
+    // exactly; case 7's probe (A14) is what proves shared.attacks.length
+    // actually populates to 2 for the Claw fixture, since R6 alone does not
+    // settle it.
+    //
+    // On more than one swing with pf1.skipActionDialogs true: allow it, let
+    // it resolve, and post a GM-whispered card — never cancel, never convert
+    // to a single Strike, never block. One card per occurrence, no dedupe:
+    // this is a GM-facing record, the opposite of RULE-2's
+    // developer-diagnostic dedupe — a GM who sees one card and then nothing
+    // has been told the escape happened once when it happened six times.
+    //
+    // Placed ABOVE the settingOn/Cleave/dedupe gates below, and ABOVE the TWF
+    // off-hand return that now follows it: the card reports an escape the
+    // module cannot prevent, so it must not inherit any suppression on the
+    // spend path — it must fire whether or not autoAttackSpend is on, Cleave
+    // is declared, _isActionUseSpendDuped's 500ms window would otherwise
+    // skip this use, or the action is a TWF off-hand swing that correctly
+    // spends no action. The TWF return below suppresses the CHARGE, never
+    // the REPORT. Ordinary TWF play is unaffected by this card firing first:
+    // each macro-bridged off-hand item.use() carries shared.attacks.length
+    // === 1 (docs/specs/action-economy/R6_OPEN_QUESTIONS.md:164), so
+    // swingCount > 1 never trips for a normal TWF off-hand swing.
+    if (isAttack && actor?.type === 'character'
+        && game.settings.get('pf1', 'skipActionDialogs')) {
+      const swingCount = actionUse?.shared?.attacks?.length ?? 0;
+      if (swingCount > 1) {
+        _debugLog(`auto-spend: §14 skip-dialog escape — "${actor.name}" resolved ${swingCount} swings on "${item.name}" with pf1.skipActionDialogs ON — allowed, not auto-tracked, posting GM card`);
+        const safeActorName = foundry.utils.escapeHTML(actor.name);
+        const safeItemName  = foundry.utils.escapeHTML(item.name);
+        // Fire-and-forget, not awaited: this handler is synchronous and
+        // OBSERVE-ONLY (must never return a Promise to pf1PreActionUse), and
+        // the enclosing try/catch is synchronous and cannot observe an async
+        // rejection. See RUNTIME_VERIFICATION_REQUIRED.md:128-139 — do not
+        // infer a settled promise from a rendered card.
+        ChatMessage.create({
+          content:
+            `<p><strong>Action Economy Notice (Mechanics Ref §14):</strong> `
+            + `${safeActorName} resolved <strong>${swingCount}</strong> swings on `
+            + `<em>${safeItemName}</em> via the skip-dialog full-attack escape. `
+            + `The action was allowed and was <strong>not</strong> auto-tracked — `
+            + `adjudicate the action economy by hand.</p>`,
+          speaker: ChatMessage.getSpeaker({ actor }),
+          whisper: ChatMessage.getWhisperRecipients('GM')
+        }).catch((err) => {
+          console.warn(
+            `baphomet-utils | FIX-3 §14 card failed to post for "${actor.name}" — handled here, not thrown. `
+            + `The attack still resolved and was never blocked.`, err
+          );
+        });
+      }
+    }
 
     // PF1.5 TWF off-hand: the off-hand bonus swing rides on the main-hand
     // Strike action and must NOT cost its own action. The PF1.5 Two-Weapon
@@ -3621,9 +3857,13 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       return;
     }
 
-    const settingOn = isSpell
-      ? game.settings.get(AT_MODULE_ID, 'autoSpellSpend')
-      : game.settings.get(AT_MODULE_ID, 'autoAttackSpend');
+    // FIX-1 (GOAL_v2.37.7, D-1): a consumable is gated on the same setting as
+    // a spell, not a new toggle — no consumable-specific setting is
+    // registered (FIX-2's settings.js edits are the skill allowlist only). A
+    // consumable use is a cast-flavored action-use, not a Strike.
+    const settingOn = isAttack
+      ? game.settings.get(AT_MODULE_ID, 'autoAttackSpend')
+      : game.settings.get(AT_MODULE_ID, 'autoSpellSpend');
     if (!settingOn) {
       _debugLog(`auto-spend: ${item.type} setting OFF — no spend for "${item.name}"`);
       return;
@@ -3645,7 +3885,10 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       return;
     }
 
-    const cost = _deriveActionUseCost(actionUse);
+    // FIX-1 (GOAL_v2.37.7, D-1): a consumable is costed by system.subType via
+    // _deriveConsumableActionCost, not the spell/attack routine above (which
+    // would otherwise match the "not a spell" branch and return a flat 1).
+    const cost = isConsumable ? _deriveConsumableActionCost(actionUse) : _deriveActionUseCost(actionUse);
     const activeCombatant = _getActiveCombatantForActor(actor);
 
     // v2.25.1 (Lyra audit): read + consume the AoO (Combat Reflexes) intent ONCE,
@@ -3672,7 +3915,8 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         return;
       }
       const spent = _spendActionForCombatant(
-        activeCombatant.id, cost, isSpell ? `spell-${item.name}` : `attack-${item.name}`
+        activeCombatant.id, cost,
+        isSpell ? `spell-${item.name}` : isAttack ? `attack-${item.name}` : `consumable-${item.name}`
       );
       if (spent) {
         _debugLog(`auto-spend: spent ${cost} action(s) for "${actor.name}" [${item.type}: ${item.name}]`);
@@ -3700,6 +3944,17 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
           return;
         }
         _baphSpendReactionForSpell(ownForSpell, actor, item);
+        return;
+      }
+      // FIX-1 (GOAL_v2.37.7, D-1): off-turn consumables are not charged,
+      // debug text only — this mirrors spells (v2.37.4 carved exactly one
+      // exception out of the return below, the reaction-cost spell above,
+      // and nothing about drinking a potion out of turn asks for a second).
+      // Placed after that carve-out and before the generic !isAttack return,
+      // so the debug text correctly names a consumable instead of reusing
+      // the spell-only wording below.
+      if (isConsumable) {
+        _debugLog(`auto-spend: off-turn consumable "${item.name}" by "${actor.name}" — not charged (no active-turn action)`);
         return;
       }
       if (!isAttack) {

@@ -1,6 +1,19 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.13
+   BAPHOMET UTILS — SETTINGS v1.14
    Central module settings registration.
+
+   v1.14 (module v2.37.7 — "Costs and Escapes", FIX-2 D-2):
+   - skillAutoAllowlist default expanded with twelve confirmed keys: clm,
+     swm, fly, esc, rid, han, sen, spl, sur, prf, lor, art (Climb, Swim,
+     Fly, Escape Artist, Ride, Handle Animal, Sense Motive, Spellcraft,
+     Survival, and the Perform/Lore/Artistry BASE keys — sub-skilled rolls
+     are normalised to base by the pf1ActorRollSkill handler in
+     scripts/action-tracker.js before the allowlist is consulted). Hint
+     text updated to match.
+   - skillAllowlistMigrated2377 migration flag registered, in the RULE-3
+     shape the three prior allowlist migrations already use: rewrites the
+     stored value ONLY if it equals the v2.15.0 default exactly; any other
+     value is a GM customization and is left untouched.
 
    v1.13 (module v2.27.0 — "Perception is always a class skill"):
    - perceptionAlwaysClassSkill registered. World scope, default false.
@@ -249,7 +262,25 @@ Hooks.once('init', () => {
        kno = Knowledge Nobility       (1 action)
        kpl = Knowledge Planes         (1 action)
        kre = Knowledge Religion       (1 action)
-     
+
+     Added v2.37.7 (GOAL_v2.37.7 FIX-2, D-2) — confirmed keys and costs:
+       clm = Climb                    (1 action)
+       swm = Swim                     (1 action)
+       fly = Fly                      (1 action)
+       esc = Escape Artist            (1 action)
+       rid = Ride                     (1 action)
+       han = Handle Animal            (1 action)
+       sen = Sense Motive             (1 action)
+       spl = Spellcraft               (1 action)
+       sur = Survival                 (1 action)
+       prf = Perform (base key)       (1 action)
+       lor = Lore (base key)          (1 action)
+       art = Artistry (base key)      (1 action)
+     Perform/Lore/Artistry are sub-skilled: a roll on a named sub-skill
+     (e.g. "prf.prf1") is normalised to its base key by the
+     pf1ActorRollSkill handler in scripts/action-tracker.js before this
+     allowlist is consulted.
+
      Excluded:
        per = Perception — excluded intentionally. Perception is
        a passive/reactive sense; spending an action pip on it
@@ -260,14 +291,19 @@ Hooks.once('init', () => {
        1 action/round with Continue Disabling). The live handler
        warns the user when dev is rolled in combat. It will be
        re-added once the task subsystem is built.
+
+       dip, dis, lin, pro = Diplomacy, Disguise, Linguistics, Profession —
+       excluded as of v2.37.7. Canon: "cannot be used in combat." The live
+       handler warns once per actor+skill when one of these is rolled in
+       combat; charges nothing; never blocks the roll.
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'skillAutoAllowlist', {
     name: 'Skill Auto-Spend Allowlist',
-    hint: 'Comma-separated PF1 skill keys for automatic action spending. Confirmed keys: acr, blf, int, ste, hea, umd, slt, kar, kdu, ken, kge, khi, klo, kna, kno, kpl, kre. Any keys added manually must be verified against the pf1ActorRollSkill hook payload.',
+    hint: 'Comma-separated PF1 skill keys for automatic action spending. Confirmed keys: acr, blf, int, ste, hea, umd, slt, kar, kdu, ken, kge, khi, klo, kna, kno, kpl, kre, clm, swm, fly, esc, rid, han, sen, spl, sur, prf, lor, art. Any keys added manually must be verified against the pf1ActorRollSkill hook payload.',
     scope: 'world',
     config: true,
     type: String,
-    default: 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre'
+    default: 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre,clm,swm,fly,esc,rid,han,sen,spl,sur,prf,lor,art'
   });
 
   /* ----------------------------------------------------------
@@ -291,6 +327,13 @@ Hooks.once('init', () => {
   });
 
   game.settings.register(SETTINGS_MODULE_ID, 'skillAllowlistMigrated215', {
+    scope: 'world',
+    config: false,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377', {
     scope: 'world',
     config: false,
     type: Boolean,
@@ -404,7 +447,7 @@ Hooks.once('init', () => {
     }
   });
 
-  console.log(`${SETTINGS_MODULE_ID} | Settings v1.13 registered`);
+  console.log(`${SETTINGS_MODULE_ID} | Settings v1.14 registered`);
 });
 
 /* ----------------------------------------------------------
@@ -525,4 +568,44 @@ Hooks.once('ready', async () => {
   }
 
   await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated215', true);
+});
+
+/* ----------------------------------------------------------
+   v2.37.7 MIGRATION — Add Twelve Skills (RULE-3 shape)
+
+   Runs once on the first GM ready after updating to v2.37.7.
+   Detects the confirmed v2.15.0 allowlist string and replaces
+   it with the v2.37.7 string (twelve keys added: clm, swm, fly,
+   esc, rid, han, sen, spl, sur, prf, lor, art — GOAL_v2.37.7
+   FIX-2, D-2).
+
+   Safety: only replaces the exact v2.15.0 string. Any
+   GM-customized allowlist is left completely untouched. The
+   migration flag (skillAllowlistMigrated2377) is written
+   regardless so this block never runs a second time.
+   ---------------------------------------------------------- */
+
+const _V2150_ALLOWLIST = 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre';
+const _V2377_ALLOWLIST = 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre,clm,swm,fly,esc,rid,han,sen,spl,sur,prf,lor,art';
+
+Hooks.once('ready', async () => {
+  if (!game.user.isGM) return;
+
+  if (game.settings.get(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377')) return;
+
+  const current = game.settings.get(SETTINGS_MODULE_ID, 'skillAutoAllowlist');
+
+  if (current === _V2150_ALLOWLIST) {
+    await game.settings.set(SETTINGS_MODULE_ID, 'skillAutoAllowlist', _V2377_ALLOWLIST);
+    console.log(
+      `%c ${SETTINGS_MODULE_ID} | v2.37.7 migration: skillAutoAllowlist expanded with twelve confirmed skills (clm, swm, fly, esc, rid, han, sen, spl, sur, prf, lor, art) `,
+      'background: #6e2a22; color: #e8dfd0; font-weight: bold; padding: 2px 6px;'
+    );
+  } else {
+    console.log(
+      `${SETTINGS_MODULE_ID} | v2.37.7 migration: skillAutoAllowlist already customized or up-to-date — no change ("${current}")`
+    );
+  }
+
+  await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377', true);
 });
