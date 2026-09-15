@@ -3,17 +3,20 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.6 — *What Falls Through*
+**Current Version:** 2.37.7 — *Costs and Escapes*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-A **full-round** spell now costs the three actions it should, and a **move-action** spell costs the
-one it should -- both were mischarged since the last release. Every other casting time pf1 doesn't
-recognize still costs the standard 2, but now warns once on your own console instead of charging
-quietly. See the [changelog](#changelog) for the full entry, including a corrected claim about a
-deprecated call the module never made.
+**Potions, scrolls, and wands now cost actions when used in combat**, instead of costing nothing
+while the item is genuinely drawn and consumed. Twelve more skills -- Climb, Swim, Fly, Escape
+Artist, Ride, Handle Animal, Sense Motive, Spellcraft, Survival, Perform, Lore, and Artistry --
+join the auto-spend allowlist, and Diplomacy, Disguise, Linguistics, and Profession now warn
+"cannot be used in combat" instead of silently doing nothing. A full attack rolled through the
+skip-dialog escape still resolves exactly as before, but now posts a GM-only whispered card naming
+the actor, item, and swing count, so the table knows to adjudicate it by hand. See the
+[changelog](#changelog) for the full entry.
 
 ---
 
@@ -181,6 +184,46 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.37.7 — Costs and Escapes
+
+Two long-lived gaps get worked into the same hook the module already routes everything else
+through. **Drinking a potion, reading a scroll, or triggering a wand now costs an action.** A
+potion is a Draw and a Drink (2 actions), a scroll is a Draw and a Cast (3 actions), and a wand
+costs whatever its own casting time costs, looked up through the same nine-type chained map every
+spell already uses -- **not a hardcoded number**, so a wand of a full-round spell costs 3 without
+anyone ever having to edit a second table. Before this release all three cost nothing while the
+item was really consumed; a consumable subtype the module doesn't recognize warns once and charges
+the standard 2 rather than staying silent, the same disposition an unrecognized spell casting time
+already gets. Off-turn consumable use is still not charged, as before -- only debug text, mirroring
+how an off-turn spell has always been handled.
+
+**Twelve more skills are auto-spendable in combat**: Climb, Swim, Fly, Escape Artist, Ride, Handle
+Animal, Sense Motive, Spellcraft, Survival, Perform, Lore, and Artistry, each 1 action, joining the
+seventeen already confirmed. A one-time migration adds them to any existing world's allowlist
+unless it has already been hand-customized, in which case the customization is left alone. A
+sub-skilled roll -- Perform (sing), Lore (local history), and the like -- now reaches the allowlist
+by its base skill, because the automation was blind to every real sub-skilled roll under
+Perform/Lore/Artistry until it was normalized. **Diplomacy, Disguise, Linguistics, and Profession
+get a warning instead of silence**: canon says these cannot be used in combat, and the module now
+says so once per actor per skill, charges nothing, and never blocks the roll.
+
+**The skip-dialog full-attack escape is now visible to the GM.** Token Action HUD PF1 and similar
+tools can roll a full multi-swing PF1 attack through the same client-scoped
+`pf1.skipActionDialogs` setting the module cannot prevent and does not try to. When that happens,
+the attack still resolves exactly as before -- never cancelled, never converted to a single Strike
+-- but the GM now gets a whispered card naming the actor, the item, and the swing count, once per
+occurrence, so the table finds out the action economy needs a hand adjudication instead of it
+passing unnoticed. A spell with multiple resolved effects (Magic Missile's extra missiles, for
+example) never triggers this card -- one Standard action correctly charged is not an escape.
+
+**The existing "uncosted casting time" warning now says what actually happens, rather than what it
+assumed would happen.** It used to claim it was "charging the standard 2 actions" even on paths
+where the routing downstream decides not to charge at all; it now names the cost this function
+computes without asserting that it is spent. An activation type that is simply absent (no casting
+time declared) now gets its own distinct wording instead of being folded into "unenumerated" --
+canon cannot cost a spell that declares no casting time, and charging 2 in silence is the same
+class of defect this module already fixed once for casting times pf1 doesn't recognize at all.
 
 ### v2.37.6 — What Falls Through
 
