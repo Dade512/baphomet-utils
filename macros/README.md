@@ -45,10 +45,23 @@ one-off tool, not a runtime-dependency macro, and stays out of scope for this re
   `game.baphometActions.toggleBonusAction(combatant.id)` to grant/revoke the 4th "bonus action"
   pip (Haste) on the selected token's combatant. Independent of the "Auto-Grant Haste Bonus
   Action" world setting.
+- `ready.js` — **Ready** (token-driven, no feat gate — universal, `GOAL_v2.37.8`). Declares
+  Ready and spends **2 actions** via `game.baphometActions.spendAction`. If the Reaction pip
+  was already spent before the declare, warns that the readied action has nothing to trigger
+  on but still spends the 2 actions — it does not block.
+- `total-defense.js` — **Total Defense** (token-driven, no feat gate — universal,
+  `GOAL_v2.37.8`). Declares Total Defense and spends **1 action**; on a successful spend
+  only, applies a **+4 dodge** AC buff Item that lives through the enemies' turns and lifts
+  at this actor's own next turn start.
+- `withdraw.js` — **Withdraw** (token-driven, no feat gate — universal, `GOAL_v2.37.8`).
+  Declares Withdraw and zeroes **all remaining actions**, including a live Haste bonus pip,
+  via `game.baphometActions.endTurnActions`. Refuses outright, with no spend, on a creature
+  carrying an active Fleeing marker buff.
 
-The three token-driven declare-macros (`vital-strike.js`, `charge.js`, `cleave.js`) and the
-GM-only `haste-bonus-action.js` are **not per-character** — one copy each serves every actor.
-Only `twf-tier-aware.js` is per-character (hardcoded actor + weapon IDs).
+The three token-driven declare-macros (`vital-strike.js`, `charge.js`, `cleave.js`), the
+GM-only `haste-bonus-action.js`, and the three `GOAL_v2.37.8` declare-macros (`ready.js`,
+`total-defense.js`, `withdraw.js`) are **not per-character** — one copy each serves every
+actor. Only `twf-tier-aware.js` is per-character (hardcoded actor + weapon IDs).
 
 ## Manual deployment (fresh install)
 
@@ -67,6 +80,9 @@ Foundry does not auto-create world Macro documents from a module's shipped files
 | `charge.js` | Charge |
 | `cleave.js` | Cleave |
 | `haste-bonus-action.js` | Haste: Bonus Action |
+| `ready.js` | Ready |
+| `total-defense.js` | Total Defense |
+| `withdraw.js` | Withdraw |
 
 **TWF is per-character**: copy `twf-tier-aware.js`'s contents per dual-wielder, edit the actor
 name and the two weapon item IDs near the top, and create a separate in-world macro for each.
@@ -92,6 +108,11 @@ edit. A future deployment/sync mechanism is out of scope for this milestone.
 
 ## History
 
+- **v2.37.8** — Three new declare-macros added: `ready.js`, `total-defense.js`, `withdraw.js`
+  (`GOAL_v2.37.8_DECLARE_AND_WITHDRAW` FIX-1/FIX-2/FIX-3). Ready and Total Defense spend
+  through the public `game.baphometActions.spendAction`; Withdraw spends through the new
+  `game.baphometActions.endTurnActions`, which zeroes all remaining actions including a live
+  Haste bonus pip. All three are token-driven, feat-gate-free, and not per-character.
 - **v2.32.0** — Relocated from `docs/homebrew/macros/` (gitignored) to top-level `/macros`
   (tracked, packaged in the release ZIP). Header `CANONICAL SOURCE OF TRUTH` paths updated to
   `macros/<name>.js`; all five `SYNC_STAMP`s set to `2026-07-07`. No macro logic changed.

@@ -1,6 +1,15 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.14
+   BAPHOMET UTILS — SETTINGS v1.15
    Central module settings registration.
+
+   v1.15 (module v2.37.8 — "Declare and Withdraw", FIX-4 / TD-36(a)):
+   - New Hooks.once('ready') nag (not GM-gated — pf1.skipActionDialogs is
+     client-scoped): warns once per page load, on every client, when
+     pf15ModeEnabled (world) AND pf1's skipActionDialogs (client) are both
+     true. Silent otherwise. No flag, no setting, no socket, no chat
+     message — the escape-visibility warning itself lives in
+     action-tracker.js (v2.37.7's §14 card); this is the before-the-fact
+     table-rule nag, not an enforcement.
 
    v1.14 (module v2.37.7 — "Costs and Escapes", FIX-2 D-2):
    - skillAutoAllowlist default expanded with twelve confirmed keys: clm,
@@ -608,4 +617,31 @@ Hooks.once('ready', async () => {
   }
 
   await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377', true);
+});
+
+/* ----------------------------------------------------------
+   v2.37.8 NAG — Skip Action Prompts client-local warning
+   (GOAL_v2.37.8_DECLARE_AND_WITHDRAW FIX-4, TD-36(a))
+
+   Fires on EVERY client, not GM-gated — pf1.skipActionDialogs is
+   client-scoped, and the whole point is to tell the player who set it on
+   their own client. One ui.notifications warning when BOTH pf15ModeEnabled
+   (world) and pf1's skipActionDialogs (client) are true. Silent in every
+   other combination. No socket, no flag, no dedupe store, no chat message —
+   Hooks.once fires once per page load, which is the intended cadence: a
+   reload re-arms it.
+   ---------------------------------------------------------- */
+Hooks.once('ready', () => {
+  let pf15Enabled = false;
+  let skipDialogsOn = false;
+  try { pf15Enabled = game.settings.get(SETTINGS_MODULE_ID, 'pf15ModeEnabled'); } catch (e) { /* not registered */ }
+  try { skipDialogsOn = game.settings.get('pf1', 'skipActionDialogs'); } catch (e) { /* pf1 setting absent */ }
+
+  if (pf15Enabled && skipDialogsOn) {
+    ui.notifications.warn(
+      `baphomet-utils | pf1.skipActionDialogs is ON for this client while PF1.5 Mode is enabled — ` +
+      `rolls will resolve without prompts and the action tracker will never see or charge them. ` +
+      `Table rule: Skip Action Prompts stays OFF.`
+    );
+  }
 });
