@@ -3,20 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.7 — *Costs and Escapes*
+**Current Version:** 2.37.8 — *Declare and Withdraw*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Potions, scrolls, and wands now cost actions when used in combat**, instead of costing nothing
-while the item is genuinely drawn and consumed. Twelve more skills -- Climb, Swim, Fly, Escape
-Artist, Ride, Handle Animal, Sense Motive, Spellcraft, Survival, Perform, Lore, and Artistry --
-join the auto-spend allowlist, and Diplomacy, Disguise, Linguistics, and Profession now warn
-"cannot be used in combat" instead of silently doing nothing. A full attack rolled through the
-skip-dialog escape still resolves exactly as before, but now posts a GM-only whispered card naming
-the actor, item, and swing count, so the table knows to adjudicate it by hand. See the
-[changelog](#changelog) for the full entry.
+**Ready, Total Defense, and Withdraw now cost actions**, via three new declare-macros
+(`macros/ready.js`, `macros/total-defense.js`, `macros/withdraw.js`) that spend directly through
+the action tracker's public API instead of relying on a rolled action the tracker can hear.
+Withdraw zeroes the whole remaining turn, including a live Haste bonus pip, and refuses outright
+on a creature already marked Fleeing. A client-local nag now warns the moment PF1.5 Mode is
+enabled and `pf1.skipActionDialogs` is ON, before that escape gets used rather than only after —
+**table rule: Skip Action Prompts stays OFF.** See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -51,6 +50,9 @@ documents from a module's files. You must place each one manually:
 | `cleave.js` | Cleave |
 | `twf-tier-aware.js` | Two-Weapon Fighting |
 | `haste-bonus-action.js` | Haste: Bonus Action |
+| `ready.js` | Ready |
+| `total-defense.js` | Total Defense |
+| `withdraw.js` | Withdraw |
 
 **Two-Weapon Fighting is per-character**: `twf-tier-aware.js` hardcodes an actor name and two
 weapon item IDs near the top of the file. Copy the file's contents per dual-wielding character,
@@ -184,6 +186,25 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.37.8 — Declare and Withdraw
+
+Three PF1.5 actions that cost pips and roll nothing get their own declare-macros, and one
+client-scoped escape gets a warning before it happens instead of only after. **Ready**
+(`macros/ready.js`) spends 2 actions and, if the Reaction was already spent before the declare,
+warns that the readied action has nothing to trigger on -- it warns, it does not block. **Total
+Defense** (`macros/total-defense.js`) spends 1 action and applies a +4 dodge AC buff that lives
+through the enemies' turns and lifts at this actor's own next turn start. **Withdraw**
+(`macros/withdraw.js`) spends *all* remaining actions in one declare, including a live Haste bonus
+pip, through a new `game.baphometActions.endTurnActions` call added specifically for this -- the
+existing public spend is count-based and cannot reach the bonus pool by design. Withdraw refuses
+outright, with no spend, on a creature carrying an active Fleeing marker buff (a module convention:
+no pf1 condition key exists for Fleeing, and none is added by this release).
+
+**The skip-dialog escape now warns before it happens, not only after.** `pf1.skipActionDialogs` is
+a client-scoped PF1 setting a player can flip from their own Token Action HUD, bypassing the action
+economy entirely. On every client where PF1.5 Mode is enabled and that setting is already on, one
+warning fires at load naming both. **Table rule: Skip Action Prompts stays OFF.**
 
 ### v2.37.7 — Costs and Escapes
 

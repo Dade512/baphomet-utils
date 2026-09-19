@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.29
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.30
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
@@ -15,6 +15,27 @@
              Paralyzed/Nauseated from baphomet-utils condition buffs/flags
              to auto-lock pips. Staggered is not a live tracked condition
              (folds into Slowed 1 — see v1.26 Changes / MECH-3).
+
+   v1.30 Changes (GOAL_v2.37.8_DECLARE_AND_WITHDRAW — "Declare and Withdraw",
+   FIX-3):
+   - New `game.baphometActions.endTurnActions(combatantId)`: Withdraw's
+     "zero the turn" declare (ruling 1). Zeroes every remaining NORMAL pip
+     at or above `state.conditionLocked` and the Haste BONUS pip if one is
+     present and available — by its OWN path, never by passing
+     `allowBonus: true` into `_spendActionCore` (that parameter and its
+     single caller, `_spendActionForCombatant` on a validated single
+     Strike, stay byte-unchanged — ruling 1/Do NOT touch). Declared as a
+     top-level `function _endTurnActionsCore(combatantId)` (not a closure
+     or an arrow property) so it is reachable as a global the same way
+     `_deriveActionUseCost` already is — the build-freshness proof this
+     goal's runtime lane relies on. Leaves the Reaction pip and the Combat
+     Reflexes (jade) pool untouched. Returns `true` only if it zeroed at
+     least one pip, `false` if there was nothing to zero. Refuses cleanly,
+     with no mutation, on the same no-active-GM condition every other
+     public spend already refuses on, and reaches the GM through the
+     EXISTING v2.37.0 pip-authority relay via a new `kind: 'endTurn'`
+     branch in `_baphSocketPipSpendRelay` — no second socket, no second
+     authority model.
 
    v1.29 Changes (GOAL_v2.37.0_PIP_AUTHORITY — "Whose Hand Moves", the FD-06
    fix):
@@ -1795,6 +1816,10 @@ Hooks.once('ready', () => {
     // enforced privately in _spendActionCore, reachable only via _spendActionForCombatant
     // on the validated single-Strike path. (v2.29.0)
     spendAction: (combatantId, count = 1) => _spendActionCore(combatantId, count, false),
+    // FIX-3 (GOAL_v2.37.8_DECLARE_AND_WITHDRAW, ruling 1): Withdraw's "zero the turn"
+    // declare — zeroes every remaining normal pip AND a live Haste bonus pip, by its own
+    // path (see _endTurnActionsCore). Never widens _spendActionCore's allowBonus.
+    endTurnActions: (combatantId) => _endTurnActionsCore(combatantId),
     spendReaction: (combatantId) => {
       const state = _getState(combatantId);
       if (!state || !state.reaction[0]) return false;
@@ -1992,7 +2017,7 @@ Hooks.once('ready', () => {
      {
        combatantId: string,                                          // required
        kind: 'reaction' | 'combatReflex' | 'action' | 'offHandReserve'
-             | 'offHandRollback' | 'toggle',                          // optional, default 'action'
+             | 'offHandRollback' | 'toggle' | 'endTurn',              // optional, default 'action'
        count: number,                                                 // 'action' only, default 1
        allowBonus: boolean,                                           // 'action' only, default false —
                                                                         // v2.37.0 round-02 (OVERSEER FIX
@@ -2091,7 +2116,7 @@ function _baphActionApplyPipValue(state, type, index, value) {
  * bespoke response path for that case, by design).
  *
  * @param {string} combatantId
- * @param {'reaction'|'combatReflex'|'action'|'offHandReserve'|'offHandRollback'|'toggle'} kind
+ * @param {'reaction'|'combatReflex'|'action'|'offHandReserve'|'offHandRollback'|'toggle'|'endTurn'} kind
  * @param {object} extra           - kind-specific payload fields (count/tier/toggleType/toggleIndex)
  * @param {() => void} onFailure   - reverts the optimistic mutation; must itself
  *                                   re-check supersession (Trap 3) before acting
@@ -2226,6 +2251,12 @@ async function _baphSocketPipSpendRelay(payload = {}) {
   switch (kind) {
     case 'reaction':       ok = game.baphometActions.spendReaction(combatantId); break;
     case 'combatReflex':   ok = game.baphometActions.spendCombatReflex(combatantId); break;
+    // FIX-3 (GOAL_v2.37.8_DECLARE_AND_WITHDRAW): Withdraw's endTurnActions relay branch.
+    // Re-runs the SAME public game.baphometActions.endTurnActions() call a GM's own click
+    // would make — on this handler the GM path inside _endTurnActionsCore always takes the
+    // "write directly" branch, so this re-derives availability against the GM's own
+    // authoritative state, exactly like the 'reaction'/'combatReflex' cases above.
+    case 'endTurn':        ok = game.baphometActions.endTurnActions(combatantId); break;
     case 'offHandReserve': {
       // v2.37.1 (GOAL_v2.37.1_RELAY_PARAMS FIX-1 / D-1a): the payload's
       // `tier` is DISCARDED — the GM derives it fresh from the combatant's
@@ -2616,6 +2647,74 @@ function _spendActionForCombatant(combatantId, count = 1, reason = '') {
     _debugLog(`_spendActionForCombatant: insufficient actions (${count} needed) for ${combatantId} [${reason}]`);
   }
   return ok;
+}
+
+// FIX-3 (GOAL_v2.37.8_DECLARE_AND_WITHDRAW, ruling 1): Withdraw costs ALL
+// remaining actions, including a live Haste bonus pip — a claim the public
+// spendAction (count-based, allowBonus hard-wired false) cannot express, and
+// _spendActionCore's allowBonus parameter is reserved for
+// _spendActionForCombatant's single validated-Strike caller (Do NOT touch
+// list) so this does NOT call _spendActionCore at all. It zeroes both pools
+// directly, by its OWN path, mirroring _spendActionCore's GM-direct-write /
+// non-GM-relay-through-the-EXISTING-socket shape (kind: 'endTurn') without
+// widening allowBonus or opening a second relay. Declared as a top-level
+// `function` (not a closure or an arrow property on game.baphometActions) so
+// it is reachable as a global the same way _deriveActionUseCost already is —
+// A00 slices this declaration's source text out of the served file and
+// compares it to globalThis._endTurnActionsCore as its build-freshness proof.
+// Does NOT touch the Reaction pip or the Combat Reflexes (jade) pool —
+// Withdraw ends the turn; it does not surrender off-turn capability.
+function _endTurnActionsCore(combatantId) {
+  const state = _getState(combatantId);
+  if (!state) return false;
+
+  const normalIdxs = [];
+  for (let i = 0; i < 3; i++) {
+    if (state.actions[i] && i >= state.conditionLocked) normalIdxs.push(i);
+  }
+  // Round-02 fix (OVERSEER FIX BRIEF D1): the bonus pip's Usable rule is
+  // `granted && !fullyIncapacitated && bonusPip[0] === true` (glossary,
+  // action-tracker.js:2485-2488) — suppression is DERIVED AT USE and must
+  // never mutate bonusPip. Derive incap the same way _spendActionCore
+  // already does at its own call site (:2578-2579); do not invent a new
+  // reader.
+  const actor = game.combat?.combatants?.get(combatantId)?.actor;
+  const incap = !!_readConditionActionLoss(actor).fullyIncapacitated;
+  const bonusAvail = !incap && Array.isArray(state.bonusPip) && state.bonusPip[0] === true;
+  if (normalIdxs.length === 0 && !bonusAvail) return false; // nothing to zero
+
+  // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): "is a GM connected at all"
+  // is locally knowable synchronously — refuse cleanly before mutating, same
+  // as every other public spend (action-tracker.js:1805-1808, :2555-2556).
+  if (!game.user.isGM && !game.users.activeGM) {
+    _baphActionWarnPipRelayFailure('no-active-gm');
+    return false;
+  }
+
+  const priorActions  = [...state.actions];
+  const priorBonusPip = Array.isArray(state.bonusPip) ? [...state.bonusPip] : [];
+  for (const i of normalIdxs) state.actions[i] = false;
+  if (bonusAvail) state.bonusPip[0] = false;
+  _refreshPipRow(combatantId);
+  if (game.user.isGM) {
+    _writePipFlag(combatantId);
+    return true;
+  }
+  // Player path: relay through the active GM via the EXISTING v2.37.0 socket
+  // — a new 'endTurn' branch alongside 'reaction'/'combatReflex'/'action',
+  // not a second relay. Trap 2: still returns true synchronously here; the
+  // relay/revert happens after this call has already returned.
+  const seq = ++state.pipSeq;
+  const capturedRound = game.combat?.round ?? 0;
+  const capturedActiveId = _currentActiveCombatantId(game.combat);
+  _baphActionEmitPipRelay(combatantId, 'endTurn', {}, () => {
+    if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
+    if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3
+    state.actions  = priorActions;
+    state.bonusPip = priorBonusPip;
+    _refreshPipRow(combatantId);
+  });
+  return true;
 }
 
 /* ----------------------------------------------------------
