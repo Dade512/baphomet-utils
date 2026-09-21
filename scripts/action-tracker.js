@@ -1797,7 +1797,29 @@ Hooks.once('ready', () => {
         conditionLocked: state.conditionLocked,
         bonusActionsRemaining: Array.isArray(state.bonusPip) ? state.bonusPip.filter(p => p).length : 0,
         bonusActionsTotal:     Array.isArray(state.bonusPip) ? state.bonusPip.length : 0,
-        bonusManualGranted:    !!state.bonusManual
+        bonusManualGranted:    !!state.bonusManual,
+        // GOAL_v2.37.9 FIX-5: read-only, so the probe can assert on the MAP counter. Existing
+        // fields above keep their names, order and meanings — this is appended, not inserted.
+        swingsTaken:           Number(state.swingsTaken) || 0
+      };
+    },
+    // GOAL_v2.37.9 FIX-5: read-only accessor so the probe can assert on _isQualifyingBundle
+    // (module-private, defined beside _isEligibleSwing) without any write path. Resolves the
+    // actor/item documents and the requested action, then defers entirely to the predicate.
+    isQualifyingBundle: (actorId, itemId, actionIndex = 0) => {
+      const actor = game.actors.get(actorId) ?? null;
+      const item = actor?.items?.get(itemId) ?? null;
+      if (!actor || !item) {
+        return { found: false, actorType: null, itemType: null, itemSubType: null, extraType: null, qualifies: false };
+      }
+      const action = item.system?.actions?.[actionIndex] ?? null;
+      return {
+        found: true,
+        actorType: actor.type ?? null,
+        itemType: item.type ?? null,
+        itemSubType: item.system?.subType ?? null,
+        extraType: action?.extraAttacks?.type ?? null,
+        qualifies: _isQualifyingBundle(actor, item, action)
       };
     },
     reset: (combatantId) => {
@@ -3767,7 +3789,28 @@ function _isEligibleSwing(actor, item, activeCombatant) {
   const t = item.type;
   if (t === 'weapon') return true;
   if (t === 'attack' && item.system?.subType === 'weapon') return true;
-  return false; // spell / natural / unarmed / unconfirmed → fail open (deferred)
+  // GOAL_v2.37.9 FIX-3 (TD-44): a PC's own natural attack takes and advances MAP like a weapon.
+  // actor.type === 'character' is load-bearing — an NPC's naturals stay ineligible (TD-57, out of
+  // scope here); a monster's routine is priced as one action with no internal MAP.
+  if (t === 'attack' && item.system?.subType === 'natural' && actor.type === 'character') return true;
+  return false; // spell / natural (npc) / unarmed / unconfirmed → fail open (deferred)
+}
+
+// GOAL_v2.37.9 FIX-1 (rulings 1-3): does this item's bundle of attacks resolve as pf1.5 canon
+// prices a single action, so the Full Attack control may stay visible? A bundle qualifies by what
+// the item IS — a spell/consumable delivering multiple projectiles, or an npc's natural attack —
+// never by a manufactured weapon's own extra-attack formula, and never when that formula (however
+// labeled) is really the BAB iterative progression. See docs quoted in GOAL_v2.37.9 rulings 1-3.
+function _isQualifyingBundle(actor, item, action) {
+  if (!actor || !item) return false;
+  const t = item.type;
+  if (t === 'attack' && item.system?.subType === 'natural' && actor.type === 'npc') return true;
+  if (t !== 'spell' && t !== 'consumable') return false;
+  const xa = action?.extraAttacks ?? null;
+  if (!xa) return true;
+  if (pf1.config?.extraAttacks?.[xa.type]?.iteratives === true) return false;
+  try { if (JSON.stringify(xa).includes('@attributes.bab')) return false; } catch { return false; }
+  return true;
 }
 
 // MAP penalty for the swing being rolled, reading the PRIOR count: max(0, prior - 1) * -5.
@@ -5887,8 +5930,18 @@ function _diagHandleAttackDialogRender(app, element) {
       const singleAttackBtn = root.querySelector('button[name="attack_single"]');
       const fullAttackBtn = root.querySelector('button[name="attack_full"]');
       if (singleAttackBtn && fullAttackBtn) {
-        fullAttackBtn.remove();
-        _debugLog('PF1.5 mode: removed Full Attack button from AttackDialog');
+        // GOAL_v2.37.9 FIX-2: a qualifying bundle (a multi-projectile spell/consumable, or an
+        // npc's natural attack — see _isQualifyingBundle) keeps its Full Attack control. Read the
+        // dialog's own getters defensively; a dialog that cannot say what it is falls through to
+        // the old, safe answer and suppresses.
+        const dlgActor = app?.actor ?? null;
+        const dlgItem = app?.item ?? null;
+        const dlgAction = app?.action ?? null;
+        const qualifies = (dlgActor && dlgItem) ? _isQualifyingBundle(dlgActor, dlgItem, dlgAction) : false;
+        if (!qualifies) {
+          fullAttackBtn.remove();
+          _debugLog('PF1.5 mode: removed Full Attack button from AttackDialog');
+        }
       }
     }
   } catch { /* settings not yet registered or other safe failure — noop */ }

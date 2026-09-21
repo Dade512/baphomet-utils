@@ -3,19 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.8 — *Declare and Withdraw*
+**Current Version:** 2.37.9 — *What One Action Buys*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Ready, Total Defense, and Withdraw now cost actions**, via three new declare-macros
-(`macros/ready.js`, `macros/total-defense.js`, `macros/withdraw.js`) that spend directly through
-the action tracker's public API instead of relying on a rolled action the tracker can hear.
-Withdraw zeroes the whole remaining turn, including a live Haste bonus pip, and refuses outright
-on a creature already marked Fleeing. A client-local nag now warns the moment PF1.5 Mode is
-enabled and `pf1.skipActionDialogs` is ON, before that escape gets used rather than only after —
-**table rule: Skip Action Prompts stays OFF.** See the [changelog](#changelog) for the full entry.
+**The Full Attack button now survives when canon actually prices the bundle at one action.** A
+multi-projectile spell or consumable (Magic Missile and the like) and an NPC's natural attack keep
+their Full Attack control in PF1.5 Mode; every manufactured weapon, a PC's own natural attack, and
+any spell whose extra attacks are really the BAB iterative formula wearing a different label still
+lose it. **A PC's natural attack now takes and advances Multiple Attack Penalty like a weapon does**,
+closing the gap where clawing twice used to cost no escalating penalty. See the
+[changelog](#changelog) for the full entry.
 
 ---
 
@@ -72,7 +72,7 @@ version-history / SYNC_STAMP notes if you suspect drift.
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
 - **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic. Players click their own pips to spend them; **returning a spent pip is a GM action**, so a mis-click is undone by the GM rather than by the player who made it
-- **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll)
+- **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll). In PF1.5 Mode, a multi-projectile spell (or consumable) or an NPC's natural attack keeps its Full Attack button, because canon prices that bundle at a single action; every weapon, every PC's own natural attack, and any spell whose extra attacks are really BAB iteratives does not, and stays a single Strike per action.
 - **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
 - **Roll Card Styler** — Dark leather result bar on all roll cards; nat 20 gold bar and nat 1 blood bar with flavor labels
 - **Custom XP Progression** — Campaign-specific modified slow track overriding PF1e's "Fast" track; integrates organically with character sheet level-up, skill points, feats, and class features
@@ -186,6 +186,24 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.37.9 — What One Action Buys
+
+The PF1.5 Full Attack suppression was unconditional — every multi-attack creature and every
+multi-projectile spell alike lost the button that rolls their bundle together, with nothing
+warning anyone. **A bundle now keeps its Full Attack control when canon prices it at a single
+action**: a multi-projectile spell or consumable (Magic Missile's extra missiles), or an NPC's
+natural attack. **A manufactured weapon's own extra attacks never
+qualify**, because a `custom` extra-attack type can quietly carry the BAB iterative formula (an Orc
+Javelin's iterative count is exactly this shape) — the carve-out is decided by what the item *is*,
+never by trusting its declared extra-attack type, and a spell or consumable is refused twice over:
+once if `pf1.config.extraAttacks[type].iteratives` says so outright (*Ghost Whip*, the *Rod of
+Lordly Might*), and once if the serialized extra-attack data names `@attributes.bab` under any label
+(*Coin Shot*) — those three still lose the button. **A PC's natural attack now takes and
+advances Multiple Attack Penalty exactly like a weapon does** — clawing twice in a turn now pays
+the same escalating penalty a weapon Strike always has; an NPC's natural attack is deliberately
+unchanged; a full cross-item routine (claw/claw/bite as one control) is not this release and
+remains future work.
 
 ### v2.37.8 — Declare and Withdraw
 
