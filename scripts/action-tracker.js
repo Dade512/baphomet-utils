@@ -851,6 +851,11 @@ function _initState(combatantId) {
     _resetForSeq:    saved?.resetForSeq ?? null,
     // v2.30.0 MAP swing counter — in-memory ONLY, never flag-persisted (sidesteps R6 P-8).
     swingsTaken:     0,
+    // GOAL_v2.38.0 FIX-1 ("What the Routine Counts"): per-turn record of routine-member item
+    // ids that have completed a monster's natural-attack routine this turn — in-memory ONLY,
+    // same non-persistence rationale as swingsTaken above. Read by FIX-1 (pf1PreAttackRoll),
+    // written by FIX-2 (pf1PreActionUse), cleared everywhere swingsTaken is (FIX-4).
+    routineDone:     new Set(),
     // v2.30.0 TWF off-hand budget — persisted via the isolated OFF_BUDGET_FLAG_KEY flag.
     offHandUsed,
     offSeq,
@@ -882,6 +887,9 @@ function _resetState(combatantId) {
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
   // v2.30.0: clear the per-turn MAP counter + TWF off-hand budget on a manual reset too.
   state.swingsTaken = 0;
+  // GOAL_v2.38.0 FIX-4: clear the routine record wherever swingsTaken clears — a record that
+  // outlived its turn would turn the next turn's routine into ordinary follow-up Strikes.
+  state.routineDone.clear();
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1;
   // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): bump pipSeq here too —
@@ -1286,6 +1294,8 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
   // v2.30.0: reset the per-turn MAP swing counter (in-memory) and TWF off-hand budget.
   state.swingsTaken = 0;
+  // GOAL_v2.38.0 FIX-4: same turn-start boundary clears the routine record (FIX-1).
+  state.routineDone.clear();
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1; // bump so this reset write supersedes prior values
   const _resetActorId = combatant?.actor?.id;
@@ -1998,7 +2008,9 @@ Hooks.once('ready', () => {
     // crit-confirm guards) on toggle-off. Does NOT touch the TWF off-hand budget (separate
     // concern). Mirrors the Phase-5 reconcileAllBonusAuto bridge.
     resetMapCounters: () => {
-      for (const [, st] of pipState) { if (st) st.swingsTaken = 0; }
+      // GOAL_v2.38.0 FIX-4: mapTracking toggled off clears the routine record too, beside
+      // swingsTaken — the third of the three reset points FIX-4 requires.
+      for (const [, st] of pipState) { if (st) { st.swingsTaken = 0; st.routineDone.clear(); } }
       _mapArmCrit.clear();
       _mapPendingConfirm.clear();
     }
@@ -3782,7 +3794,11 @@ Hooks.on('pf1PreDamageRoll', (action, rollData, parts, extraParts) => {
 // Eligible MAP swing? On-turn manufactured-weapon Strike, not Cleave.
 // Manufactured = item.type 'weapon' OR ('attack' with system.subType 'weapon') — GATE-1c:
 // weaponSubtype is null on the 'attack' representation, so subType is the discriminator.
-// Naturals/unarmed (subType !== 'weapon'), spells, and off-turn/AoO all FAIL OPEN (no MAP).
+// GOAL_v2.38.0 (TD-58, FIX-5): a manufactured weapon and a PC's own natural attack (v2.37.9
+// FIX-3, TD-44) are eligible swings here. An NPC's natural attack is never eligible in this
+// function — it is counted on the routine path instead (FIX-1, the pf1PreAttackRoll handler
+// below), and becomes an eligible Strike only once that routine has closed for the turn
+// (FIX-2). Unarmed, spells, and off-turn/AoO attacks still FAIL OPEN (no MAP) here.
 function _isEligibleSwing(actor, item, activeCombatant) {
   if (!actor || !item || !activeCombatant) return false;             // off-turn / AoO → no active match
   if (globalThis.baphometCleave?.actorId === actor.id) return false; // Cleave = 0 swings / full BAB
@@ -3793,7 +3809,7 @@ function _isEligibleSwing(actor, item, activeCombatant) {
   // actor.type === 'character' is load-bearing — an NPC's naturals stay ineligible (TD-57, out of
   // scope here); a monster's routine is priced as one action with no internal MAP.
   if (t === 'attack' && item.system?.subType === 'natural' && actor.type === 'character') return true;
-  return false; // spell / natural (npc) / unarmed / unconfirmed → fail open (deferred)
+  return false; // spell / unarmed / unconfirmed → fail open (deferred); an npc natural is routine-counted (FIX-1/FIX-2), not fail-open
 }
 
 // GOAL_v2.37.9 FIX-1 (rulings 1-3): does this item's bundle of attacks resolve as pf1.5 canon
@@ -3811,6 +3827,20 @@ function _isQualifyingBundle(actor, item, action) {
   if (pf1.config?.extraAttacks?.[xa.type]?.iteratives === true) return false;
   try { if (JSON.stringify(xa).includes('@attributes.bab')) return false; } catch { return false; }
   return true;
+}
+
+// GOAL_v2.38.0 FIX-1 ("What the Routine Counts"): the routine-membership helper. An item is a
+// routine member when it is a natural attack on an npc that _isQualifyingBundle accepts — the
+// sole membership source this release (TD-57b will add a GM-only flag as a second source, by
+// changing only this helper). Calls _isQualifyingBundle and nothing else; _isQualifyingBundle
+// itself is unchanged. The item/subType/actor-type checks below are narrower than
+// _isQualifyingBundle alone — that predicate also accepts a qualifying spell/consumable bundle
+// on any actor, which is not a "natural attack on an npc" and so is not a routine member.
+function _isRoutineMemberItem(actor, item, action) {
+  if (!actor || !item) return false;
+  if (actor.type !== 'npc') return false;
+  if (item.type !== 'attack' || item.system?.subType !== 'natural') return false;
+  return _isQualifyingBundle(actor, item, action);
 }
 
 // MAP penalty for the swing being rolled, reading the PRIOR count: max(0, prior - 1) * -5.
@@ -3839,6 +3869,44 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
 
     _mapArmCrit.delete(actor.id); // never carry an arm across rolls
     const activeCombatant = _getActiveCombatantForActor(actor);
+
+    // GOAL_v2.38.0 FIX-1 ("What the Routine Counts", canon :132-133): a monster's natural-attack
+    // routine occupies swings but takes no MAP; the Strike that follows it does. Placed here,
+    // after the crit-confirmation guard and before the _isEligibleSwing gate, because that gate's
+    // npc-natural branch stays closed (:3795-era line, byte-unchanged) and would otherwise fail
+    // this roll open with nothing counted at all. Routine membership is decided once by
+    // _isRoutineMemberItem (FIX-1's module-scope helper) — a natural attack on an npc that
+    // _isQualifyingBundle accepts — and nothing else.
+    if (actor.type === 'npc' && activeCombatant) {
+      const routineItem = attackData?.item;
+      if (_isRoutineMemberItem(actor, routineItem, attackData)) {
+        let routineState = _getState(activeCombatant.id);
+        if (!routineState) { _initState(activeCombatant.id); routineState = _getState(activeCombatant.id); }
+        if (routineState) {
+          if (!routineState.routineDone.has(routineItem.id)) {
+            // First use this turn of this routine-member item: a routine roll. No MAP is
+            // injected — rollConfig.secondaryPenalty is left exactly as pf1 set it — and the
+            // crit arm is set with penalty 0, so a confirmation roll inside the routine neither
+            // advances the count nor takes a penalty (the existing guard above does the rest).
+            routineState.swingsTaken = (Number(routineState.swingsTaken) || 0) + 1;
+            _mapArmCrit.set(actor.id, { penalty: 0 });
+            return;
+          }
+          // FIX-2/D3 (canon :133): this item already completed its routine this turn (closed by
+          // the pf1PreActionUse handler below) — every further roll with it is a follow-up
+          // Strike and takes MAP exactly as an eligible weapon swing does, even though
+          // _isEligibleSwing itself would still say no for an npc natural.
+          const routinePenalty = _mapPenaltyForPrior(routineState.swingsTaken);
+          if (routinePenalty < 0) {
+            rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + routinePenalty);
+          }
+          routineState.swingsTaken = (Number(routineState.swingsTaken) || 0) + 1;
+          _mapArmCrit.set(actor.id, { penalty: routinePenalty });
+          return;
+        }
+      }
+    }
+
     if (!_isEligibleSwing(actor, attackData?.item, activeCombatant)) return;
 
     let state = _getState(activeCombatant.id);
@@ -3907,6 +3975,51 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // really drawn and activated by item.use(), so it costs actions too.
     const isConsumable = item.type === 'consumable';
     if (!isSpell && !isAttack && !isConsumable) return; // only attacks, spells and consumables
+
+    // FIX-2 / FIX-3 (GOAL_v2.38.0, "What the Routine Counts", D1/D2/D3): a routine-member
+    // item's routine closes HERE, when its use ends. pf1 rolls every attack of a use before
+    // pf1PreActionUse fires, once per use (see the pf1 facts cited above the MAP section, and
+    // the live GATE-1 probe note above _isEligibleSwing) — so this hook is the only boundary
+    // that tells "still inside this use's routine" (FIX-1, pf1PreAttackRoll) from "a later use,
+    // therefore a follow-up Strike". Runs unconditionally here, above every settings/Cleave/
+    // dedupe/TWF gate below — same placement principle as the v2.37.7 escape card just below —
+    // so no spend-path early return can leave a routine open (FIX-2). D1: once-per-turn is
+    // enforced by warning only; this block never returns false, never cancels, never converts
+    // the use, whatever it finds.
+    if (isAttack && actor.type === 'npc') {
+      const routineCombatant = _getActiveCombatantForActor(actor);
+      if (routineCombatant && _isRoutineMemberItem(actor, item, actionUse?.action)) {
+        let routineState = _getState(routineCombatant.id);
+        if (!routineState) { _initState(routineCombatant.id); routineState = _getState(routineCombatant.id); }
+        if (routineState) {
+          const routineAlreadyDone = routineState.routineDone.has(item.id); // BEFORE this use closes it
+          const routineSwingCount = actionUse?.shared?.attacks?.length ?? 0;
+          if (routineAlreadyDone && routineSwingCount > 1) {
+            // FIX-3 (D1): a second routine with this item this turn resolved as a run of
+            // ordinary follow-up Strikes (FIX-1 already counted and MAP'd every roll) — post
+            // one GM-whispered card, observe-only, and nothing else.
+            const safeActorName = foundry.utils.escapeHTML(actor.name);
+            const safeItemName  = foundry.utils.escapeHTML(item.name);
+            ChatMessage.create({
+              content:
+                `<p><strong>Routine Repeat Notice (PF1.5 :133):</strong> `
+                + `${safeActorName} has already used its routine with <em>${safeItemName}</em> `
+                + `this turn. These attacks were counted as individual Strikes with Multiple `
+                + `Attack Penalty.</p>`,
+              speaker: ChatMessage.getSpeaker({ actor }),
+              whisper: ChatMessage.getWhisperRecipients('GM'),
+              flags: { 'baphomet-utils': { routineRepeat: true } }
+            }).catch((err) => {
+              console.warn(
+                `baphomet-utils | FIX-3 routine-repeat card failed to post for "${actor.name}" — `
+                + `handled here, not thrown. The attacks still resolved and were never blocked.`, err
+              );
+            });
+          }
+          routineState.routineDone.add(item.id); // FIX-2: this item's routine is closed for the turn
+        }
+      }
+    }
 
     // FIX-3 (GOAL_v2.37.7, D-3, Mechanics Ref §14): the skip-dialog
     // multi-swing escape. item.use({ skipDialog: true }) on a weapon/natural

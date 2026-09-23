@@ -3,19 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.37.9 — *What One Action Buys*
+**Current Version:** 2.38.0 — *What the Routine Counts*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**The Full Attack button now survives when canon actually prices the bundle at one action.** A
-multi-projectile spell or consumable (Magic Missile and the like) and an NPC's natural attack keep
-their Full Attack control in PF1.5 Mode; every manufactured weapon, a PC's own natural attack, and
-any spell whose extra attacks are really the BAB iterative formula wearing a different label still
-lose it. **A PC's natural attack now takes and advances Multiple Attack Penalty like a weapon does**,
-closing the gap where clawing twice used to cost no escalating penalty. See the
-[changelog](#changelog) for the full entry.
+**A monster's natural-attack routine now occupies swings, and the Strike after it takes Multiple
+Attack Penalty.** A skeleton's two-claw routine costs no MAP on either claw, but a scimitar swung
+after it rolls at swing 3 (−5); a three-attack routine's follow-up Strike lands at swing 4 (−10),
+canon's own example. A second routine with the same attack in the same turn resolves as a run of
+ordinary Strikes and posts one GM-whispered warning — it is never blocked. A creature whose attacks
+are separate items still pays an action per item, and weapon or mixed routines are not yet tracked.
+See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -186,6 +186,25 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.38.0 — What the Routine Counts
+
+v2.37.9 restored the Full Attack control for an NPC's natural attack but never counted what it
+rolled: a skeleton that clawed twice and then swung its scimitar rolled the scimitar as swing 1, at
+full bonus, silently wrong. **A monster's full routine — its stat-block full-attack line, natural
+attacks on an `npc` only in this release — now occupies swings equal to its attack count, with no
+Multiple Attack Penalty between them**, exactly as canon prices the routine at one action: a
+two-claw routine takes the count from 0 to 2 with no MAP on either roll; a three-attack routine
+takes it from 0 to 3, MAP-free even on the third attack, where a naive "let NPC naturals take MAP
+like a weapon" fix would wrongly put −5. **The Strike that follows a routine takes MAP as the next
+swing** — swing 3 at −5 after a two-claw routine, swing 4 at −10 after a three-attack routine,
+canon's own worked example. **A monster's routine runs once per turn.** A second use of the same
+routine-member item resolves as a run of ordinary follow-up Strikes (each taking and advancing MAP)
+and posts exactly one GM-whispered chat card noting the repeat — the handler warns, it never blocks,
+cancels or converts the use. **Still not tracked (TD-57b):** a creature whose claw/claw/bite are
+separate items still pays one action per item instead of one action for the whole routine, and a
+manufactured-weapon or mixed (natural + weapon) routine is not counted at all — only a single
+natural-attack item on an `npc` qualifies this release.
 
 ### v2.37.9 — What One Action Buys
 
