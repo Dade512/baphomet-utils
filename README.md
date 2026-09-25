@@ -3,19 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.38.0 — *What the Routine Counts*
+**Current Version:** 2.38.1 — *What the Routine Costs*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**A monster's natural-attack routine now occupies swings, and the Strike after it takes Multiple
-Attack Penalty.** A skeleton's two-claw routine costs no MAP on either claw, but a scimitar swung
-after it rolls at swing 3 (−5); a three-attack routine's follow-up Strike lands at swing 4 (−10),
-canon's own example. A second routine with the same attack in the same turn resolves as a run of
-ordinary Strikes and posts one GM-whispered warning — it is never blocked. A creature whose attacks
-are separate items still pays an action per item, and weapon or mixed routines are not yet tracked.
-See the [changelog](#changelog) for the full entry.
+**A monster's natural-attack routine now costs one action, no matter how many items it spans.** A
+skeleton's Claw-then-Bite routine is one action total, not one per item; the routine ends the
+instant the monster swings a weapon, and every member item after that is priced and penalized as an
+ordinary Strike. A second use of the same routine item is a per-roll charge — a two-roll repeat costs
+two actions, and a granted Haste bonus action can cover one of those rolls. A Cleave follow-up still
+costs nothing and takes no part in the routine at all. A monster's weapon or mixed (natural + weapon)
+routine is still not tracked. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -186,6 +186,27 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.38.1 — What the Routine Costs
+
+v2.38.0 counted a monster's routine correctly but still charged it wrong: a skeleton whose Claw and
+Bite are separate items paid one action for each, when canon prices the whole routine — however many
+items it spans — at one action. **A monster's full cross-item routine now costs exactly one action
+per turn.** The Claw is charged 1; the Bite, used right after in the same still-open routine, is
+charged 0 — both take no Multiple Attack Penalty, and every roll is still counted as a swing. **The
+routine ends at the monster's first on-turn weapon Strike.** From then until the turn resets, every
+routine-member item is treated as having already run its routine: its rolls are follow-up Strikes
+that take MAP, and its uses are charged per roll rather than the routine's flat action. **A repeat use
+of a routine item — after its own routine, or after the routine has closed — is charged one action
+per attack it rolls**, all-or-nothing, and a granted Haste bonus action can now cover one of those
+rolls (previously the bonus pip only ever covered a single-roll Strike). **A Cleave follow-up takes no
+part in the routine at all** (TD-59): it costs nothing, adds no swing, takes no MAP, and neither
+closes the routine nor uses up any member item's turn. **The repeat chat card now says only what
+actually happened**: it names Multiple Attack Penalty only when `mapTracking` was on for that use, and
+names the per-roll charge only when the charge was actually made — with both off, it posts only the
+once-per-turn reminder, instead of always claiming MAP was tracked. **Still not tracked (TD-57b part
+2):** a monster's weapon-only or mixed (natural + weapon) routine, and a GM-marked routine member
+beyond a natural attack the module already recognizes.
 
 ### v2.38.0 — What the Routine Counts
 

@@ -856,6 +856,16 @@ function _initState(combatantId) {
     // same non-persistence rationale as swingsTaken above. Read by FIX-1 (pf1PreAttackRoll),
     // written by FIX-2 (pf1PreActionUse), cleared everywhere swingsTaken is (FIX-4).
     routineDone:     new Set(),
+    // GOAL_v2.38.1 FIX-1 ("What the Routine Costs"): whether this turn's routine has already
+    // been charged its one action, across every member item — in-memory ONLY, same
+    // non-persistence rationale as swingsTaken/routineDone above. Read+written by FIX-1
+    // (pf1PreActionUse spend decision), cleared at the same three points as routineDone.
+    routinePaid:     false,
+    // GOAL_v2.38.1 FIX-1 ruling A: whether an on-turn manufactured-weapon Strike has closed
+    // the routine for every member item this turn — in-memory ONLY. Read by the MAP handler
+    // and the pf1PreActionUse close block; written by the close block; cleared alongside
+    // routineDone.
+    routineClosed:   false,
     // v2.30.0 TWF off-hand budget — persisted via the isolated OFF_BUDGET_FLAG_KEY flag.
     offHandUsed,
     offSeq,
@@ -890,6 +900,9 @@ function _resetState(combatantId) {
   // GOAL_v2.38.0 FIX-4: clear the routine record wherever swingsTaken clears — a record that
   // outlived its turn would turn the next turn's routine into ordinary follow-up Strikes.
   state.routineDone.clear();
+  // GOAL_v2.38.1 FIX-1: clear the routine paid/closed records at the same boundary.
+  state.routinePaid = false;
+  state.routineClosed = false;
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1;
   // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): bump pipSeq here too —
@@ -1296,6 +1309,9 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   state.swingsTaken = 0;
   // GOAL_v2.38.0 FIX-4: same turn-start boundary clears the routine record (FIX-1).
   state.routineDone.clear();
+  // GOAL_v2.38.1 FIX-1: same turn-start boundary clears the paid/closed records too.
+  state.routinePaid = false;
+  state.routineClosed = false;
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1; // bump so this reset write supersedes prior values
   const _resetActorId = combatant?.actor?.id;
@@ -2010,7 +2026,8 @@ Hooks.once('ready', () => {
     resetMapCounters: () => {
       // GOAL_v2.38.0 FIX-4: mapTracking toggled off clears the routine record too, beside
       // swingsTaken — the third of the three reset points FIX-4 requires.
-      for (const [, st] of pipState) { if (st) { st.swingsTaken = 0; st.routineDone.clear(); } }
+      // GOAL_v2.38.1 FIX-1: same bridge clears the paid/closed records too.
+      for (const [, st] of pipState) { if (st) { st.swingsTaken = 0; st.routineDone.clear(); st.routinePaid = false; st.routineClosed = false; } }
       _mapArmCrit.clear();
       _mapPendingConfirm.clear();
     }
@@ -2661,17 +2678,21 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   return true;
 }
 
-function _spendActionForCombatant(combatantId, count = 1, reason = '') {
+function _spendActionForCombatant(combatantId, count = 1, reason = '', perRollCharge = false) {
   const state = _getState(combatantId);
   if (!state) {
     _debugLog(`_spendActionForCombatant: no state for ${combatantId} [${reason}]`);
     return false;
   }
 
-  // Haste bonus is spendable ONLY for a single ordinary Strike (reason `attack-*`, count 1).
+  // Haste bonus is spendable for a single ordinary Strike (reason `attack-*`, count 1) — and,
+  // GOAL_v2.38.1 FIX-2 ruling D, for a per-roll routine-repeat Strike charge of any count, so
+  // the bonus pip can cover one roll of a multi-roll repeat. Every existing caller passes only
+  // three arguments (perRollCharge defaults false), so this widens nothing for them.
   // Spells/skills/manual-panel and cost>1 Vital Strike/Charge use normal pips only. Move /
   // manually-resolved Strike use the bonus via a direct click on the pip. (Codex r3 #1.)
-  const allowBonus = (count === 1) && typeof reason === 'string' && reason.startsWith('attack-');
+  const isAttackReason = typeof reason === 'string' && reason.startsWith('attack-');
+  const allowBonus = isAttackReason && (count === 1 || perRollCharge === true);
 
   // All-or-nothing is enforced inside _spendActionCore (preflight across both pools).
   const ok = _spendActionCore(combatantId, count, allowBonus);
@@ -3870,6 +3891,13 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
     _mapArmCrit.delete(actor.id); // never carry an arm across rolls
     const activeCombatant = _getActiveCombatantForActor(actor);
 
+    // FIX-3 (GOAL_v2.38.1, D-3/TD-59): a Cleave follow-up takes no part in a routine — tested
+    // here, before the routine branch, exactly as _isEligibleSwing's own Cleave gate (:3804)
+    // does for a weapon: no swing counted, no MAP, whatever the item's type. Without this, an
+    // npc natural attack declared as a Cleave follow-up would reach the routine branch below
+    // (which never consults _isEligibleSwing) and wrongly advance swingsTaken / take MAP.
+    if (globalThis.baphometCleave?.actorId === actor.id) return;
+
     // GOAL_v2.38.0 FIX-1 ("What the Routine Counts", canon :132-133): a monster's natural-attack
     // routine occupies swings but takes no MAP; the Strike that follows it does. Placed here,
     // after the crit-confirmation guard and before the _isEligibleSwing gate, because that gate's
@@ -3883,7 +3911,10 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
         let routineState = _getState(activeCombatant.id);
         if (!routineState) { _initState(activeCombatant.id); routineState = _getState(activeCombatant.id); }
         if (routineState) {
-          if (!routineState.routineDone.has(routineItem.id)) {
+          // GOAL_v2.38.1 FIX-1 ruling A: once the routine is closed for the turn, every member
+          // item is a follow-up Strike, whether or not IT has individually completed its own
+          // routine yet — the test becomes "not done for this item AND not closed."
+          if (!routineState.routineDone.has(routineItem.id) && !routineState.routineClosed) {
             // First use this turn of this routine-member item: a routine roll. No MAP is
             // injected — rollConfig.secondaryPenalty is left exactly as pf1 set it — and the
             // crit arm is set with penalty 0, so a confirmation roll inside the routine neither
@@ -3976,50 +4007,71 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     const isConsumable = item.type === 'consumable';
     if (!isSpell && !isAttack && !isConsumable) return; // only attacks, spells and consumables
 
-    // FIX-2 / FIX-3 (GOAL_v2.38.0, "What the Routine Counts", D1/D2/D3): a routine-member
-    // item's routine closes HERE, when its use ends. pf1 rolls every attack of a use before
-    // pf1PreActionUse fires, once per use (see the pf1 facts cited above the MAP section, and
-    // the live GATE-1 probe note above _isEligibleSwing) — so this hook is the only boundary
-    // that tells "still inside this use's routine" (FIX-1, pf1PreAttackRoll) from "a later use,
-    // therefore a follow-up Strike". Runs unconditionally here, above every settings/Cleave/
-    // dedupe/TWF gate below — same placement principle as the v2.37.7 escape card just below —
-    // so no spend-path early return can leave a routine open (FIX-2). D1: once-per-turn is
-    // enforced by warning only; this block never returns false, never cancels, never converts
+    // GOAL_v2.38.1 ("What the Routine Costs", FIX-1/FIX-2/FIX-3): per-use routine
+    // classification, carried down to the cost/spend decision and the repeat card below (both
+    // run after the settings/Cleave/dedupe/TWF gates, so they cannot re-derive this — the close
+    // block below runs first and must hand it down). _routineState is this combatant's shared
+    // pipState entry (same object the MAP handler's swingsTaken lives on).
+    let _routineState = null;
+    let _routineUse = false;      // charge: the routine's one action (0 if already paid)
+    let _routineRepeat = false;   // charge: one action per attack rolled (FIX-2)
+    let _routineSwingCount = 0;   // actionUse.shared.attacks.length, read once
+    let _routineMapCounted = false;
+    let _routineActionsCharged = false;
+
+    // FIX-1 / FIX-2 / FIX-3 (GOAL_v2.38.1, "What the Routine Costs", D1/D2/D3, ruling A): the
+    // routine closes, and a routine-member item's per-turn record is written, HERE, when its
+    // use ends. pf1 rolls every attack of a use before pf1PreActionUse fires, once per use (see
+    // the pf1 facts cited above the MAP section, and the live GATE-1 probe note above
+    // _isEligibleSwing) — so this hook is the only boundary that tells "still inside this use's
+    // routine" (pf1PreAttackRoll) from "a later use, therefore a follow-up Strike". Runs
+    // unconditionally here, above every settings/Cleave/dedupe/TWF gate below — same placement
+    // principle as the v2.37.7 escape card just below — so no spend-path early return can leave
+    // the routine-open record unwritten. Ruling A/FIX-3: a Cleave follow-up is invisible to all
+    // of it — it neither marks an item done, nor closes the routine, nor (later, at the spend
+    // decision) marks it paid. This block never returns false, never cancels, never converts
     // the use, whatever it finds.
     if (isAttack && actor.type === 'npc') {
       const routineCombatant = _getActiveCombatantForActor(actor);
-      if (routineCombatant && _isRoutineMemberItem(actor, item, actionUse?.action)) {
+      const isCleaveUse = globalThis.baphometCleave?.actorId === actor.id;
+      if (routineCombatant && !isCleaveUse) {
         let routineState = _getState(routineCombatant.id);
         if (!routineState) { _initState(routineCombatant.id); routineState = _getState(routineCombatant.id); }
         if (routineState) {
-          const routineAlreadyDone = routineState.routineDone.has(item.id); // BEFORE this use closes it
-          const routineSwingCount = actionUse?.shared?.attacks?.length ?? 0;
-          if (routineAlreadyDone && routineSwingCount > 1) {
-            // FIX-3 (D1): a second routine with this item this turn resolved as a run of
-            // ordinary follow-up Strikes (FIX-1 already counted and MAP'd every roll) — post
-            // one GM-whispered card, observe-only, and nothing else.
-            const safeActorName = foundry.utils.escapeHTML(actor.name);
-            const safeItemName  = foundry.utils.escapeHTML(item.name);
-            ChatMessage.create({
-              content:
-                `<p><strong>Routine Repeat Notice (PF1.5 :133):</strong> `
-                + `${safeActorName} has already used its routine with <em>${safeItemName}</em> `
-                + `this turn. These attacks were counted as individual Strikes with Multiple `
-                + `Attack Penalty.</p>`,
-              speaker: ChatMessage.getSpeaker({ actor }),
-              whisper: ChatMessage.getWhisperRecipients('GM'),
-              flags: { 'baphomet-utils': { routineRepeat: true } }
-            }).catch((err) => {
-              console.warn(
-                `baphomet-utils | FIX-3 routine-repeat card failed to post for "${actor.name}" — `
-                + `handled here, not thrown. The attacks still resolved and were never blocked.`, err
-              );
-            });
+          _routineState = routineState;
+          _routineMapCounted = game.settings.get(AT_MODULE_ID, 'mapTracking') === true;
+          // A declared Vital Strike or Charge keeps its own cost (_deriveActionUseCost) and is
+          // not a routine charge. HI-1: it still marks its item done, as v2.38.0 did, but never
+          // marks the routine paid and never becomes a per-roll repeat charge or repeat card.
+          const aid = actor.id;
+          const hasDeclaredCostOverride = !!(aid && (globalThis.baphometVitalStrike?.actorId === aid
+                                          || globalThis.baphometCharge?.actorId === aid));
+          // Ruling A: an on-turn manufactured-weapon Strike (not a Cleave follow-up, excluded
+          // above) closes the routine for every member item until the turn resets.
+          const isWeaponStrike = item.type === 'weapon' || (item.type === 'attack' && item.system?.subType === 'weapon');
+          if (isWeaponStrike) {
+            routineState.routineClosed = true;
+          } else if (_isRoutineMemberItem(actor, item, actionUse?.action)) {
+            if (hasDeclaredCostOverride) {
+              // HI-1: own cost via _deriveActionUseCost below, not a routine charge, never marks
+              // paid — but marks its item done, as v2.38.0 did.
+              routineState.routineDone.add(item.id);
+            } else {
+              _routineSwingCount = actionUse?.shared?.attacks?.length ?? 0;
+              const alreadyDoneOrClosed = routineState.routineDone.has(item.id) || routineState.routineClosed;
+              if (alreadyDoneOrClosed) {
+                _routineRepeat = true; // FIX-2/D3: charged per roll below
+              } else {
+                _routineUse = true; // FIX-1: charged the routine's one action below (0 if paid)
+                routineState.routineDone.add(item.id); // this item's routine is closed for the turn
+              }
+            }
           }
-          routineState.routineDone.add(item.id); // FIX-2: this item's routine is closed for the turn
         }
       }
     }
+
+    try {
 
     // FIX-3 (GOAL_v2.37.7, D-3, Mechanics Ref §14): the skip-dialog
     // multi-swing escape. item.use({ skipDialog: true }) on a weapon/natural
@@ -4143,7 +4195,13 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // FIX-1 (GOAL_v2.37.7, D-1): a consumable is costed by system.subType via
     // _deriveConsumableActionCost, not the spell/attack routine above (which
     // would otherwise match the "not a spell" branch and return a flat 1).
-    const cost = isConsumable ? _deriveConsumableActionCost(actionUse) : _deriveActionUseCost(actionUse);
+    // GOAL_v2.38.1 FIX-1/FIX-2: a routine use is charged the routine's one action (0 if
+    // already paid this turn); a routine repeat (item already done, or the routine closed) is
+    // charged one action per attack rolled. Neither overrides a consumable's own cost.
+    const cost = isConsumable ? _deriveConsumableActionCost(actionUse)
+      : _routineRepeat ? _routineSwingCount
+      : _routineUse ? (_routineState.routinePaid ? 0 : 1)
+      : _deriveActionUseCost(actionUse);
     const activeCombatant = _getActiveCombatantForActor(actor);
 
     // v2.25.1 (Lyra audit): read + consume the AoO (Combat Reflexes) intent ONCE,
@@ -4169,10 +4227,22 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         _baphSpendReactionForSpell(activeCombatant, actor, item);
         return;
       }
+      // GOAL_v2.38.1 FIX-2 ruling D: the fourth argument marks a per-roll routine-repeat
+      // Strike charge, letting the Haste bonus pip cover one roll even when count > 1.
       const spent = _spendActionForCombatant(
         activeCombatant.id, cost,
-        isSpell ? `spell-${item.name}` : isAttack ? `attack-${item.name}` : `consumable-${item.name}`
+        isSpell ? `spell-${item.name}` : isAttack ? `attack-${item.name}` : `consumable-${item.name}`,
+        _routineRepeat
       );
+      // GOAL_v2.38.1 FIX-1: the paid mark is set on the first routine use that reaches this
+      // spend decision, whether the spend succeeded or was refused — the routine is one
+      // action, asked for once.
+      if (_routineUse && _routineState) {
+        _routineState.routinePaid = true;
+      }
+      if (_routineRepeat) {
+        _routineActionsCharged = spent;
+      }
       if (spent) {
         _debugLog(`auto-spend: spent ${cost} action(s) for "${actor.name}" [${item.type}: ${item.name}]`);
       } else {
@@ -4238,6 +4308,37 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         const r = game.baphometActions?.spendReaction?.(own.id);
         if (wantsCR && !r) ui.notifications?.warn?.(`${actor.name}: no Combat Reflexes AoO or reaction left.`);
         _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — ${wantsCR ? 'no jade → ' : ''}reaction ${r ? 'spent' : 'unavailable'} (no action, no swing)`);
+      }
+    }
+    } finally {
+      // FIX-4 (GOAL_v2.38.1, TD-60, ruling C): the repeat card posts after the charge
+      // decision, whatever gate above returned early first (autoAttackSpend off, Cleave,
+      // dedupe, TWF off-hand) — those gates skip the CHARGE, never the REPORT. Only fires for
+      // a routine-member item's repeat use that rolled more than one attack (same
+      // more-than-one-roll threshold the v2.38.0 card used).
+      if (_routineRepeat && _routineSwingCount > 1) {
+        const safeActorName = foundry.utils.escapeHTML(actor.name);
+        const safeItemName  = foundry.utils.escapeHTML(item.name);
+        const bits = [];
+        if (_routineMapCounted) bits.push('were counted as individual Strikes with Multiple Attack Penalty');
+        if (_routineActionsCharged) bits.push('were charged one action per roll');
+        const detail = bits.length
+          ? `These attacks ${bits.join(' and ')}.`
+          : `A monster can execute its routine once per turn.`;
+        ChatMessage.create({
+          content:
+            `<p><strong>Routine Repeat Notice (PF1.5 :133):</strong> `
+            + `${safeActorName} has already used its routine with <em>${safeItemName}</em> `
+            + `this turn. ${detail}</p>`,
+          speaker: ChatMessage.getSpeaker({ actor }),
+          whisper: ChatMessage.getWhisperRecipients('GM'),
+          flags: { 'baphomet-utils': { routineRepeat: true, mapCounted: _routineMapCounted, actionsCharged: _routineActionsCharged } }
+        }).catch((err) => {
+          console.warn(
+            `baphomet-utils | FIX-4 routine-repeat card failed to post for "${actor.name}" — `
+            + `handled here, not thrown. The attacks still resolved and were never blocked.`, err
+          );
+        });
       }
     }
   } catch (e) {
