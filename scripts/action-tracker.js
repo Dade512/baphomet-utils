@@ -861,11 +861,11 @@ function _initState(combatantId) {
     // non-persistence rationale as swingsTaken/routineDone above. Read+written by FIX-1
     // (pf1PreActionUse spend decision), cleared at the same three points as routineDone.
     routinePaid:     false,
-    // GOAL_v2.38.1 FIX-1 ruling A: whether an on-turn manufactured-weapon Strike has closed
-    // the routine for every member item this turn — in-memory ONLY. Read by the MAP handler
-    // and the pf1PreActionUse close block; written by the close block; cleared alongside
-    // routineDone.
-    routineClosed:   false,
+    // GOAL_v2.38.1 FIX-1 ruling A, GOAL_v2.39.0 FIX-3: the item that closed the routine this
+    // turn (an object holding at least its id and name), or null while the routine is open —
+    // in-memory ONLY. Read by the MAP handler and the pf1PreActionUse close block (every read
+    // treats "not null" as closed); written by the close block; cleared alongside routineDone.
+    routineClosed:   null,
     // v2.30.0 TWF off-hand budget — persisted via the isolated OFF_BUDGET_FLAG_KEY flag.
     offHandUsed,
     offSeq,
@@ -901,8 +901,9 @@ function _resetState(combatantId) {
   // outlived its turn would turn the next turn's routine into ordinary follow-up Strikes.
   state.routineDone.clear();
   // GOAL_v2.38.1 FIX-1: clear the routine paid/closed records at the same boundary.
+  // GOAL_v2.39.0 FIX-3: routineClosed is a record (or null), not a boolean.
   state.routinePaid = false;
-  state.routineClosed = false;
+  state.routineClosed = null;
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1;
   // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): bump pipSeq here too —
@@ -1310,8 +1311,9 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   // GOAL_v2.38.0 FIX-4: same turn-start boundary clears the routine record (FIX-1).
   state.routineDone.clear();
   // GOAL_v2.38.1 FIX-1: same turn-start boundary clears the paid/closed records too.
+  // GOAL_v2.39.0 FIX-3: routineClosed is a record (or null), not a boolean.
   state.routinePaid = false;
-  state.routineClosed = false;
+  state.routineClosed = null;
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1; // bump so this reset write supersedes prior values
   const _resetActorId = combatant?.actor?.id;
@@ -1848,6 +1850,18 @@ Hooks.once('ready', () => {
         qualifies: _isQualifyingBundle(actor, item, action)
       };
     },
+    // GOAL_v2.39.0 FIX-1 (D1): the GM-only routine-membership store. Marks/unmarks an item
+    // (by UUID) as a routine member. GM-only; refuses cleanly (resolves false, writes
+    // nothing) for anyone else. See _setRoutineMember for the marking type-refusal and the
+    // serialised write queue.
+    setRoutineMember: (itemUuid, isMember) => _setRoutineMember(itemUuid, isMember),
+    // GOAL_v2.39.0 FIX-1 (D3): the GM's one-step polymorph/wild-shape marking call. Marks
+    // every natural-attack item on the given actor, in one setting write. Returns null for a
+    // non-GM or unknown actor.
+    markNaturalAttacks: (actorId) => _markNaturalAttacks(actorId),
+    // GOAL_v2.39.0 FIX-1: read-only membership test, including the unlinked-token/base-actor
+    // inheritance clause (D1). Writes nothing.
+    isRoutineMember: (itemUuid) => _isRoutineMemberStore(itemUuid),
     reset: (combatantId) => {
       _resetState(combatantId);
       _refreshPipRow(combatantId);
@@ -2027,7 +2041,8 @@ Hooks.once('ready', () => {
       // GOAL_v2.38.0 FIX-4: mapTracking toggled off clears the routine record too, beside
       // swingsTaken — the third of the three reset points FIX-4 requires.
       // GOAL_v2.38.1 FIX-1: same bridge clears the paid/closed records too.
-      for (const [, st] of pipState) { if (st) { st.swingsTaken = 0; st.routineDone.clear(); st.routinePaid = false; st.routineClosed = false; } }
+      // GOAL_v2.39.0 FIX-3: routineClosed is a record (or null), not a boolean.
+      for (const [, st] of pipState) { if (st) { st.swingsTaken = 0; st.routineDone.clear(); st.routinePaid = false; st.routineClosed = null; } }
       _mapArmCrit.clear();
       _mapPendingConfirm.clear();
     }
@@ -3850,18 +3865,174 @@ function _isQualifyingBundle(actor, item, action) {
   return true;
 }
 
-// GOAL_v2.38.0 FIX-1 ("What the Routine Counts"): the routine-membership helper. An item is a
-// routine member when it is a natural attack on an npc that _isQualifyingBundle accepts — the
-// sole membership source this release (TD-57b will add a GM-only flag as a second source, by
-// changing only this helper). Calls _isQualifyingBundle and nothing else; _isQualifyingBundle
-// itself is unchanged. The item/subType/actor-type checks below are narrower than
-// _isQualifyingBundle alone — that predicate also accepts a qualifying spell/consumable bundle
-// on any actor, which is not a "natural attack on an npc" and so is not a routine member.
+/* ============================================================
+   GM-ONLY ROUTINE-MEMBERSHIP STORE — GOAL_v2.39.0_ROUTINE_MEMBERS FIX-1 (D1, D3)
+   ══════════════════════════════════════════════════════════
+   A world setting (routineMembers, registered in scripts/settings.js) holding
+   { [itemUuid]: true }. Nothing but the three functions below (exposed as
+   game.baphometActions.setRoutineMember / markNaturalAttacks / isRoutineMember) writes it.
+   Writes are serialised through _routineMemberWriteChain, one promise chain, so two marks
+   in quick succession cannot overwrite each other.
+   ============================================================ */
+
+// One write at a time: every mutation re-reads the CURRENT stored value (not a captured
+// snapshot) once its turn in the chain arrives, so a second mark queued behind a first can
+// never clobber it with a stale read. The chain itself never rejects (a failed write is
+// logged and swallowed) so one bad write cannot wedge every write after it.
+let _routineMemberWriteChain = Promise.resolve();
+
+function _enqueueRoutineMemberWrite(mutate) {
+  const task = _routineMemberWriteChain.then(async () => {
+    const cur = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
+    const next = mutate(foundry.utils.deepClone(cur));
+    await game.settings.set(AT_MODULE_ID, 'routineMembers', next);
+  }).catch((e) => {
+    _debugLog('routineMembers write failed: ' + (e?.message ?? e));
+  });
+  _routineMemberWriteChain = task;
+  return task;
+}
+
+// FIX-1's type test: an item eligible to BE a routine member — a weapon, or an attack item
+// whose subType is weapon or natural. (A qualifying npc natural attack is ALSO a member, via
+// _isRoutineMemberItem's own npc/_isQualifyingBundle branch below, without ever needing this
+// store — this test is for the GM-marked path only.)
+function _isRoutineMemberEligibleType(item) {
+  if (!item) return false;
+  const t = item.type;
+  if (t === 'weapon') return true;
+  if (t === 'attack' && (item.system?.subType === 'weapon' || item.system?.subType === 'natural')) return true;
+  return false;
+}
+
+// Resolves a UUID to a markable item, or null. Used only by setRoutineMember's marking path
+// (isMember true) — unmarking never resolves the UUID (FIX-1), so a stale entry can always be
+// removed even after its item is gone.
+function _resolveRoutineMemberItem(itemUuid) {
+  try {
+    const item = fromUuidSync(itemUuid);
+    if (!item || item.documentName !== 'Item') return null;
+    if (!(item.actor ?? item.parent)) return null; // must be an item ON an actor
+    return _isRoutineMemberEligibleType(item) ? item : null;
+  } catch (e) { return null; }
+}
+
+// Read-only membership test (isRoutineMember, D1's inheritance clause): true when the store
+// holds itemUuid directly, or when itemUuid resolves to an item on an unlinked token's
+// synthetic actor and the same-id item on its base actor is in the store. Writes nothing.
+function _isRoutineMemberStore(itemUuid) {
+  if (!itemUuid) return false;
+  const store = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
+  if (store[itemUuid] === true) return true;
+  try {
+    const item = fromUuidSync(itemUuid);
+    const actor = item?.actor ?? item?.parent ?? null;
+    if (actor?.isToken && actor.token?.baseActor) {
+      const baseItem = actor.token.baseActor.items?.get(item.id);
+      if (baseItem && store[baseItem.uuid] === true) return true;
+    }
+  } catch (e) { /* unresolved UUID — not a member */ }
+  return false;
+}
+
+// game.baphometActions.setRoutineMember (FIX-1). GM-only; refuses (resolves false, writes
+// nothing) for anyone else. Marking resolves the UUID and refuses anything not a weapon or a
+// weapon/natural attack item on an actor; unmarking never resolves the UUID. Returns a Promise
+// of true once the store matches the request.
+function _setRoutineMember(itemUuid, isMember) {
+  if (!game.user?.isGM) return Promise.resolve(false);
+  if (isMember && !_resolveRoutineMemberItem(itemUuid)) return Promise.resolve(false);
+  return _enqueueRoutineMemberWrite((store) => {
+    if (isMember) store[itemUuid] = true; else delete store[itemUuid];
+    return store;
+  }).then(() => {
+    const cur = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
+    return isMember ? cur[itemUuid] === true : cur[itemUuid] !== true;
+  });
+}
+
+// game.baphometActions.markNaturalAttacks (FIX-1, D3). GM-only; marks every natural-attack
+// item (type 'attack', subType 'natural') on the given actor in one setting write, returning
+// the array of UUIDs now marked. Returns null (writes nothing) for a non-GM or unknown actor.
+function _markNaturalAttacks(actorId) {
+  if (!game.user?.isGM) return Promise.resolve(null);
+  const actor = game.actors.get(actorId) ?? null;
+  if (!actor) return Promise.resolve(null);
+  const uuids = actor.items
+    .filter((i) => i.type === 'attack' && i.system?.subType === 'natural')
+    .map((i) => i.uuid);
+  if (uuids.length === 0) return Promise.resolve([]);
+  return _enqueueRoutineMemberWrite((store) => {
+    for (const u of uuids) store[u] = true;
+    return store;
+  }).then(() => {
+    const cur = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
+    return uuids.filter((u) => cur[u] === true);
+  });
+}
+
+// On deleteItem, the active GM drops the deleted item's UUID from the store if present
+// (FIX-1). Beside the existing deleteItem hook above (Haste-buff recompute) — that one is
+// unchanged.
+Hooks.on('deleteItem', (item) => {
+  if (!game.users.activeGM?.isSelf) return;
+  const uuid = item?.uuid;
+  if (!uuid) return;
+  const store = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
+  if (store[uuid] !== true) return;
+  _enqueueRoutineMemberWrite((s) => { delete s[uuid]; return s; });
+});
+
+// On deleteActor, the active GM drops every entry whose UUID starts with the deleted actor's
+// UUID and a dot — deleting an actor fires no deleteItem for its own items (FIX-1). A missed
+// cleanup (e.g. an entry marked on a now-orphaned unlinked token's own item) is harmless: a
+// deleted document's UUID is never reused.
+Hooks.on('deleteActor', (actor) => {
+  if (!game.users.activeGM?.isSelf) return;
+  const actorUuid = actor?.uuid;
+  if (!actorUuid) return;
+  const prefix = `${actorUuid}.`;
+  const store = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
+  if (!Object.keys(store).some((k) => k.startsWith(prefix))) return;
+  _enqueueRoutineMemberWrite((s) => {
+    for (const k of Object.keys(s)) { if (k.startsWith(prefix)) delete s[k]; }
+    return s;
+  });
+});
+
+// GOAL_v2.38.0 FIX-1 ("What the Routine Counts"), extended by GOAL_v2.39.0 FIX-2
+// ("What the Routine Holds", TD-57b part 2): the routine-membership helper. An item is a
+// routine member when it is a natural attack on an npc that _isQualifyingBundle accepts
+// (exactly the v2.38.0 test — _isQualifyingBundle itself is unchanged), OR when it is a
+// weapon or a natural attack (FIX-1's type test) that the GM-only store (isRoutineMember,
+// including its unlinked-token inheritance) marks. The item/subType/actor-type checks in the
+// first branch are narrower than _isQualifyingBundle alone — that predicate also accepts a
+// qualifying spell/consumable bundle on any actor, which is not a routine member.
 function _isRoutineMemberItem(actor, item, action) {
   if (!actor || !item) return false;
-  if (actor.type !== 'npc') return false;
-  if (item.type !== 'attack' || item.system?.subType !== 'natural') return false;
-  return _isQualifyingBundle(actor, item, action);
+  if (item.type === 'attack' && item.system?.subType === 'natural' && actor.type === 'npc'
+      && _isQualifyingBundle(actor, item, action)) {
+    return true;
+  }
+  if (_isRoutineMemberEligibleType(item) && _isRoutineMemberStore(item.uuid)) return true;
+  return false;
+}
+
+// GOAL_v2.39.0 FIX-5 (TD-57b Control clause, amended 2026-09-24): does this item's bundle keep
+// the Full Attack control in the AttackDialog? True for a natural attack (`attack` with
+// system.subType 'natural') that _isRoutineMemberItem accepts, on ANY actor type; true for a
+// spell or consumable that _isQualifyingBundle accepts; false for everything else — so a
+// manufactured weapon never keeps it, member or not. _isQualifyingBundle is not reused
+// unchanged for the natural branch and is not itself edited.
+function _keepsFullAttackControl(actor, item, action) {
+  if (!actor || !item) return false;
+  if (item.type === 'attack' && item.system?.subType === 'natural') {
+    return _isRoutineMemberItem(actor, item, action);
+  }
+  if (item.type === 'spell' || item.type === 'consumable') {
+    return _isQualifyingBundle(actor, item, action);
+  }
+  return false;
 }
 
 // MAP penalty for the swing being rolled, reading the PRIOR count: max(0, prior - 1) * -5.
@@ -3904,8 +4075,10 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
     // npc-natural branch stays closed (:3795-era line, byte-unchanged) and would otherwise fail
     // this roll open with nothing counted at all. Routine membership is decided once by
     // _isRoutineMemberItem (FIX-1's module-scope helper) — a natural attack on an npc that
-    // _isQualifyingBundle accepts — and nothing else.
-    if (actor.type === 'npc' && activeCombatant) {
+    // _isQualifyingBundle accepts, or a weapon/natural item the GM-only store marks — and
+    // nothing else. GOAL_v2.39.0 FIX-2: this branch runs for ANY actor type now; membership
+    // decides who is in it, not actor.type.
+    if (activeCombatant) {
       const routineItem = attackData?.item;
       if (_isRoutineMemberItem(actor, routineItem, attackData)) {
         let routineState = _getState(activeCombatant.id);
@@ -4007,31 +4180,38 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     const isConsumable = item.type === 'consumable';
     if (!isSpell && !isAttack && !isConsumable) return; // only attacks, spells and consumables
 
-    // GOAL_v2.38.1 ("What the Routine Costs", FIX-1/FIX-2/FIX-3): per-use routine
-    // classification, carried down to the cost/spend decision and the repeat card below (both
-    // run after the settings/Cleave/dedupe/TWF gates, so they cannot re-derive this — the close
-    // block below runs first and must hand it down). _routineState is this combatant's shared
-    // pipState entry (same object the MAP handler's swingsTaken lives on).
+    // GOAL_v2.38.1/v2.39.0 ("What the Routine Costs" / "What the Routine Holds",
+    // FIX-1/FIX-2/FIX-3): per-use routine classification, carried down to the cost/spend
+    // decision and the repeat/routine-closed cards below (both run after the
+    // settings/Cleave/dedupe/TWF gates, so they cannot re-derive this — the close block below
+    // runs first and must hand it down). _routineState is this combatant's shared pipState
+    // entry (same object the MAP handler's swingsTaken lives on).
     let _routineState = null;
-    let _routineUse = false;      // charge: the routine's one action (0 if already paid)
-    let _routineRepeat = false;   // charge: one action per attack rolled (FIX-2)
+    let _routineUse = false;        // charge: the routine's one action (0 if already paid)
+    let _routineRepeat = false;     // charge: one action per attack rolled (FIX-2)
+    // GOAL_v2.39.0 FIX-3 (TD-61, extended): an item that never made its OWN routine this turn,
+    // used after the routine already closed — charged exactly as a repeat below, but never
+    // marks the item done (so a later use of it is an after-close use again, never a repeat).
+    let _routineAfterClose = false;
     let _routineSwingCount = 0;   // actionUse.shared.attacks.length, read once
     let _routineMapCounted = false;
     let _routineActionsCharged = false;
 
-    // FIX-1 / FIX-2 / FIX-3 (GOAL_v2.38.1, "What the Routine Costs", D1/D2/D3, ruling A): the
-    // routine closes, and a routine-member item's per-turn record is written, HERE, when its
-    // use ends. pf1 rolls every attack of a use before pf1PreActionUse fires, once per use (see
-    // the pf1 facts cited above the MAP section, and the live GATE-1 probe note above
-    // _isEligibleSwing) — so this hook is the only boundary that tells "still inside this use's
-    // routine" (pf1PreAttackRoll) from "a later use, therefore a follow-up Strike". Runs
-    // unconditionally here, above every settings/Cleave/dedupe/TWF gate below — same placement
-    // principle as the v2.37.7 escape card just below — so no spend-path early return can leave
-    // the routine-open record unwritten. Ruling A/FIX-3: a Cleave follow-up is invisible to all
-    // of it — it neither marks an item done, nor closes the routine, nor (later, at the spend
-    // decision) marks it paid. This block never returns false, never cancels, never converts
-    // the use, whatever it finds.
-    if (isAttack && actor.type === 'npc') {
+    // FIX-1 / FIX-2 / FIX-3 (GOAL_v2.38.1/v2.39.0, D1/D2/D3, ruling A as amended): the routine
+    // closes, and a routine-member item's per-turn record is written, HERE, when its use ends.
+    // pf1 rolls every attack of a use before pf1PreActionUse fires, once per use (see the pf1
+    // facts cited above the MAP section, and the live GATE-1 probe note above _isEligibleSwing)
+    // — so this hook is the only boundary that tells "still inside this use's routine"
+    // (pf1PreAttackRoll) from "a later use, therefore a follow-up Strike". Runs unconditionally
+    // here, above every settings/Cleave/dedupe/TWF gate below — same placement principle as the
+    // v2.37.7 escape card just below — so no spend-path early return can leave the routine-open
+    // record unwritten. Ruling A/FIX-3: a Cleave follow-up is invisible to all of it — it
+    // neither marks an item done, nor closes the routine, nor (later, at the spend decision)
+    // marks it paid. This block never returns false, never cancels, never converts the use,
+    // whatever it finds. GOAL_v2.39.0 FIX-2: the routine path now runs for ANY actor type —
+    // membership (FIX-1's GM-only store, or an npc's qualifying natural, D-1/D-2) decides who
+    // is in it, not actor.type.
+    if (isAttack) {
       const routineCombatant = _getActiveCombatantForActor(actor);
       const isCleaveUse = globalThis.baphometCleave?.actorId === actor.id;
       if (routineCombatant && !isCleaveUse) {
@@ -4046,26 +4226,37 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
           const aid = actor.id;
           const hasDeclaredCostOverride = !!(aid && (globalThis.baphometVitalStrike?.actorId === aid
                                           || globalThis.baphometCharge?.actorId === aid));
-          // Ruling A: an on-turn manufactured-weapon Strike (not a Cleave follow-up, excluded
-          // above) closes the routine for every member item until the turn resets.
+          // GOAL_v2.39.0 FIX-2: membership (FIX-1's store, or an npc's qualifying natural) is
+          // the single source of truth for every path below — decided once by
+          // _isRoutineMemberItem and nothing else.
+          const isMember = _isRoutineMemberItem(actor, item, actionUse?.action);
+          // Ruling A as amended (GOAL_v2.39.0): an on-turn manufactured-weapon Strike (not a
+          // Cleave follow-up, excluded above) that is NOT a routine member closes the routine
+          // for every member item until the turn resets. A GM-marked weapon member is
+          // classified exactly as a member natural instead (D2) — see the isMember branch.
           const isWeaponStrike = item.type === 'weapon' || (item.type === 'attack' && item.system?.subType === 'weapon');
-          if (isWeaponStrike) {
-            routineState.routineClosed = true;
-          } else if (_isRoutineMemberItem(actor, item, actionUse?.action)) {
+          if (isMember) {
             if (hasDeclaredCostOverride) {
               // HI-1: own cost via _deriveActionUseCost below, not a routine charge, never marks
               // paid — but marks its item done, as v2.38.0 did.
               routineState.routineDone.add(item.id);
             } else {
               _routineSwingCount = actionUse?.shared?.attacks?.length ?? 0;
-              const alreadyDoneOrClosed = routineState.routineDone.has(item.id) || routineState.routineClosed;
-              if (alreadyDoneOrClosed) {
+              if (routineState.routineDone.has(item.id)) {
                 _routineRepeat = true; // FIX-2/D3: charged per roll below
+              } else if (routineState.routineClosed !== null) {
+                // GOAL_v2.39.0 FIX-3 (TD-61 extended): this item never made its own routine
+                // this turn, and the routine is already closed — an after-close use.
+                _routineAfterClose = true;
               } else {
                 _routineUse = true; // FIX-1: charged the routine's one action below (0 if paid)
                 routineState.routineDone.add(item.id); // this item's routine is closed for the turn
               }
             }
+          } else if (isWeaponStrike && routineState.routineClosed === null) {
+            // GOAL_v2.39.0 FIX-3: the closed record remembers what closed it — the first
+            // non-member weapon Strike this turn, read back by the routine-closed card below.
+            routineState.routineClosed = { id: item.id, name: item.name };
           }
         }
       }
@@ -4196,10 +4387,12 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // _deriveConsumableActionCost, not the spell/attack routine above (which
     // would otherwise match the "not a spell" branch and return a flat 1).
     // GOAL_v2.38.1 FIX-1/FIX-2: a routine use is charged the routine's one action (0 if
-    // already paid this turn); a routine repeat (item already done, or the routine closed) is
-    // charged one action per attack rolled. Neither overrides a consumable's own cost.
+    // already paid this turn); a routine repeat (item already done this turn) is charged one
+    // action per attack rolled. GOAL_v2.39.0 FIX-3: an after-close use (never done this turn,
+    // routine already closed) is charged exactly the same way as a repeat. Neither overrides a
+    // consumable's own cost.
     const cost = isConsumable ? _deriveConsumableActionCost(actionUse)
-      : _routineRepeat ? _routineSwingCount
+      : (_routineRepeat || _routineAfterClose) ? _routineSwingCount
       : _routineUse ? (_routineState.routinePaid ? 0 : 1)
       : _deriveActionUseCost(actionUse);
     const activeCombatant = _getActiveCombatantForActor(actor);
@@ -4227,12 +4420,13 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         _baphSpendReactionForSpell(activeCombatant, actor, item);
         return;
       }
-      // GOAL_v2.38.1 FIX-2 ruling D: the fourth argument marks a per-roll routine-repeat
-      // Strike charge, letting the Haste bonus pip cover one roll even when count > 1.
+      // GOAL_v2.38.1 FIX-2 ruling D, extended by GOAL_v2.39.0 FIX-3: the fourth argument marks
+      // a per-roll routine-repeat (or after-close) Strike charge, letting the Haste bonus pip
+      // cover one roll even when count > 1.
       const spent = _spendActionForCombatant(
         activeCombatant.id, cost,
         isSpell ? `spell-${item.name}` : isAttack ? `attack-${item.name}` : `consumable-${item.name}`,
-        _routineRepeat
+        _routineRepeat || _routineAfterClose
       );
       // GOAL_v2.38.1 FIX-1: the paid mark is set on the first routine use that reaches this
       // spend decision, whether the spend succeeded or was refused — the routine is one
@@ -4240,7 +4434,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       if (_routineUse && _routineState) {
         _routineState.routinePaid = true;
       }
-      if (_routineRepeat) {
+      if (_routineRepeat || _routineAfterClose) {
         _routineActionsCharged = spent;
       }
       if (spent) {
@@ -4336,6 +4530,41 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         }).catch((err) => {
           console.warn(
             `baphomet-utils | FIX-4 routine-repeat card failed to post for "${actor.name}" — `
+            + `handled here, not thrown. The attacks still resolved and were never blocked.`, err
+          );
+        });
+      }
+      // GOAL_v2.39.0 FIX-4 (TD-61, extended by Michael 2026-09-26): the routine-closed card.
+      // Posted in the same finally as the repeat card above, after the charge decision, so it
+      // still posts with actionsCharged false after any early return. Fires for ANY after-close
+      // use (first or later) that rolled more than one attack — the extension's own point:
+      // this is not only a "first use after close" card.
+      if (_routineAfterClose && _routineSwingCount > 1) {
+        const safeActorName = foundry.utils.escapeHTML(actor.name);
+        const closedItemName = _routineState?.routineClosed?.name ?? '';
+        const safeClosedItemName = foundry.utils.escapeHTML(closedItemName);
+        const closedBits = [];
+        if (_routineMapCounted) closedBits.push('were counted as individual Strikes with Multiple Attack Penalty');
+        if (_routineActionsCharged) closedBits.push('were charged one action per roll');
+        const closedDetail = closedBits.length ? ` These attacks ${closedBits.join(' and ')}.` : '';
+        ChatMessage.create({
+          content:
+            `<p><strong>Routine Closed Notice (PF1.5 :137):</strong> `
+            + `${safeActorName} struck with its <em>${safeClosedItemName}</em> earlier this turn, `
+            + `which closes its routine.${closedDetail}</p>`,
+          speaker: ChatMessage.getSpeaker({ actor }),
+          whisper: ChatMessage.getWhisperRecipients('GM'),
+          flags: {
+            'baphomet-utils': {
+              routineClosedCard: true,
+              mapCounted: _routineMapCounted,
+              actionsCharged: _routineActionsCharged,
+              closedByItemId: _routineState?.routineClosed?.id ?? null
+            }
+          }
+        }).catch((err) => {
+          console.warn(
+            `baphomet-utils | FIX-4 routine-closed card failed to post for "${actor.name}" — `
             + `handled here, not thrown. The attacks still resolved and were never blocked.`, err
           );
         });
@@ -6144,14 +6373,17 @@ function _diagHandleAttackDialogRender(app, element) {
       const singleAttackBtn = root.querySelector('button[name="attack_single"]');
       const fullAttackBtn = root.querySelector('button[name="attack_full"]');
       if (singleAttackBtn && fullAttackBtn) {
-        // GOAL_v2.37.9 FIX-2: a qualifying bundle (a multi-projectile spell/consumable, or an
-        // npc's natural attack — see _isQualifyingBundle) keeps its Full Attack control. Read the
-        // dialog's own getters defensively; a dialog that cannot say what it is falls through to
-        // the old, safe answer and suppresses.
+        // GOAL_v2.37.9 FIX-2, extended by GOAL_v2.39.0 FIX-5: a qualifying bundle keeps its
+        // Full Attack control — a natural attack (any actor type) that _isRoutineMemberItem
+        // accepts, or a spell/consumable that _isQualifyingBundle accepts. A manufactured
+        // weapon never keeps it, member or not; _isQualifyingBundle is not reused unchanged
+        // for the natural branch and is not itself edited. Read the dialog's own getters
+        // defensively; a dialog that cannot say what it is falls through to the old, safe
+        // answer and suppresses.
         const dlgActor = app?.actor ?? null;
         const dlgItem = app?.item ?? null;
         const dlgAction = app?.action ?? null;
-        const qualifies = (dlgActor && dlgItem) ? _isQualifyingBundle(dlgActor, dlgItem, dlgAction) : false;
+        const qualifies = (dlgActor && dlgItem) ? _keepsFullAttackControl(dlgActor, dlgItem, dlgAction) : false;
         if (!qualifies) {
           fullAttackBtn.remove();
           _debugLog('PF1.5 mode: removed Full Attack button from AttackDialog');
