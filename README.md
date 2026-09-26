@@ -3,19 +3,20 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.38.1 — *What the Routine Costs*
+**Current Version:** 2.39.0 — *What the Routine Holds*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**A monster's natural-attack routine now costs one action, no matter how many items it spans.** A
-skeleton's Claw-then-Bite routine is one action total, not one per item; the routine ends the
-instant the monster swings a weapon, and every member item after that is priced and penalized as an
-ordinary Strike. A second use of the same routine item is a per-roll charge — a two-roll repeat costs
-two actions, and a granted Haste bonus action can cover one of those rolls. A Cleave follow-up still
-costs nothing and takes no part in the routine at all. A monster's weapon or mixed (natural + weapon)
-routine is still not tracked. See the [changelog](#changelog) for the full entry.
+**A monster's weapon, or mixed natural-and-weapon routine, can now join the routine too — the GM
+marks it.** A GM-checked API marks an individual weapon (or a whole polymorphed PC's current natural
+attacks in one step) as a routine member; a marked weapon is priced and MAP'd exactly like a member
+natural, and only a non-member weapon Strike still ends the routine. Any use of a member item that
+never made its own routine this turn — the first use after the routine closed, or any later one — now
+gets its own GM-whispered **routine-closed card** when it rolls more than once, instead of being mislabeled a repeat. Both
+auto-spend settings now default **on**, and the GM is warned, by name, whenever either is off. See the
+[changelog](#changelog) for the full entry.
 
 ---
 
@@ -186,6 +187,35 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.39.0 — What the Routine Holds
+
+`v2.38.1` counted and costed a monster's all-natural routine correctly, but a manufactured weapon,
+a mixed (natural + weapon) routine, and a polymorphed PC's form attacks still could not join one at
+all — and the first use after a routine closed was wrongly labeled a repeat. **The GM can now mark a
+routine member.** `game.baphometActions.setRoutineMember(itemUuid, isMember)` marks or unmarks a
+single weapon or natural-attack item (GM-only; refuses and writes nothing for anyone else, and for
+anything that isn't a weapon or weapon/natural attack item on an actor); `markNaturalAttacks(actorId)`
+is the one-step polymorph/wild-shape call that marks every natural attack an actor currently holds, in
+one setting write; `isRoutineMember(itemUuid)` is the read-only membership check, including the case
+where an unlinked token's synthetic item inherits its base actor's mark. All three are backed by a
+world-scope, GM-only-writable store, and every write is serialised through one promise chain so two
+marks in quick succession can't clobber each other. **A marked weapon joins the routine exactly like a
+member natural**: its first use in the turn is a routine use (1 action if unpaid, 0 if paid, no MAP,
+does not close the routine), and a second use is a repeat (charged per roll, with MAP). **Only a
+weapon Strike that is *not* a routine member still ends the routine** — the amended reading of ruling
+A. **A polymorphed PC's marked natural attacks are priced as a routine too**, the same way a monster's
+are; an *unmarked* PC natural attack is still exactly the single Strike `v2.37.9` made it. **The
+routine-closed record now remembers what closed it**, and any use of a member item that never made its
+own routine this turn — the first use after the close, or any later one — posts its own
+GM-whispered **routine-closed card** naming the closing item when it rolls more than once (a single
+roll posts none, as with the repeat card), instead of the repeat card falsely saying the item "has
+already used its routine." The Full Attack control now shows for a natural-attack
+routine member on **any** actor type (not npc-only), and still shows for a qualifying spell/consumable
+bundle; it never shows for a manufactured weapon, member or not. **Both `autoAttackSpend` and
+`autoSpellSpend` now default ON** (previously off-by-default), and the GM is warned by name — at
+session start and the moment either is switched off — that it should stay on. To mark a token's
+current natural attacks from the hotbar: `game.baphometActions.markNaturalAttacks(canvas.tokens.controlled[0]?.actor?.id)`.
 
 ### v2.38.1 — What the Routine Costs
 

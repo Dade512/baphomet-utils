@@ -129,6 +129,33 @@
 
 const SETTINGS_MODULE_ID = 'baphomet-utils';
 
+/* ----------------------------------------------------------
+   AUTO-SPEND-OFF WARNING — v2.39.0 (GOAL_v2.39.0_ROUTINE_MEMBERS, FIX-5, TD-62)
+
+   "autoAttackSpend should never be off — do not design runtime cases or at-table checks
+   around it being off." Warns a GM, by each setting's display name, for whichever of
+   autoAttackSpend / autoSpellSpend is currently false. Does nothing for a non-GM client.
+   Called from a Hooks.once('ready') block below (so a session that starts with either off
+   is caught at load) and from each setting's own onChange (so switching one off warns at
+   the moment it happens).
+   ---------------------------------------------------------- */
+function _warnAutoSpendOff() {
+  if (!game.user?.isGM) return;
+  const targets = [
+    { key: 'autoAttackSpend', label: 'Auto-Spend on Attack' },
+    { key: 'autoSpellSpend', label: 'Auto-Spend on Spell Cast' }
+  ];
+  for (const t of targets) {
+    let value = true;
+    try { value = game.settings.get(SETTINGS_MODULE_ID, t.key); } catch (e) { continue; /* not yet registered */ }
+    if (value === false) {
+      ui.notifications.warn(
+        `baphomet-utils | "${t.label}" is OFF — it should stay on. Table rule: both auto-spend settings stay enabled.`
+      );
+    }
+  }
+}
+
 Hooks.once('init', () => {
 
   /* ----------------------------------------------------------
@@ -166,20 +193,45 @@ Hooks.once('init', () => {
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'autoAttackSpend', {
     name: 'Auto-Spend on Attack',
-    hint: 'When enabled, an attack by the active combatant spends 1 action pip; an off-turn attack (AoO) spends the reaction pip instead. Default OFF — enable deliberately.',
+    hint: 'When enabled, an attack by the active combatant spends 1 action pip; an off-turn attack (AoO) spends the reaction pip instead. Default ON — it should stay on; the GM is warned when it is off.',
     scope: 'world',
     config: true,
     type: Boolean,
-    default: false
+    default: true,
+    // GOAL_v2.39.0 FIX-5 (TD-62): warn the GM directly whenever this is switched off — no
+    // shared handler, this onChange calls _warnAutoSpendOff itself.
+    onChange: (value) => { if (value === false) _warnAutoSpendOff(); }
   });
 
   game.settings.register(SETTINGS_MODULE_ID, 'autoSpellSpend', {
     name: 'Auto-Spend on Spell Cast',
-    hint: 'When enabled, casting a spell by the active combatant spends action pips equal to its casting time (standard = 2, full-round = 3, swift/quickened = 1). Cost is by casting time, not spell level. Default OFF — enable deliberately.',
+    hint: 'When enabled, casting a spell by the active combatant spends action pips equal to its casting time (standard = 2, full-round = 3, swift/quickened = 1). Cost is by casting time, not spell level. Default ON — it should stay on; the GM is warned when it is off.',
     scope: 'world',
     config: true,
     type: Boolean,
-    default: false
+    default: true,
+    // GOAL_v2.39.0 FIX-5 (TD-62): warn the GM directly whenever this is switched off — no
+    // shared handler, this onChange calls _warnAutoSpendOff itself.
+    onChange: (value) => { if (value === false) _warnAutoSpendOff(); }
+  });
+
+  /* ----------------------------------------------------------
+     ROUTINE MEMBERSHIP STORE — v2.39.0 (GOAL_v2.39.0_ROUTINE_MEMBERS, FIX-1, D1)
+
+     World-scope, config-hidden store of GM-marked routine members:
+       { [itemUuid]: true }
+     A world setting is readable by every client (so every client's action-tracker.js
+     hooks agree on membership) and writable, by Foundry's own permission model, only by
+     a GM. Nothing but the game.baphometActions API added in scripts/action-tracker.js
+     (setRoutineMember / markNaturalAttacks) writes it; that API serialises its writes
+     through one promise chain so two marks in quick succession cannot overwrite each
+     other, and cleans up on deleteItem/deleteActor.
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'routineMembers', {
+    scope: 'world',
+    config: false,
+    type: Object,
+    default: {}
   });
 
   /* ----------------------------------------------------------
@@ -644,4 +696,15 @@ Hooks.once('ready', () => {
       `Table rule: Skip Action Prompts stays OFF.`
     );
   }
+});
+
+/* ----------------------------------------------------------
+   v2.39.0 NAG — Auto-Spend defaults at session start
+   (GOAL_v2.39.0_ROUTINE_MEMBERS FIX-5, TD-62)
+
+   GM-only (see _warnAutoSpendOff), fires once per page load, so a session that starts
+   with either autoAttackSpend or autoSpellSpend off is caught at the very first ready.
+   ---------------------------------------------------------- */
+Hooks.once('ready', () => {
+  _warnAutoSpendOff();
 });
