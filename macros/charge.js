@@ -2,7 +2,7 @@
  * baphomet-utils — PF1.5 CHARGE declare macro (token-driven)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/charge.js
- *   SYNC_STAMP: 2026-07-07
+ *   SYNC_STAMP: 2026-09-28
  *   The in-world Foundry macro "Charge" must be kept byte-identical to this file.
  *   After editing either copy, sync the other and bump SYNC_STAMP. Drift check:
  *   see README.md here.
@@ -15,9 +15,14 @@
  *   action-tracker.js `_deriveActionUseCost` reads for the action cost AND a
  *   `pf1PreAttackRoll` handler reads to add +2 to the attack roll (GOAL_v2.31.0).
  *   After a confirmed swing (see step 4), this macro also applies a −2 AC
- *   PF1 buff Item that auto-expires at the start of this actor's next turn
- *   (runtime-confirmed mechanism + timing in
- *   docs/ai-council/RUNTIME_PROBE_RESULTS_v2.31.0.md, Seam 2). MAP advances via
+ *   PF1 buff Item. GOAL_v2.39.1 FIX-4 (TD-54): it lasts through the enemies'
+ *   turns and lifts at the start of THIS actor's own next turn — a `round`/
+ *   `turnStart` duration, the same shape `total-defense.js` uses, not a `turn`
+ *   duration. Live-proven by Fable from the GM seat 2026-09-15 (register
+ *   :365): pf1 forces a `turn`-unit duration to `end: 'turnEnd'`, so the old
+ *   shape deactivated the buff at the end of the CHARGER's own turn, before
+ *   the enemies it exists to expose him to had acted — the opposite of what
+ *   the comment here used to claim. MAP advances via
  *   the existing v2.30.0 `pf1PreAttackRoll` handler — no change needed here. The
  *   intent is cleared by OBJECT IDENTITY in finally.
  *
@@ -82,12 +87,14 @@
     if (globalThis.baphometCharge === intent) globalThis.baphometCharge = null;
   }
 
-  // 5) Charge -2 AC (GOAL_v2.31.0) — ONLY on a confirmed swing (r truthy). A cancelled
-  //    Charge (r === undefined) never applies/strands the AC debuff. Mechanism + timing
-  //    runtime-confirmed in docs/ai-council/RUNTIME_PROBE_RESULTS_v2.31.0.md (Seam 2): a
-  //    PF1 buff Item with duration {units:'turn', value:1} applies -2 to normal/touch/ff AC
-  //    and auto-deactivates exactly at the start of this actor's next turn via pf1's own
-  //    buff-duration system (no render-based removal needed).
+  // 5) Charge -2 AC (GOAL_v2.31.0, duration corrected GOAL_v2.39.1 FIX-4/TD-54) — ONLY on a
+  //    confirmed swing (r truthy). A cancelled Charge (r === undefined) never applies/strands
+  //    the AC debuff. A PF1 buff Item with duration {units:'round', value:'1', end:'turnStart'}
+  //    (total-defense.js's own shape) applies -2 to normal/touch/ff AC and auto-deactivates at
+  //    the START of this actor's NEXT turn — lasting through the enemies' turns in between,
+  //    which is the point of Charge's exposure cost. A `turn`-unit duration (the pre-v2.39.1
+  //    shape) is forced by pf1 to `end: 'turnEnd'`, lifting at the end of the CHARGER's own
+  //    turn instead — live-proven wrong by Fable 2026-09-15 (register :365).
   if (r) {
     // Sweep any prior (now-inactive, or stale) Charge AC buff before adding a new one so
     // repeated Charges across turns don't accumulate inert leftovers.
@@ -103,7 +110,7 @@
       system: {
         active: true,
         subType: "temp",
-        duration: { units: "turn", value: 1 },
+        duration: { units: "round", value: "1", end: "turnStart" },
         changes: [{ formula: "-2", target: "ac", type: "untyped" }]
       },
       flags: { "baphomet-utils": { chargeBuff: true } }

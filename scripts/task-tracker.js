@@ -131,12 +131,13 @@ const _baphHiddenTaskMap = new Map();
    Foundry's own socket/session layer, never a payload field
    (VERIFIED_SENDER_PATTERN_REFERENCE.md §3).
 
-   This does NOT replace the existing raw `game.socket.on` listener
-   further down in this file — that listener still carries
-   `baphTaskRequest` / `baphTaskRequestResponse`, which are emitted from
-   action-tracker.js (out of this goal's allowlist) and are not part of
-   this migration's scope (Michael's dispatch: "the three GM task-socket
-   handlers ... (resolve, aid, readiness)").
+   As of v2.39.1 (GOAL_v2.39.1_TASK_REQUEST_AUTH.md, FIX-1/FIX-2/FIX-3),
+   this same registration block also carries `baphTaskRequest` and
+   `baphTaskRequestResponse` — the two request/response actions that used
+   to travel over a raw `game.socket.on` listener further down this file.
+   That raw listener is gone; every task socket message on this channel now
+   goes through socketlib's verified-sender path, with no remaining
+   asterisk on "every task socket message is verified".
    ============================================================ */
 
 let _baphTaskSocket = null;
@@ -147,6 +148,17 @@ Hooks.once('socketlib.ready', () => {
   _baphTaskSocket.register('baphTaskAidAdjudicate',     _baphSocketAidAdjudicate);
   _baphTaskSocket.register('baphTaskReadinessCheck',    _baphSocketReadinessCheck);
   _baphTaskDebugLog('socketlib: registered resolve/aid/readiness handlers');
+  // v2.39.1 — GOAL_v2.39.1_TASK_REQUEST_AUTH.md FIX-1/FIX-2: the request/
+  // response pair, migrated off the raw listener. _baphHandleTaskRequest is
+  // declared with `function` in this file and reads the verified sender
+  // from `this.socketdata.userId` (FIX-1). _baphHandleRequestResponse is a
+  // `function`-declared global from action-tracker.js (loaded before this
+  // file); it never reads `this.socketdata` — its own two guards
+  // (targetUserId, requestId) are unchanged and now redundant with
+  // executeForUsers' single-recipient delivery (FIX-2).
+  _baphTaskSocket.register('baphTaskRequest',         _baphHandleTaskRequest);
+  _baphTaskSocket.register('baphTaskRequestResponse', _baphHandleRequestResponse);
+  _baphTaskDebugLog('socketlib: registered baphTaskRequest/baphTaskRequestResponse handlers');
 });
 
 /* ============================================================
@@ -2193,47 +2205,73 @@ let _baphGMApprovalActive = false;
  * Validate and dispatch a baphTaskRequest payload received from a player.
  * If a modal is already active, the request is queued for sequential handling.
  * GM-side only.
+ *
+ * v2.39.1 — GOAL_v2.39.1_TASK_REQUEST_AUTH.md FIX-1 (D-1/TD-23): registered
+ * directly as the socketlib `baphTaskRequest` handler
+ * (Hooks.once('socketlib.ready', ...) above). Declared with `function`, not
+ * arrow syntax, so socketlib's `.call({socketdata}, ...)` binding
+ * (socketlib-v1.1.4-source.js:190-192, 251-259) supplies
+ * `this.socketdata.userId` — the VERIFIED sender, sourced from Foundry's own
+ * socket/session layer, never a payload field
+ * (VERIFIED_SENDER_PATTERN_REFERENCE.md §3). `payload.requestingUserId` is
+ * retained on the payload shape but is never read here or anywhere GM-side
+ * — advisory/logging only, never authority (§4). Returns `true` once the
+ * request has the GM's attention (modal opened, or queued behind one
+ * already open) and `false` when it is refused outright — the contract
+ * `executeAsGM`'s caller receives back (socketlib-v1.1.4-source.js:87-98).
+ * THE QUEUE TRAP: the verified id is stored alongside the payload in
+ * `_baphGMRequestQueue` and re-supplied to `_baphShowGMApprovalForPayload`
+ * at dequeue (`_baphProcessNextGMRequest`) — threading it through the
+ * immediate path only would silently revert every queued request to
+ * payload trust.
  */
 function _baphHandleTaskRequest(payload) {
-  if (!game.user.isGM) return;
+  if (!game.user.isGM) return false;
 
-  _baphTaskDebugLog(`baphTaskRequest received: ${payload.requestId}`);
+  const verifiedUserId = this?.socketdata?.userId ?? null;
+
+  _baphTaskDebugLog(`baphTaskRequest received: ${payload?.requestId} (from verified sender ${verifiedUserId})`);
 
   const {
-    requestId, requestingUserId, requestingActorId,
+    requestId, requestingActorId,
     requestingCombatantId, timestamp,
-  } = payload;
+  } = payload ?? {};
 
-  if (!requestId || !requestingCombatantId || !requestingUserId) {
+  if (!requestId || !requestingCombatantId || !verifiedUserId) {
     _baphTaskDebugLog('baphTaskRequest rejected: missing required fields');
-    return;
+    return false;
   }
 
   // Reject stale requests older than 70 s (buffer above the 60 s player timeout)
   if (timestamp && Date.now() - timestamp > 70000) {
     _baphTaskDebugLog(`baphTaskRequest ${requestId} expired on arrival — ignoring`);
-    return;
+    return false;
   }
 
   if (_baphGMApprovalActive) {
-    _baphGMRequestQueue.push(payload);
+    _baphGMRequestQueue.push({ payload, verifiedUserId });
     _baphTaskDebugLog(`baphTaskRequest ${requestId} queued (modal already active, queue depth: ${_baphGMRequestQueue.length})`);
-    return;
+    return true;
   }
 
-  _baphShowGMApprovalForPayload(payload);
+  return _baphShowGMApprovalForPayload(payload, verifiedUserId);
 }
 
 /**
  * Validate a single request payload and open the GM approval modal for it.
+ * `verifiedUserId` is the socketlib-verified sender (never a payload field)
+ * — the single source of truth for the user lookup, the ownership read, the
+ * isGM short-circuit, the modal's rendered name, and (via `_openGMApprovalModal`)
+ * the response target. Returns `true` once the modal has opened, `false` on
+ * every refusal.
  */
-function _baphShowGMApprovalForPayload(payload) {
-  if (!game.user.isGM) return;
+function _baphShowGMApprovalForPayload(payload, verifiedUserId) {
+  if (!game.user.isGM) return false;
 
   _baphGMApprovalActive = true;
 
   const {
-    requestId, requestingUserId, requestingActorId, requestingCombatantId,
+    requestId, requestingActorId, requestingCombatantId,
   } = payload;
 
   // Validate: active combat
@@ -2241,7 +2279,7 @@ function _baphShowGMApprovalForPayload(payload) {
     _baphTaskDebugLog('baphTaskRequest: no active combat — rejecting request');
     _baphGMApprovalActive = false;
     _baphProcessNextGMRequest();
-    return;
+    return false;
   }
 
   // Validate: combatant exists and actor is consistent
@@ -2250,7 +2288,7 @@ function _baphShowGMApprovalForPayload(payload) {
     _baphTaskDebugLog(`baphTaskRequest: combatant "${requestingCombatantId}" not found`);
     _baphGMApprovalActive = false;
     _baphProcessNextGMRequest();
-    return;
+    return false;
   }
   if (requestingActorId && combatant.actor.id !== requestingActorId) {
     _baphTaskDebugLog(
@@ -2259,29 +2297,30 @@ function _baphShowGMApprovalForPayload(payload) {
     );
     _baphGMApprovalActive = false;
     _baphProcessNextGMRequest();
-    return;
+    return false;
   }
 
-  // Validate: requesting user exists and owns the actor
-  const requestingUser = game.users.get(requestingUserId);
+  // Validate: the VERIFIED requesting user exists and owns the actor — never
+  // the payload's claimed requestingUserId (FIX-1, D-1/TD-23).
+  const requestingUser = game.users.get(verifiedUserId);
   if (!requestingUser) {
-    _baphTaskDebugLog(`baphTaskRequest: user ${requestingUserId} not found`);
+    _baphTaskDebugLog(`baphTaskRequest: verified sender ${verifiedUserId} not found`);
     _baphGMApprovalActive = false;
     _baphProcessNextGMRequest();
-    return;
+    return false;
   }
   const OWNER_LEVEL = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
   const ownership   = combatant.actor.ownership ?? {};
-  const userLevel   = ownership[requestingUserId] ?? 0;
+  const userLevel   = ownership[verifiedUserId] ?? 0;
   const defLevel    = ownership['default'] ?? 0;
   const effLevel    = Math.max(userLevel, defLevel);
   if (!requestingUser.isGM && effLevel < OWNER_LEVEL) {
     _baphTaskDebugLog(
-      `baphTaskRequest: user ${requestingUserId} does not own "${combatant.actor.name}" — rejected`
+      `baphTaskRequest: user ${requestingUser.name} does not own "${combatant.actor.name}" — rejected`
     );
     _baphGMApprovalActive = false;
     _baphProcessNextGMRequest();
-    return;
+    return false;
   }
 
   const isActiveCombatant = (combatant.id === game.combat.combatant?.id);
@@ -2299,27 +2338,33 @@ function _baphShowGMApprovalForPayload(payload) {
 
   // _openGMApprovalModal is a global from action-tracker.js (loads before this file).
   if (typeof _openGMApprovalModal === 'function') {
-    _openGMApprovalModal(payload, validation);
+    _openGMApprovalModal(payload, validation, verifiedUserId);
+    return true;
   } else {
     _baphTaskDebugLog('baphTaskRequest: _openGMApprovalModal not available — aborting');
     _baphGMApprovalActive = false;
     _baphProcessNextGMRequest();
+    return false;
   }
 }
 
 /**
  * Process the next queued GM request after the current modal closes.
  * Called from action-tracker.js _baphSignalNextGMRequest() after Approve or Reject.
+ * THE QUEUE TRAP (FIX-1): each queued entry carries the verified sender id
+ * captured at receipt time, re-supplied to _baphShowGMApprovalForPayload here
+ * — a queued request is validated against the SAME verified id it arrived
+ * with, never re-derived from the payload alone.
  */
 function _baphProcessNextGMRequest() {
   _baphGMApprovalActive = false;
   if (_baphGMRequestQueue.length === 0) return;
   const next = _baphGMRequestQueue.shift();
   _baphTaskDebugLog(
-    `baphTaskRequest: dequeuing next request ${next.requestId} ` +
+    `baphTaskRequest: dequeuing next request ${next.payload.requestId} ` +
     `(${_baphGMRequestQueue.length} remaining)`
   );
-  _baphShowGMApprovalForPayload(next);
+  _baphShowGMApprovalForPayload(next.payload, next.verifiedUserId);
 }
 
 /* ============================================================
@@ -2828,48 +2873,17 @@ Hooks.once('pf1PostReady', async () => {
   _baphTaskHydrateHiddenStore();
   _baphTaskRebuildCache();
 
-  /* ── Socket: baphTaskRequest / baphTaskRequestResponse only ──────────
-     Registered on all clients; only the GM client processes
-     baphTaskRequest, only the requesting player's client processes
-     baphTaskRequestResponse. Channel: module.baphomet-utils (requires
-     "socket": true in module.json).
-
-     v2.36.0 — GOAL_v2.36.0_TASK_AUTH.md: the three resolve/aid/readiness
-     adjudication actions that used to live in this same raw listener
-     (baphTaskResolveAdjudicate, baphTaskAidAdjudicate,
-     baphTaskReadinessCheck) have moved to the socketlib-registered
-     handlers above (_baphSocketResolveAdjudicate, _baphSocketAidAdjudicate,
-     _baphSocketReadinessCheck) and no longer flow through this listener.
-     baphTaskRequest / baphTaskRequestResponse are emitted from
-     action-tracker.js, which is outside this goal's allowlist, and are
-     untouched here — only the migration target's own three actions moved.
+  /* ── Socket: baphTaskRequest / baphTaskRequestResponse ────────────────
+     v2.39.1 — GOAL_v2.39.1_TASK_REQUEST_AUTH.md (FIX-1/FIX-2/FIX-3): both
+     actions now travel through the socketlib registration above
+     (baphTaskRequest -> _baphHandleTaskRequest, baphTaskRequestResponse ->
+     _baphHandleRequestResponse, a global from action-tracker.js), the same
+     verified-sender path the v2.36.0 resolve/aid/readiness handlers already
+     used. The raw `game.socket.on('module.baphomet-utils', ...)` listener
+     that used to carry these two actions here is removed: every task
+     socket message on this channel is now verified, with no remaining
+     asterisk.
   ──────────────────────────────────────────────────────────────────── */
-  game.socket.on(`module.${BAPH_TASK_MODULE_ID}`, async (message) => {
-
-    /* ── baphTaskRequestResponse (v2.20.0) ───────────────────────────
-       GM → player response to a task initiation request.
-       Handled by the requesting player's client (non-GM).
-       Processed before the GM-only early return below.
-    ─────────────────────────────────────────────────────────────────── */
-    if (message?.action === 'baphTaskRequestResponse') {
-      // _baphHandleRequestResponse is a global from action-tracker.js.
-      if (!game.user.isGM && typeof _baphHandleRequestResponse === 'function') {
-        _baphHandleRequestResponse(message.payload ?? {});
-      }
-      return;
-    }
-
-    // All remaining socket actions on this channel require the active GM client.
-    if (!game.user.isGM) return;
-    if (game.user !== game.users?.activeGM) return;
-
-    /* ── baphTaskRequest (v2.20.0) ───────────────────────────────────
-       Player-initiated task request. GM validates and shows approval modal.
-    ─────────────────────────────────────────────────────────────────── */
-    if (message?.action === 'baphTaskRequest') {
-      _baphHandleTaskRequest(message.payload ?? {});
-    }
-  });
 
   game.baphometTasks = {
     createTask:   _baphTaskCreate,
