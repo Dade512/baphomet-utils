@@ -3,20 +3,21 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.39.0 — *What the Routine Holds*
+**Current Version:** 2.39.1 — *Whose Name It Bears*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**A monster's weapon, or mixed natural-and-weapon routine, can now join the routine too — the GM
-marks it.** A GM-checked API marks an individual weapon (or a whole polymorphed PC's current natural
-attacks in one step) as a routine member; a marked weapon is priced and MAP'd exactly like a member
-natural, and only a non-member weapon Strike still ends the routine. Any use of a member item that
-never made its own routine this turn — the first use after the routine closed, or any later one — now
-gets its own GM-whispered **routine-closed card** when it rolls more than once, instead of being mislabeled a repeat. Both
-auto-spend settings now default **on**, and the GM is warned, by name, whenever either is off. See the
-[changelog](#changelog) for the full entry.
+**The GM now reads who actually sent a skill-task request, instead of trusting what the request
+claimed.** A forged request could put another player's — or the GM's own — name on the approval card
+and slip past the ownership check under it; the GM reads that identity from socketlib's verified
+sender instead, so the card the GM approves is always attributed to whoever really sent it. Responses
+now go to the real requester only, and the module's last raw (unverified) task-socket listener is
+gone. Charge's −2 AC penalty now lasts through the enemies' turns, as intended, instead of lifting
+before they act; the skip-dialog escape card no longer fires for a routine member's already-tracked
+use; and a marked natural attack whose extra attacks are the BAB iterative progression no longer keeps
+the Full Attack control. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -187,6 +188,54 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.39.1 — Whose Name It Bears
+
+`v2.36.0` moved three of the four task socket handlers (resolve/aid/readiness) onto socketlib's
+verified-sender path and left the fourth — the initial request-and-approval handshake — behind,
+because its emitter lived outside that goal's allowlist. **The GM now derives the task requester's
+identity from socketlib's verified sender, never from a field the request payload claims.** A
+role-2 client could previously edit that field to name a user who owns the target combatant, or to
+name the GM outright, and the `isGM` check would wave a claimed-GM identity straight past the
+ownership gate. **To be precise about what that was and was not: this is a misattribution and a
+mis-scoped ownership check, NOT privilege escalation.** The handler commits nothing on its own — it
+only opens a GM approval modal and waits for a human. What a forged request actually bought was a
+forged name on the card the GM reads before clicking Approve, and an ownership check that validated
+the wrong person; the write that follows is still the GM's own, on the GM's own authority. Now the
+approval modal always names whoever really sent the request, and an ownership refusal is logged
+against that same real sender — never a name the payload supplied.
+
+Fixing the request direction also meant fixing where the GM's answer goes: approving or rejecting a
+request now targets the verified requester specifically (`socketlib`'s `executeForUsers`, one
+recipient), instead of broadcasting a response naming whichever user the original — possibly forged
+— payload claimed. **To be equally precise here: the old broadcast was architecture, not a security
+hole.** Every client received every response message regardless, but `_baphHandleRequestResponse`
+already refused to act on one addressed to someone else, or that didn't match its own pending
+request — so a forged response reached only its own sender's screen, and only while that sender held
+a matching pending request of their own. Retiring the module's last raw, unverified socket listener
+on this channel — the one the request/response pair used to travel over — means every task-socket
+message baphomet-utils sends or receives is now carried on socketlib's verified path, with no
+remaining exception.
+
+Three smaller, unrelated fixes ride along:
+
+- **Charge's −2 AC penalty now lasts through the enemies' turns, as intended.** The buff's duration
+  was written with a `turn`-unit shape that pf1 silently converts to end at the end of the
+  *charger's own* turn — lifting the penalty before the enemies it exists to expose him to had even
+  acted. It now uses the same `round`/`turnStart` shape `total-defense.js` already used, and lifts
+  at the start of the charger's *next* turn instead.
+- **The §14 skip-dialog escape card no longer fires for a use the routine-tracking path already
+  counted.** A GM-marked natural attack that rolls more than once while `pf1.skipActionDialogs` is
+  on used to post a card telling the GM the swings were "not auto-tracked" — but since `v2.39.0` a
+  marked routine member's use of that kind *is* tracked and charged correctly. The card now skips
+  exactly that case and still posts for everything else (an unmarked PC natural, a weapon, an
+  off-turn attack, or a declared Vital Strike/Charge).
+- **A marked natural attack whose extra attacks are the BAB iterative progression no longer keeps
+  the Full Attack control.** The same two refusals `_isQualifyingBundle` already applies to a
+  qualifying spell or consumable — a declared extra-attack type pf1 itself marks as iterative, or a
+  serialized extra-attack formula that reads `@attributes.bab` — now apply to a natural attack too,
+  npc or GM-marked alike. The item is still a routine member either way; it only loses the control
+  that would otherwise let it roll pf1 iteratives PF1.5 doesn't use.
 
 ### v2.39.0 — What the Routine Holds
 

@@ -4024,9 +4024,22 @@ function _isRoutineMemberItem(actor, item, action) {
 // spell or consumable that _isQualifyingBundle accepts; false for everything else — so a
 // manufactured weapon never keeps it, member or not. _isQualifyingBundle is not reused
 // unchanged for the natural branch and is not itself edited.
+//
+// GOAL_v2.39.1 FIX-6 (TD-65, D-6): the natural branch refuses BAB-iterative extras before
+// falling through to _isRoutineMemberItem — the same two tripwires _isQualifyingBundle applies
+// to spells/consumables (:3862-3864), in the same order, including its fail-closed catch:
+// pf1.config.extraAttacks[type].iteratives === true, or a serialized extraAttacks containing
+// '@attributes.bab'. Applies to every natural attack this branch sees, npc or store-marked.
+// _isQualifyingBundle and _isRoutineMemberItem stay byte-unchanged; a refused item is still a
+// routine member — it only loses the Full Attack control.
 function _keepsFullAttackControl(actor, item, action) {
   if (!actor || !item) return false;
   if (item.type === 'attack' && item.system?.subType === 'natural') {
+    const xa = action?.extraAttacks ?? null;
+    if (xa) {
+      if (pf1.config?.extraAttacks?.[xa.type]?.iteratives === true) return false;
+      try { if (JSON.stringify(xa).includes('@attributes.bab')) return false; } catch { return false; }
+    }
     return _isRoutineMemberItem(actor, item, action);
   }
   if (item.type === 'spell' || item.type === 'consumable') {
@@ -4314,8 +4327,16 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // each macro-bridged off-hand item.use() carries shared.attacks.length
     // === 1 (docs/specs/action-economy/R6_OPEN_QUESTIONS.md:164), so
     // swingCount > 1 never trips for a normal TWF off-hand swing.
+    // GOAL_v2.39.1 FIX-5 (TD-63, D-5): skip the card entirely for a use the close block above
+    // already classified as a routine use, a repeat, or an after-close use (_routineUse /
+    // _routineRepeat / _routineAfterClose, set at :4190-4195 by the untouched close block,
+    // :4214-4263) — such a use IS charged and counted by the routine path, so there is nothing
+    // left for the GM to adjudicate by hand. Every other use (an unmarked PC natural, a weapon,
+    // an off-turn attack, or a declared Vital Strike/Charge on a member — HI-1 sets none of the
+    // three) still posts exactly as before.
     if (isAttack && actor?.type === 'character'
-        && game.settings.get('pf1', 'skipActionDialogs')) {
+        && game.settings.get('pf1', 'skipActionDialogs')
+        && !_routineUse && !_routineRepeat && !_routineAfterClose) {
       const swingCount = actionUse?.shared?.attacks?.length ?? 0;
       if (swingCount > 1) {
         _debugLog(`auto-spend: §14 skip-dialog escape — "${actor.name}" resolved ${swingCount} swings on "${item.name}" with pf1.skipActionDialogs ON — allowed, not auto-tracked, posting GM card`);
@@ -5737,6 +5758,11 @@ function _openRequestTaskDialog(combatant) {
 
     const payload = {
       requestId,
+      // v2.39.1 (GOAL_v2.39.1_TASK_REQUEST_AUTH.md FIX-1, D-1/TD-23):
+      // retained on the payload shape, but ADVISORY/LOGGING ONLY — no
+      // GM-side code reads this field. The GM derives the sender
+      // exclusively from socketlib's verified `this.socketdata.userId`
+      // (VERIFIED_SENDER_PATTERN_REFERENCE.md §3/§4).
       requestingUserId:      game.user.id,
       requestingActorId:     combatant.actor?.id ?? null,
       requestingCombatantId: combatant.id,
@@ -5745,10 +5771,25 @@ function _openRequestTaskDialog(combatant) {
       timestamp:             Date.now(),
     };
 
-    game.socket.emit(`module.${AT_MODULE_ID}`, {
-      action:  'baphTaskRequest',
-      payload,
-    });
+    // v2.39.1 FIX-1: moved off the raw `game.socket.emit` to socketlib's
+    // executeAsGM (COPIED pattern — task-tracker.js:527, itself copied from
+    // VERIFIED_SENDER_PATTERN_REFERENCE.md §6; ground truth
+    // socketlib-v1.1.4-source.js:87-98). _baphActionSocket is the same
+    // shared Socket instance task-tracker.js registers 'baphTaskRequest' on
+    // (socketlib.registerModule is idempotent per module id,
+    // socketlib-v1.1.4-source.js:32-35) — declared in this file's own
+    // Hooks.once('socketlib.ready', ...) block above (:2140-2146), not
+    // modified here. Not awaited: the GM's decision arrives later over
+    // baphTaskRequestResponse (FIX-2), exactly as the prior fire-and-forget
+    // emit did; only a promise rejection (e.g. no GM connected) is caught,
+    // so a socketlib error can never surface as an unhandled rejection.
+    if (!_baphActionSocket) {
+      console.warn(`${AT_MODULE_ID} | baphTaskRequest: socketlib module not yet registered — request not sent.`);
+    } else {
+      _baphActionSocket.executeAsGM('baphTaskRequest', payload).catch((err) => {
+        console.error(`${AT_MODULE_ID} | baphTaskRequest: socketlib relay failed: ${err}`);
+      });
+    }
 
     _debugLog(`Task request submitted: ${requestId}`, payload);
   });
@@ -5777,10 +5818,16 @@ function _openRequestTaskDialog(combatant) {
  * Open the GM approval modal for a player-submitted task request.
  * Called from task-tracker.js socket handler on GM clients.
  *
- * @param {object} payload     - The baphTaskRequest socket payload
- * @param {object} validation  - { isActiveCombatant, userName, actorName }
+ * @param {object} payload        - The baphTaskRequest socket payload
+ * @param {object} validation     - { isActiveCombatant, userName, actorName }
+ * @param {string} verifiedUserId - v2.39.1 (FIX-1/FIX-2): the socketlib-verified
+ *                                  sender id (task-tracker.js's
+ *                                  `this.socketdata.userId`), NEVER
+ *                                  `payload.requestingUserId`. Feeds the
+ *                                  approve/reject response target and the
+ *                                  reject whisper below.
  */
-function _openGMApprovalModal(payload, validation) {
+function _openGMApprovalModal(payload, validation, verifiedUserId) {
   _removeGMApprovalModal();
 
   const position = _getButtonPosition();
@@ -5987,16 +6034,24 @@ function _openGMApprovalModal(payload, validation) {
       dc:             dcRaw,
     });
 
-    game.socket.emit(`module.${AT_MODULE_ID}`, {
-      action:  'baphTaskRequestResponse',
-      payload: {
-        requestId:    payload.requestId,
-        approved:     taskId !== false,
-        reason:       taskId !== false ? null : 'Task initiation failed.',
-        taskId:       taskId !== false ? taskId : null,
-        targetUserId: payload.requestingUserId,
-      },
-    });
+    // v2.39.1 FIX-2 (D-2): targetUserId is the VERIFIED requester id, never
+    // payload.requestingUserId — closes the forged-response-direction half
+    // of D-1. executeForUsers delivers to that one recipient only
+    // (socketlib-v1.1.4-source.js:145-161); _baphHandleRequestResponse's own
+    // targetUserId/requestId guards (:6064/:6067, byte-unchanged) stay in
+    // place, now redundant with this targeted delivery.
+    const responsePayload = {
+      requestId:    payload.requestId,
+      approved:     taskId !== false,
+      reason:       taskId !== false ? null : 'Task initiation failed.',
+      taskId:       taskId !== false ? taskId : null,
+      targetUserId: verifiedUserId,
+    };
+    if (_baphActionSocket) {
+      _baphActionSocket.executeForUsers('baphTaskRequestResponse', [verifiedUserId], responsePayload);
+    } else {
+      console.warn(`${AT_MODULE_ID} | baphTaskRequestResponse: socketlib module not yet registered — response not sent.`);
+    }
 
     _debugLog(
       `GM approved task request ${payload.requestId}: ` +
@@ -6018,8 +6073,10 @@ function _openGMApprovalModal(payload, validation) {
 
     _removeGMApprovalModal();
 
-    // Whisper rejection notice to the requesting player
-    const requestingUser = game.users.get(payload.requestingUserId);
+    // v2.39.1 FIX-2 (D-2): whisper the rejection notice to the VERIFIED
+    // requester, never payload.requestingUserId — a forged payload no
+    // longer misdirects the courtesy whisper.
+    const requestingUser = game.users.get(verifiedUserId);
     const skillLabel = _getSkillLabel(payload.skillId);
     await ChatMessage.create({
       content:
@@ -6030,16 +6087,21 @@ function _openGMApprovalModal(payload, validation) {
       whisper: requestingUser ? [requestingUser.id] : [],
     });
 
-    game.socket.emit(`module.${AT_MODULE_ID}`, {
-      action:  'baphTaskRequestResponse',
-      payload: {
-        requestId:    payload.requestId,
-        approved:     false,
-        reason:       'GM declined',
-        taskId:       null,
-        targetUserId: payload.requestingUserId,
-      },
-    });
+    // v2.39.1 FIX-2: targetUserId is the VERIFIED requester id; delivered to
+    // that one recipient only via executeForUsers (see the approve handler
+    // above for the full citation).
+    const responsePayload = {
+      requestId:    payload.requestId,
+      approved:     false,
+      reason:       'GM declined',
+      taskId:       null,
+      targetUserId: verifiedUserId,
+    };
+    if (_baphActionSocket) {
+      _baphActionSocket.executeForUsers('baphTaskRequestResponse', [verifiedUserId], responsePayload);
+    } else {
+      console.warn(`${AT_MODULE_ID} | baphTaskRequestResponse: socketlib module not yet registered — response not sent.`);
+    }
 
     _debugLog(`GM rejected task request ${payload.requestId}`);
     _baphSignalNextGMRequest();
