@@ -6141,7 +6141,7 @@ function _baphHandleRequestResponse(payload) {
     _debugLog(`Task request ${requestId} approved`);
   } else {
     ui.notifications?.warn?.(
-      `GM declined: ${reason ?? 'no reason given'}.`
+      `${String(reason ?? '').trim().replace(/\.+$/, '') || 'GM declined'}.`
     );
     _debugLog(`Task request ${requestId} rejected: ${reason}`);
   }

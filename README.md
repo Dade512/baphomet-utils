@@ -3,21 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.39.1 — *Whose Name It Bears*
+**Current Version:** 2.40.0 — *What the Icon Says*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**The GM now reads who actually sent a skill-task request, instead of trusting what the request
-claimed.** A forged request could put another player's — or the GM's own — name on the approval card
-and slip past the ownership check under it; the GM reads that identity from socketlib's verified
-sender instead, so the card the GM approves is always attributed to whoever really sent it. Responses
-now go to the real requester only, and the module's last raw (unverified) task-socket listener is
-gone. Charge's −2 AC penalty now lasts through the enemies' turns, as intended, instead of lifting
-before they act; the skip-dialog escape card no longer fires for a routine member's already-tracked
-use; and a marked natural attack whose extra attacks are the BAB iterative progression no longer keeps
-the Full Attack control. See the [changelog](#changelog) for the full entry.
+**The six Pathfinder 1e statuses that PF1.5 canon redefines — Shaken, Frightened, Panicked, Sickened,
+Stunned and Blind — no longer apply pf1's own penalty, and their token-HUD icons now say which Ledger
+condition to apply instead.** Clicking one of those icons (or a spell that sets one) puts the icon on
+the token and nothing else: no attack, save, skill, damage or AC penalty, and no lost Dex bonus. You
+apply the matching Ledger condition from the condition panel, so the two penalties no longer stack.
+A task request the GM declines now reads `GM declined.` for the player, once, instead of repeating
+itself. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -72,7 +70,7 @@ version-history / SYNC_STAMP notes if you suspect drift.
 ## Features
 
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
-- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card
+- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. Until the condition translator ships, pf1's Shaken, Frightened, Panicked, Sickened, Stunned and Blind statuses carry no penalty, and their icons name the Ledger condition to apply from the condition panel
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic. Players click their own pips to spend them; **returning a spent pip is a GM action**, so a mis-click is undone by the GM rather than by the player who made it
 - **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll). In PF1.5 Mode, a multi-projectile spell (or consumable) or an NPC's natural attack keeps its Full Attack button, because canon prices that bundle at a single action; every weapon, every PC's own natural attack, and any spell whose extra attacks are really BAB iteratives does not, and stays a single Strike per action.
 - **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
@@ -188,6 +186,38 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.40.0 — What the Icon Says
+
+pf1 ships its own penalties for six conditions that PF1.5 canon redefines, and they **stacked** with
+the Ledger's: a token-HUD click (or a spell's active effect) that set Shaken applied pf1's −2, and the
+Ledger's Frightened from the panel applied its own on top. This release makes the six inert.
+
+- **What the six icons now do.** On every client, GM and player alike (pf1's condition registry is
+  per client), `shaken`, `frightened`, `panicked`, `sickened`, `stunned` and `blind` have their
+  pf1 changes emptied — and, for `stunned` and `blind`, pf1's lose-Dex-to-AC flag cleared, because
+  canon replaces a lost Dex bonus with Off-Guard and the Ledger's own Blinded and Stunned already
+  derive it. Each keeps its id, icon, fear-track exclusivity and context. The status is still
+  set, and the icon still shows, on the actor; it just applies nothing.
+- **What they do not do.** They do not apply the Ledger condition for you. Between this release and
+  the condition translator (a later milestone) the GM applies the Ledger condition from the panel,
+  as the relabelled icon says: *Shaken → Frightened 1 (Ledger)*, *Frightened → Frightened 2
+  (Ledger)*, *Panicked → Frightened 3 + Fleeing (Ledger)*, *Sickened → Sickened 2 (Ledger)*,
+  *Stunned → Stunned 1 (Ledger)*, *Blind → Blinded (Ledger)*. Nothing reads these statuses yet.
+- **Every other pf1 condition is untouched** and keeps its mechanics (Dazzled, Paralyzed, Flat-Footed
+  and the rest).
+- **The pass** runs on pf1's `pf1RegisterConditions` hook, before pf1 builds the token HUD's status
+  list and before Foundry prepares any world document, so a saved actor is prepared without pf1's
+  penalty and the HUD shows the new names from the first load. It empties the entries in place; it
+  patches no prototype and does not write to `pf1.config`.
+- **A canary** checks the registry at `ready` on every client: the six must carry no changes and no
+  flags, and every other entry must still carry exactly its expected changes and flags. If not, it
+  warns — the GM gets a notification naming every failing condition, every client gets a console
+  warning — and never changes the registry itself. `game.baphometConditions.registryCanary()` runs it
+  on demand and `game.baphometConditions.neutralizeState()` reports when the pass ran.
+- **Task-request decline notice (TD-66).** A declined request showed the player *"GM declined: GM
+  declined."*; it now reads `GM declined.`, and a failed approval reads `Task initiation failed.`
+  with one full stop, not two.
 
 ### v2.39.1 — Whose Name It Bears
 
