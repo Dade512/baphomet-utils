@@ -944,6 +944,159 @@ function _refreshPanel(element) {
 }
 
 /* ----------------------------------------------------------
+   PF1 CONDITION REGISTRY — NEUTRALIZE PASS + CANARY (v2.40.0, TD-38 part 1)
+
+   pf1's own registry entries for six conditions that PF1.5 canon redefines
+   carry native penalties that would stack with the Ledger's. The pass empties
+   their mechanics.changes and mechanics.flags in place (entry.updateSource)
+   and relabels them. Runs on every client: the registry is per client.
+   Reference: GOAL_v2.40.0 FIX-1/FIX-2 and the TD-38 fact pack (read-only);
+   docs/reference/foundry-v13/99_Combined_Foundry_v13_PF1_[KnowledgeFiles.md].md
+   (pf1.registry.conditions as a Map-like registry: get/has/keys/entries).
+   ---------------------------------------------------------- */
+
+// R1 — FROZEN list (Michael, 2026-08-29, register TD-38). Do not extend.
+const _BAPH_NEUTRALIZED_LABELS = Object.freeze({
+  shaken: 'Shaken → Frightened 1 (Ledger)',
+  frightened: 'Frightened → Frightened 2 (Ledger)',
+  panicked: 'Panicked → Frightened 3 + Fleeing (Ledger)',
+  sickened: 'Sickened → Sickened 2 (Ledger)',
+  stunned: 'Stunned → Stunned 1 (Ledger)',
+  blind: 'Blind → Blinded (Ledger)',
+});
+
+// Kept entries that carry pf1's loseDexToAC flag (fact pack addendum).
+const _BAPH_KEPT_DEX_LOST = Object.freeze([
+  'cowering', 'dying', 'flatFooted', 'helpless', 'paralyzed',
+  'petrified', 'pinned', 'sleep', 'stable', 'unconscious',
+]);
+
+// Kept entries with changes: exact expected set, `target:formula:type:operator:priority`.
+const _BAPH_KEPT_CHANGES = Object.freeze({
+  cowering: ['ac:-2:untyped:add:0'],
+  dazzled: ['attack:-1:untyped:add:0'],
+  deaf: ['init:-4:untyped:add:0'],
+  dying: ['dex:0:untypedPerm:set:1001'],
+  entangled: ['attack:-2:untyped:add:0', 'dexPen:-4:untyped:add:0'],
+  exhausted: ['dexPen:-6:untyped:add:0', 'strPen:-6:untyped:add:0'],
+  fatigued: ['dexPen:-2:untyped:add:0', 'strPen:-2:untyped:add:0'],
+  grappled: ['attack:-2:untyped:add:0', 'dexPen:-4:untyped:add:0'],
+  helpless: ['dex:0:untypedPerm:set:1001'],
+  incorporeal: ['ac:max(1, @abilities.cha.mod):deflection:add:0', 'nac:0:base:set:-10'],
+  paralyzed: ['dex:0:untypedPerm:set:1001', 'str:0:untypedPerm:set:1001'],
+  petrified: ['dex:0:untypedPerm:set:1001'],
+  pinned: ['ac:-4:untyped:add:0', 'cmd:-4:untyped:add:0', 'dexMod:min(0, @abilities.dex.mod):untyped:set:1001'],
+  prone: ['mattack:-4:untyped:add:0'],
+  sleep: ['dex:0:untypedPerm:set:1001'],
+  squeezing: ['ac:-4:untyped:add:0', 'attack:-4:untyped:add:0'],
+  stable: ['dex:0:untypedPerm:set:1001'],
+  unconscious: ['dex:0:untypedPerm:set:1001'],
+});
+
+// Record of the pass, read by game.baphometConditions.neutralizeState().
+let _baphNeutralizeState = null;
+
+function _baphChangeSig(change) {
+  return [change?.target, change?.formula, change?.type, change?.operator, change?.priority].join(':');
+}
+
+function _baphEntryChangeSigs(entry) {
+  return Array.from(entry?.mechanics?.changes ?? []).map(_baphChangeSig).sort();
+}
+
+function _baphEntryFlags(entry) {
+  return Array.from(entry?.mechanics?.flags ?? []).map(String).sort();
+}
+
+/**
+ * Fires inside pf1's Registry constructor, before CONFIG.statusEffects is built
+ * from the registry and before Foundry prepares any world document. The hook's
+ * only argument is the registry; pf1.registry.conditions is not assigned yet.
+ */
+Hooks.once('pf1RegisterConditions', registry => {
+  const beforeDocuments = !game._documentsReady;
+  const ids = [];
+  for (const [id, label] of Object.entries(_BAPH_NEUTRALIZED_LABELS)) {
+    try {
+      const entry = registry?.get?.(id);
+      if (!entry) continue;
+      entry.updateSource({ 'mechanics.changes': [], 'mechanics.flags': [], name: label });
+      ids.push(id);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Condition neutralize pass failed for '${id}'`, err);
+    }
+  }
+  _baphNeutralizeState = { ranAt: Date.now(), ids, beforeDocuments };
+});
+
+/**
+ * Fail-loud canary (TD-13 shape). Checks the live registry; warns, never fixes,
+ * never writes to the registry.
+ * @returns {{ ok: boolean, failures: Array<{ id: string, problem: string }> }}
+ */
+function _baphConditionRegistryCanary() {
+  const reg = globalThis.pf1?.registry?.conditions;
+  const failures = [];
+
+  if (!reg) {
+    failures.push({ id: 'registry', problem: 'missing' });
+  } else {
+    for (const id of Object.keys(_BAPH_NEUTRALIZED_LABELS)) {
+      const entry = reg.get(id);
+      if (!entry) {
+        failures.push({ id, problem: 'missing' });
+        continue;
+      }
+      if (Array.from(entry.mechanics?.changes ?? []).length > 0) {
+        failures.push({ id, problem: 'neutralized-has-changes' });
+      }
+      if (_baphEntryFlags(entry).length > 0) {
+        failures.push({ id, problem: 'neutralized-has-flags' });
+      }
+    }
+
+    for (const [id, expected] of Object.entries(_BAPH_KEPT_CHANGES)) {
+      const entry = reg.get(id);
+      if (!entry) {
+        failures.push({ id, problem: 'missing' });
+        continue;
+      }
+      if (_baphEntryChangeSigs(entry).join('|') !== expected.slice().sort().join('|')) {
+        failures.push({ id, problem: 'kept-changes-differ' });
+      }
+    }
+
+    // Every kept entry (any entry other than the six): exact flag set.
+    for (const [id, entry] of reg.entries()) {
+      if (Object.hasOwn(_BAPH_NEUTRALIZED_LABELS, id)) continue;
+      const want = _BAPH_KEPT_DEX_LOST.includes(id) ? 'loseDexToAC' : '';
+      if (_baphEntryFlags(entry).join(',') !== want) {
+        failures.push({ id, problem: 'kept-flags-differ' });
+      }
+    }
+    for (const id of _BAPH_KEPT_DEX_LOST) {
+      if (!reg.has(id) && !failures.some(f => f.id === id && f.problem === 'missing')) {
+        failures.push({ id, problem: 'missing' });
+      }
+    }
+  }
+
+  const ok = failures.length === 0;
+  if (!ok) {
+    const ids = [...new Set(failures.map(f => f.id))];
+    const detail = failures.map(f => `${f.id} (${f.problem})`).join(', ');
+    console.warn(`${MODULE_ID} | pf1 condition registry canary FAILED: ${detail}`);
+    if (game.user?.isGM) {
+      ui.notifications?.warn?.(
+        `${MODULE_ID}: pf1 condition registry is not as expected (${ids.join(', ')}). ` +
+        'Penalties may stack or be missing. See the console.'
+      );
+    }
+  }
+  return { ok, failures };
+}
+
+/* ----------------------------------------------------------
    HOOKS
    ---------------------------------------------------------- */
 
@@ -972,8 +1125,22 @@ Hooks.once('ready', () => {
           name: i.name,
           active: i.system.active,
         }));
+    },
+    // v2.40.0 — pf1 condition registry canary (TD-38 part 1)
+    registryCanary() {
+      return _baphConditionRegistryCanary();
+    },
+    neutralizeState() {
+      if (!_baphNeutralizeState) return null;
+      return {
+        ranAt: _baphNeutralizeState.ranAt,
+        ids: [..._baphNeutralizeState.ids],
+        beforeDocuments: _baphNeutralizeState.beforeDocuments,
+      };
     }
   };
+
+  _baphConditionRegistryCanary();
 
   console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.9 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
