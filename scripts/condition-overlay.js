@@ -2,6 +2,17 @@
    ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.9
    Applies PF2e-style conditions as PF1e system Buffs.
 
+   v2.41.0 Changes (GOAL_v2.41.0_CONDITION_TRANSLATOR — "What the Icon Means"):
+   - [FIX-2/FIX-3] Condition translator (end of file): when one of nine pf1 statuses appears on an
+     actor, the active GM's client applies the matching Ledger condition (setting
+     `autoConditionTranslate` ON) or whispers the GM a card to Apply or Skip (OFF). A status that
+     goes away releases only what the translator itself created and only for the conditions that
+     do not count themselves down. Adds `game.baphometConditions.translationTable()`,
+     `translatorLog()`, `translatorIdle()` and `resolveTranslation()`.
+   - [FIX-4] `paralyzed` and `deafened` no longer emit their own changes (pf1's own statuses write
+     Dex/Str 0 and initiative -4); applying either also sets pf1's status, and removing the Ledger
+     condition clears that status only when the buff recorded that it set it (`setPf1Status`).
+
    v2.9 Changes (GOAL_v2.37.3_CONDITION_CANON — "What the Card Claims"):
    - [FIX-5] Off-Guard is now fully helper-managed. `_syncOffGuard(actor)` is the SOLE writer of
      the `offGuard` buff Item, derived from (blinded present) OR (stunnedCountdown > 0) OR
@@ -429,11 +440,13 @@ const CONDITIONS = {
     // release (see GOAL_v2.37.3_CONDITION_CANON.md "Explicitly out of scope" / follow-up docket).
     // Sentence order is deliberate: the auto-fail clause precedes the '-4' initiative figure so
     // no dead numeric substring reads as a Perception penalty claim.
-    description: 'Cannot hear. Automatically fails hearing-based Perception checks (table-adjudicated, not enforced). –4 penalty to initiative. 20% arcane spell failure on spells with verbal components.',
+    description: 'Cannot hear. Automatically fails hearing-based Perception checks (table-adjudicated, not enforced). pf1\'s own Deaf status applies the –4 penalty to initiative (this buff adds none of its own). 20% arcane spell failure on spells with verbal components.',
     autoDecrement: false,
     buildChanges() {
+      // v2.41.0 FIX-4 (D-2, P-5): the module's `-4 init` is RETIRED — pf1's own `deaf` status
+      // carries `init:-4:untyped:add:0`, and with both set initiative counted -8. pf1's status is
+      // now the only writer; `applyCondition` sets it when it is not already on the actor.
       return [
-        { formula: '-4', operator: 'add', target: 'init', modifier: 'penalty', priority: 0 },
         // v2.37.3 FIX-6 / RULED-4: '-4 skills.per' DELETED here, not repointed to 'skill.per'.
         // Canon (master :657, :816) grants a SENSE-SPECIFIC auto-fail on hearing-based
         // Perception, not a flat -4 — a flat -4 would also wrongly penalise this creature's
@@ -476,16 +489,16 @@ const CONDITIONS = {
     icon: 'icons/svg/paralysis.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'Cannot move, speak, or take any physical action. Helpless (effective DEX 0, –5 modifier). Melee attackers get +4 to hit. Vulnerable to coup de grace.',
+    description: 'Cannot move, speak, or take any physical action. pf1\'s own Paralyzed status sets Dex and Str to 0 (this buff adds no penalty of its own). Melee attackers get +4 to hit. Vulnerable to coup de grace.',
     autoDecrement: false,
     buildChanges() {
-      // v2.37.3 FIX-3: `-20 dex` UNCHANGED — it approximates but does not equal true Dex 0 (a
-      // Dex 24 creature lands at 4, not 0); recorded in D-3, out of scope to change here.
-      // `paralyzed` is now one of FIX-5's Off-Guard SOURCES — `_syncOffGuard` derives Off-Guard
+      // v2.41.0 FIX-4 (D-2, P-5): the module's `-20 dex` is RETIRED — a redundant second writer
+      // beside pf1's own `paralyzed` status (Dex and Str set to 0), ruled 2026-08-29 (TD-38 R1;
+      // also closes TD-09(d)). pf1's status is now the only writer; `applyCondition` sets it
+      // when it is not already on the actor (see `_ledgerSetsPf1Status`).
+      // `paralyzed` stays one of FIX-5's Off-Guard SOURCES — `_syncOffGuard` derives Off-Guard
       // from this buff's presence directly, rather than this condition emitting its own `-2 ac`.
-      return [
-        { formula: '-20', operator: 'add', target: 'dex', modifier: 'penalty', priority: 0 },
-      ];
+      return [];
     }
   },
 };
@@ -627,6 +640,36 @@ async function _syncOffGuard(actor) {
   // otherwise: NO-OP. No rewrite, no re-create, no chat — idempotent by construction.
 }
 
+/* ----------------------------------------------------------
+   RETIRED SECOND WRITERS — v2.41.0 (GOAL_v2.41.0, FIX-4, D-2, P-5)
+
+   Ledger `paralyzed` and `deafened` no longer write Dex/initiative themselves: pf1's own
+   `paralyzed` (Dex and Str set to 0) and `deaf` (initiative -4) statuses are the only writers.
+   Applying either Ledger condition from the panel or the API therefore also sets pf1's status
+   (`actor.setCondition`, confirmed PF1 method — docs/reference/foundry-v13/
+   99_Combined_Foundry_v13_PF1_[KnowledgeFiles.md].md), but only when it is not already on the
+   actor, and then records `flags['baphomet-utils'].setPf1Status = true` on the Ledger buff.
+   Removing the Ledger condition clears pf1's status ONLY when that flag is present, so a status
+   a spell, a buff or the GM set independently survives the Ledger toggle's removal (Michael's
+   refinement, 2026-10-01).
+   ---------------------------------------------------------- */
+
+const _LEDGER_PF1_STATUS = Object.freeze({ paralyzed: 'paralyzed', deafened: 'deaf' });
+
+async function _ledgerSetsPf1Status(actor, condKey) {
+  const status = _LEDGER_PF1_STATUS[condKey];
+  if (!status) return;
+  if (actor.statuses?.has(status)) return;
+  await actor.setCondition(status, true);
+  const buff = _findExistingBuff(actor, condKey);
+  if (buff) await buff.setFlag(MODULE_ID, 'setPf1Status', true);
+}
+
+function _pf1StatusToClear(buff, condKey) {
+  const status = _LEDGER_PF1_STATUS[condKey];
+  return status && buff?.getFlag(MODULE_ID, 'setPf1Status') === true ? status : null;
+}
+
 async function applyCondition(actor, condKey, tier) {
   if (!actor || !CONDITIONS[condKey]) return;
 
@@ -692,6 +735,9 @@ async function applyCondition(actor, condKey, tier) {
     await created.setActive(true);
   }
 
+  // v2.41.0 FIX-4 (P-5): paralyzed / deafened also set pf1's own status (no-op for any other key).
+  await _ledgerSetsPf1Status(actor, condKey);
+
   // v2.34.0: Stunned countdown lifecycle — this is an EXTERNAL (re)application (GM UI tier
   // button, macro API `game.baphometConditions.apply`, or `adjustCondition`'s tier-up path —
   // never the internal decrement, which writes stunnedCountdown/removes the buff directly and
@@ -752,7 +798,9 @@ async function removeCondition(actor, condKey) {
   }
 
   const cond = CONDITIONS[condKey];
+  const pf1StatusToClear = _pf1StatusToClear(existing, condKey); // v2.41.0 FIX-4 (P-5): read before the buff is gone
   await existing.delete();
+  if (pf1StatusToClear) await actor.setCondition(pf1StatusToClear, false);
   _postConditionChat(actor, cond, 0, 'remove');
 
   // v2.37.3 FIX-5: resync the derived Off-Guard buff after removing a source condition.
@@ -1137,6 +1185,19 @@ Hooks.once('ready', () => {
         ids: [..._baphNeutralizeState.ids],
         beforeDocuments: _baphNeutralizeState.beforeDocuments,
       };
+    },
+    // v2.41.0 — condition translator (TD-38 part 2). Defined at the end of this file.
+    translationTable() {
+      return _translationTableCopy();
+    },
+    translatorLog() {
+      return _translatorLogCopy();
+    },
+    translatorIdle() {
+      return _translatorIdle();
+    },
+    resolveTranslation(messageId, choice) {
+      return _resolveTranslation(messageId, choice);
     }
   };
 
@@ -1498,3 +1559,569 @@ function _onDeleteItemCleanupOrphanedStunnedFlags(item) {
   actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
 }
 Hooks.on('deleteItem', (item) => _onDeleteItemCleanupOrphanedStunnedFlags(item));
+
+/* ----------------------------------------------------------
+   CONDITION TRANSLATOR — v2.41.0 (GOAL_v2.41.0_CONDITION_TRANSLATOR, FIX-2/FIX-3, TD-38 part 2)
+
+   v2.40.0 made pf1's `shaken`, `frightened`, `panicked`, `sickened`, `stunned` and `blind`
+   inert. This block turns a pf1 status that APPEARS on an actor into the Ledger condition canon
+   assigns it (Condition_Conversion.md § Translation Table), either by itself (world setting
+   `autoConditionTranslate` ON, canon Shape B) or by asking the GM on a whispered card (OFF,
+   canon Shape C).
+
+   Rulings in force (Michael, 2026-10-01): R2 — the Ledger tier wins, a pf1 status is a floor.
+   R-A translate once: acts on an appearance only, never as a continuous floor (Frightened and
+   Stunned count themselves down). R-B release on removal, narrowly. R-C only the active GM's
+   client acts. P-1 no-op when the Ledger tier is already at or above the default (Stunned is read
+   from `stunnedCountdown`). P-2 only a buff the translator CREATED is marked
+   `translatedFrom: { status, tier }`. P-3 no retroactive translation. P-4 R-B runs in both modes.
+
+   TRIGGER. Not one hook's payload: Foundry's document hooks (create/update/delete for
+   ActiveEffect and Item, and pf1's `pf1ToggleActorBuff`) only tell the translator an actor MAY
+   have changed. It then compares the actor's current `actor.statuses`, restricted to the nine
+   table ids, with the set it last saw for that actor. In the new set and not the old: APPEARED.
+   In the old and not the new: REMOVED. Statuses arrive three ways (pf1's condition toggle makes
+   one actor-hosted effect per status; a plain effect carries its own `statuses`; a pf1 buff whose
+   `system.conditions` lists a status creates no effect and reaches `actor.statuses` in data
+   preparation) — all three go through the same comparison.
+
+   COALESCING. The first hook for an actor in a task schedules ONE check for that actor in a later
+   macrotask (`setTimeout(…, 0)`); every further hook for that actor before it runs joins it. A
+   three-status `setConditions` (three synchronous `createActiveEffect` hooks) becomes one check and
+   one card, and the check reads `actor.statuses` after Foundry and pf1 have re-prepared the actor.
+   A hook that lands while that actor's check is running marks it dirty and one more check follows.
+
+   WHO ACTS. Hooks are listened to on GM clients only (a player's client keeps no state; at most it
+   logs one console.info when it makes a change with no GM online — P-3). A non-active GM client
+   only keeps its picture of the actor current; only `_isActiveGMClient()` writes and records.
+
+   STARTING SETS (P-3). An actor's statuses when a GM client first sees it are its starting set,
+   never an appearance. World actors are seeded at `ready` and on `createActor`; token actors of
+   the viewed scene on `canvasReady` and `createToken`. An actor the client has never seen when a
+   hook arrives (an unlinked token off the viewed scene) is seeded at that moment: its first check
+   records the note `first-sight` and translates nothing.
+
+   RESOLVING A DOCUMENT TO ITS ACTOR. An ActiveEffect's `parent` is the actor, or an Item whose
+   `parent` is the actor; an Item's `parent` is the actor; `pf1ToggleActorBuff` hands the actor over.
+
+   References: docs/reference/foundry-v13/99_Combined_Foundry_v13_PF1_[KnowledgeFiles.md].md —
+   document hooks `createActiveEffect(effect, options, userId)` (:2177) and the type-specific
+   Item variants (:2306), `renderChatMessageHTML(message, html, data)` with an HTMLElement (:2317,
+   :2416), `pf1ToggleActorBuff(actor, item, state)` (:805), `actor.statuses` (:3816),
+   `actor.setCondition` / `setConditions` (:839-840).
+   ---------------------------------------------------------- */
+
+// The nine rows, pf1 id -> Ledger catalog key + default tier (toggles at 1). `panicked` is
+// Frightened 3: Fleeing is 1.7c, and the card and the record say so.
+const _TRANSLATION_TABLE = Object.freeze({
+  shaken:     Object.freeze({ key: 'frightened', tier: 1 }),
+  frightened: Object.freeze({ key: 'frightened', tier: 2 }),
+  panicked:   Object.freeze({ key: 'frightened', tier: 3 }),
+  sickened:   Object.freeze({ key: 'sickened',   tier: 2 }),
+  stunned:    Object.freeze({ key: 'stunned',     tier: 1 }),
+  blind:      Object.freeze({ key: 'blinded',     tier: 1 }),
+  staggered:  Object.freeze({ key: 'slowed',      tier: 1 }),
+  disabled:   Object.freeze({ key: 'slowed',      tier: 1 }),
+  nauseated:  Object.freeze({ key: 'nauseated',   tier: 1 }),
+});
+
+const _TRANSLATOR_PF1_NAMES = Object.freeze({
+  shaken: 'Shaken', frightened: 'Frightened', panicked: 'Panicked', sickened: 'Sickened',
+  stunned: 'Stunned', blind: 'Blind', staggered: 'Staggered', disabled: 'Disabled', nauseated: 'Nauseated',
+});
+
+// Ledger conditions that count themselves down: R-B never releases these.
+const _TRANSLATOR_SELF_DECREMENTING = Object.freeze(['frightened', 'stunned']);
+
+const _TRANSLATOR_LOG_MAX = 50;
+
+const _translatorSeen = new Map();      // actor uuid -> Set of table ids last seen on it
+const _translatorQueue = new Map();     // actor uuid -> { actor, timer, running, dirty }
+const _translatorLog = [];              // in-memory record log, oldest first, last 50
+const _translatorResolving = new Set(); // card message ids being resolved right now
+let _translatorSeq = 0;
+
+function _translationTableCopy() {
+  return Object.fromEntries(
+    Object.entries(_TRANSLATION_TABLE).map(([id, row]) => [id, { key: row.key, tier: row.tier }])
+  );
+}
+
+function _translatorLogCopy() {
+  return _translatorLog.map(r => structuredClone(r));
+}
+
+function _translatorIdle() {
+  return _translatorQueue.size === 0;
+}
+
+function _translatorAutoOn() {
+  try {
+    return game.settings.get(MODULE_ID, 'autoConditionTranslate') === true;
+  } catch (err) {
+    return false; // not registered — behave as the default (OFF)
+  }
+}
+
+function _translatorIds(iterable) {
+  return Array.from(iterable ?? []).filter(id => Object.hasOwn(_TRANSLATION_TABLE, id));
+}
+
+function _translatorStatusSet(actor) {
+  return new Set(_translatorIds(actor?.statuses));
+}
+
+function _translatorActorLive(actor) {
+  if (!actor) return false;
+  if (actor.isToken) return !!(actor.token && actor.token.parent?.tokens?.has(actor.token.id));
+  return !!game.actors?.has(actor.id);
+}
+
+function _translatorActorOfEffect(effect) {
+  const parent = effect?.parent;
+  if (!parent) return null;
+  if (parent.documentName === 'Actor') return parent;
+  if (parent.documentName === 'Item' && parent.parent?.documentName === 'Actor') return parent.parent;
+  return null;
+}
+
+function _translatorActorOfItem(item) {
+  const parent = item?.parent;
+  return parent?.documentName === 'Actor' ? parent : null;
+}
+
+function _translatorGMIds() {
+  return ChatMessage.getWhisperRecipients('GM').map(u => u.id);
+}
+
+// Group pf1 ids by Ledger key, each group's ids in alphabetical order, so the alphabetically first
+// one names the group (the record's `status` and the mark's).
+function _translatorGroupByKey(ids) {
+  const groups = new Map();
+  for (const id of [...ids].sort()) {
+    const key = _TRANSLATION_TABLE[id].key;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(id);
+  }
+  return groups;
+}
+
+// P-1: the current tier is `getTier()`, except Stunned, where it is `stunnedCountdown`.
+function _translatorCurrentTier(actor, key) {
+  if (key === 'stunned') return Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0;
+  return _findExistingBuff(actor, key)?.getFlag(MODULE_ID, 'tier') ?? 0;
+}
+
+// Which Ledger writes a set of appeared ids needs. A key whose Ledger tier is already at or above
+// its default (the highest default among its ids) is skipped and nothing is written for it.
+function _translatorPlan(actor, ids) {
+  const writes = [];
+  const skipped = [];
+  for (const [key, statuses] of _translatorGroupByKey(ids)) {
+    const tier = Math.max(...statuses.map(id => _TRANSLATION_TABLE[id].tier));
+    const from = _translatorCurrentTier(actor, key);
+    if (from >= tier) skipped.push(...statuses);
+    else writes.push({ key, status: statuses[0], statuses, tier, from });
+  }
+  return { writes, skipped: skipped.sort() };
+}
+
+// One Ledger write. P-2: the buff is marked `translatedFrom` only when the translator created it
+// (no buff for the key existed before); a buff it merely raised is left unmarked.
+async function _translatorWrite(actor, write) {
+  const existed = !!_findExistingBuff(actor, write.key);
+  await applyCondition(actor, write.key, write.tier);
+  if (!existed) {
+    const buff = _findExistingBuff(actor, write.key);
+    if (buff) await buff.setFlag(MODULE_ID, 'translatedFrom', { status: write.status, tier: write.tier });
+  }
+  return { status: write.status, key: write.key, from: write.from, to: write.tier };
+}
+
+// The source named for an appeared status: the active buff whose `system.conditions` lists it; else
+// 'condition toggle' for pf1's own condition effect (flags.pf1.autoDelete === true); else the effect's
+// own name (an effect on an item is named by its item).
+function _translatorSource(actor, id) {
+  const buff = actor.items.find(i =>
+    i.type === 'buff' && i.system?.active && Array.from(i.system?.conditions ?? []).includes(id)
+  );
+  if (buff) return buff.name;
+
+  const effects = [...actor.effects, ...Array.from(actor.items).flatMap(i => Array.from(i.effects ?? []))];
+  const effect = effects.find(e => !e.disabled && e.statuses?.has?.(id));
+  if (effect) {
+    if (effect.getFlag('pf1', 'autoDelete') === true) return 'condition toggle';
+    return effect.parent?.documentName === 'Item' ? effect.parent.name : effect.name;
+  }
+  return 'unknown';
+}
+
+function _translatorAppend(rec) {
+  rec.seq = ++_translatorSeq;
+  _translatorLog.push(rec);
+  while (_translatorLog.length > _TRANSLATOR_LOG_MAX) _translatorLog.shift();
+}
+
+async function _translatorWhisper(actor, html) {
+  await ChatMessage.create({
+    content: html,
+    speaker: ChatMessage.getSpeaker({ actor }),
+    whisper: _translatorGMIds(),
+  });
+}
+
+function _translatorCardLine(actor, item, source) {
+  const esc = foundry.utils.escapeHTML;
+  const fleeing = item.status === 'panicked'
+    ? ' Fleeing is not automated yet (1.7c) — adjudicate it by hand.'
+    : '';
+  return `<li>${esc(source)} applied ${_TRANSLATOR_PF1_NAMES[item.status]} to ${esc(actor.name)}. `
+    + `Apply ${esc(_buffName(item.key, item.tier))}?${fleeing}</li>`;
+}
+
+// Shape C: one card per check, whispered to GMs only, speaker the actor. Returns the message id.
+async function _translatorPostCard(actor, items, sources) {
+  const esc = foundry.utils.escapeHTML;
+  const lines = items.map(item => _translatorCardLine(actor, item, sources[item.status] ?? 'unknown')).join('');
+  const btn = 'font-family: var(--baph-font-heading, \'Courier Prime\', monospace); text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; cursor: pointer; margin-right: 6px;';
+  const content = `<div class="baph-translator-card">
+    <div style="font-family: var(--baph-font-heading, 'Courier Prime', monospace); text-transform: uppercase; letter-spacing: 0.05em; color: var(--baph-gold, #b8943e); font-size: 13px;">
+      ${esc(actor.name)} — Condition translation
+    </div>
+    <ul style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px; margin: 4px 0; padding-left: 18px;">${lines}</ul>
+    <div class="baph-translator-actions" style="margin-top: 4px;">
+      <button type="button" style="${btn}" data-baph-translate="apply">Apply</button>
+      <button type="button" style="${btn}" data-baph-translate="skip">Skip</button>
+    </div>
+  </div>`;
+
+  const message = await ChatMessage.create({
+    content,
+    speaker: ChatMessage.getSpeaker({ actor }),
+    whisper: _translatorGMIds(),
+    flags: {
+      [MODULE_ID]: {
+        translatorPrompt: {
+          actorUuid: actor.uuid,
+          items: items.map(i => ({ status: i.status, key: i.key, tier: i.tier })),
+          state: 'open',
+        },
+      },
+    },
+  });
+  return message?.id ?? null;
+}
+
+// The translating half of a check: appearances, then removals. Fills `rec` in place.
+async function _translatorTranslate(actor, rec, had, now) {
+  rec.appeared = [...now].filter(id => !had.has(id)).sort();
+  rec.removed = [...had].filter(id => !now.has(id)).sort();
+
+  for (const id of rec.appeared) rec.sources[id] = _translatorSource(actor, id);
+
+  // ---- appearances ----
+  if (rec.appeared.length) {
+    const plan = _translatorPlan(actor, rec.appeared);
+    rec.skipped = plan.skipped;
+
+    if (rec.appeared.includes('panicked')) rec.notes.push('fleeing-not-automated');
+
+    if (rec.mode === 'auto') {
+      for (const write of plan.writes) rec.applied.push(await _translatorWrite(actor, write));
+      if (rec.appeared.includes('panicked')) {
+        await _translatorWhisper(actor,
+          `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;">`
+          + `${foundry.utils.escapeHTML(actor.name)} — Panicked: Fleeing is not automated yet (1.7c). Adjudicate it by hand.</div>`);
+      }
+    } else {
+      const items = plan.writes.flatMap(w => w.statuses.map(status => ({
+        status, key: w.key, tier: _TRANSLATION_TABLE[status].tier,
+      }))).sort((a, b) => a.status.localeCompare(b.status));
+      if (items.length) rec.promptId = await _translatorPostCard(actor, items, rec.sources);
+    }
+  }
+
+  // ---- removals: one decision per Ledger key (R-B, P-4, both modes) ----
+  if (rec.removed.length) {
+    const stillOn = _translatorStatusSet(actor);
+    for (const [key, statuses] of _translatorGroupByKey(rec.removed)) {
+      const status = statuses[0];
+      const buff = _findExistingBuff(actor, key);
+      if (!buff) continue; // nothing left to decide for this key
+
+      if (_TRANSLATOR_SELF_DECREMENTING.includes(key)) {
+        rec.kept.push({ status, key, reason: 'self-decrementing' });
+        continue;
+      }
+
+      const mark = buff.getFlag(MODULE_ID, 'translatedFrom') ?? null;
+      let reason = null;
+      if (!mark) reason = 'not-translated';
+      else if ((buff.getFlag(MODULE_ID, 'tier') ?? 0) !== mark.tier) reason = 'tier-changed';
+      else if (Object.entries(_TRANSLATION_TABLE).some(([id, row]) => row.key === key && stillOn.has(id))) reason = 'other-source';
+
+      if (reason) {
+        rec.kept.push({ status, key, reason });
+      } else {
+        await removeCondition(actor, key);
+        rec.released.push(key);
+      }
+    }
+  }
+}
+
+async function _translatorCheck(actor) {
+  const uuid = actor.uuid;
+  if (!_translatorActorLive(actor)) {
+    _translatorSeen.delete(uuid);
+    return;
+  }
+
+  const now = _translatorStatusSet(actor);
+  const had = _translatorSeen.get(uuid) ?? null;
+  _translatorSeen.set(uuid, new Set(now));
+
+  // R-C: only the active GM's client records or writes anything. Another GM client keeps its
+  // picture of the actor current, so it never replays an old change if it later becomes active.
+  if (!_isActiveGMClient()) return;
+
+  const rec = {
+    seq: 0,
+    at: Date.now(),
+    actorUuid: uuid,
+    mode: _translatorAutoOn() ? 'auto' : 'prompt',
+    appeared: [],
+    removed: [],
+    sources: {},
+    applied: [],
+    skipped: [],
+    released: [],
+    kept: [],
+    promptId: null,
+    notes: [],
+  };
+
+  try {
+    if (!had) rec.notes.push('first-sight'); // P-3: a status already there is a starting set
+    else await _translatorTranslate(actor, rec, had, now);
+  } catch (err) {
+    console.error(`${MODULE_ID} | Condition translator failed for ${actor.name}`, err);
+    rec.notes.push('error');
+  }
+
+  // Appended only after the check's writes have finished.
+  _translatorAppend(rec);
+}
+
+async function _translatorRun(uuid) {
+  const q = _translatorQueue.get(uuid);
+  if (!q) return;
+  q.timer = null;
+  q.running = true;
+  q.dirty = false;
+  try {
+    await _translatorCheck(q.actor);
+  } catch (err) {
+    console.error(`${MODULE_ID} | Condition translator check threw`, err);
+  }
+  q.running = false;
+  if (q.dirty) {
+    q.dirty = false;
+    q.timer = setTimeout(() => _translatorRun(uuid), 0);
+  } else {
+    _translatorQueue.delete(uuid);
+  }
+}
+
+// An actor MAY have changed. The first hook in a task schedules one check in a later macrotask;
+// every further hook for that actor before it runs joins it.
+function _translatorSchedule(actor) {
+  if (!actor || actor.pack || !game.user?.isGM) return;
+  const uuid = actor.uuid;
+  let q = _translatorQueue.get(uuid);
+  if (!q) {
+    q = { actor, timer: null, running: false, dirty: false };
+    _translatorQueue.set(uuid, q);
+  }
+  q.actor = actor;
+  if (q.timer !== null) return;
+  if (q.running) { q.dirty = true; return; }
+  q.timer = setTimeout(() => _translatorRun(uuid), 0);
+}
+
+function _translatorSeed(actor) {
+  if (!actor || actor.pack || !game.user?.isGM) return;
+  if (_translatorSeen.has(actor.uuid)) return;
+  _translatorSeen.set(actor.uuid, _translatorStatusSet(actor));
+}
+
+function _translatorSeedScene(scene) {
+  for (const token of scene?.tokens ?? []) {
+    try { _translatorSeed(token.actor); } catch (err) { /* token without a usable actor */ }
+  }
+}
+
+// P-3: when no GM is online nothing can act. The client whose user made the change says so, once.
+function _translatorNoGmNote(actor, ids, userId) {
+  if (!ids.length || game.users?.activeGM || userId !== game.user?.id) return;
+  console.info(`${MODULE_ID} | Condition translator: no GM is online, so ${actor.name}'s ${ids.join(', ')} was not translated to a Ledger condition.`);
+}
+
+Hooks.on('createActiveEffect', (effect, options, userId) => {
+  const actor = _translatorActorOfEffect(effect);
+  if (!actor) return;
+  _translatorNoGmNote(actor, _translatorIds(effect.statuses), userId);
+  _translatorSchedule(actor);
+});
+
+// The update hook gives no prior state and a player client keeps none, so the no-GM line names every
+// mapped status the effect now carries, not strictly the newly added ones.
+Hooks.on('updateActiveEffect', (effect, changes, options, userId) => {
+  const actor = _translatorActorOfEffect(effect);
+  if (!actor) return;
+  const touched = !!changes && (Object.hasOwn(changes, 'statuses') || Object.hasOwn(changes, 'disabled'));
+  if (touched && effect.disabled !== true) {
+    _translatorNoGmNote(actor, _translatorIds(effect.statuses), userId);
+  }
+  _translatorSchedule(actor);
+});
+Hooks.on('deleteActiveEffect', (effect) => _translatorSchedule(_translatorActorOfEffect(effect)));
+
+Hooks.on('createItem', (item, options, userId) => {
+  const actor = _translatorActorOfItem(item);
+  if (!actor) return;
+  if (item.type === 'buff' && item.system?.active) {
+    _translatorNoGmNote(actor, _translatorIds(item.system?.conditions), userId);
+  }
+  _translatorSchedule(actor);
+});
+
+Hooks.on('updateItem', (item, changes, options, userId) => {
+  const actor = _translatorActorOfItem(item);
+  if (!actor) return;
+  const sys = changes?.system;
+  const touched = !!sys && (Object.hasOwn(sys, 'active') || Object.hasOwn(sys, 'conditions'));
+  if (item.type === 'buff' && touched && item.system?.active === true) {
+    _translatorNoGmNote(actor, _translatorIds(item.system?.conditions), userId);
+  }
+  _translatorSchedule(actor);
+});
+
+Hooks.on('deleteItem', (item) => _translatorSchedule(_translatorActorOfItem(item)));
+
+// A buff whose system.conditions lists a status makes no effect; activating or deactivating it is
+// signalled here and by updateItem. Joining the same scheduled check makes the double signal free.
+Hooks.on('pf1ToggleActorBuff', (actor) => _translatorSchedule(actor));
+
+// Starting sets (P-3).
+Hooks.once('ready', () => {
+  if (!game.user?.isGM) return;
+  for (const actor of game.actors ?? []) _translatorSeed(actor);
+});
+Hooks.on('createActor', (actor) => _translatorSeed(actor));
+Hooks.on('deleteActor', (actor) => { if (actor?.uuid) _translatorSeen.delete(actor.uuid); });
+Hooks.on('canvasReady', () => {
+  if (game.user?.isGM) _translatorSeedScene(canvas?.scene);
+});
+Hooks.on('createToken', (token) => {
+  try { _translatorSeed(token.actor); } catch (err) { /* token without a usable actor */ }
+});
+
+/* ----------------------------------------------------------
+   FIX-3 — SHAPE C's CARD: the buttons and the one resolver
+   ---------------------------------------------------------- */
+
+function _translatorFindActor(uuid) {
+  try {
+    const doc = fromUuidSync(uuid);
+    if (doc?.documentName === 'Actor') return doc;
+    if (doc?.actor) return doc.actor;
+  } catch (err) { /* fall through to the world collection */ }
+  return typeof uuid === 'string' && uuid.startsWith('Actor.') ? (game.actors?.get(uuid.slice(6)) ?? null) : null;
+}
+
+// The card with its buttons removed and one line saying what was done.
+function _translatorClosedContent(content, line) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = content ?? '';
+  tpl.content.querySelector('.baph-translator-actions')?.remove();
+  const done = document.createElement('div');
+  done.className = 'baph-translator-done';
+  done.style.cssText = 'font-family: var(--baph-font-body, \'Alegreya\', serif); font-size: 12px; margin-top: 4px;';
+  done.textContent = line;
+  (tpl.content.querySelector('.baph-translator-card') ?? tpl.content).appendChild(done);
+  return tpl.innerHTML;
+}
+
+// Apply: re-reads each line's status and current tier now. A status no longer on the actor is not
+// applied; one already at or above its default is skipped; the rest are applied and marked exactly
+// as Shape B does.
+async function _translatorApplyItems(actor, items) {
+  const ids = [];
+  const gone = [];
+  for (const item of items) {
+    if (!Object.hasOwn(_TRANSLATION_TABLE, item?.status)) continue;
+    if (actor.statuses?.has(item.status)) ids.push(item.status);
+    else gone.push(item.status);
+  }
+  const plan = _translatorPlan(actor, [...new Set(ids)]);
+  const applied = [];
+  for (const write of plan.writes) applied.push(await _translatorWrite(actor, write));
+  return { applied, skipped: plan.skipped, gone };
+}
+
+async function _resolveTranslation(messageId, choice) {
+  if (!game.user?.isGM) return { ok: false, reason: 'not-gm' };
+  if (choice !== 'apply' && choice !== 'skip') return { ok: false, reason: 'bad-choice' };
+
+  const message = game.messages?.get(messageId) ?? null;
+  const prompt = message?.flags?.[MODULE_ID]?.translatorPrompt ?? null;
+  if (!prompt) return { ok: false, reason: 'not-found' };
+  if (prompt.state !== 'open' || _translatorResolving.has(messageId)) return { ok: false, reason: 'resolved' };
+
+  _translatorResolving.add(messageId);
+  try {
+    let line = 'Skipped — nothing was applied.';
+    if (choice === 'apply') {
+      const actor = _translatorFindActor(prompt.actorUuid);
+      if (!actor) return { ok: false, reason: 'no-actor' };
+      const result = await _translatorApplyItems(actor, prompt.items ?? []);
+      const parts = [];
+      if (result.applied.length) {
+        parts.push(`Applied ${result.applied.map(a => _buffName(a.key, a.to)).join(', ')}.`);
+      }
+      if (result.skipped.length) {
+        parts.push(`Left alone, already at or above the default: ${result.skipped.map(s => _TRANSLATOR_PF1_NAMES[s]).join(', ')}.`);
+      }
+      if (result.gone.length) {
+        parts.push(`No longer on the actor: ${result.gone.map(s => _TRANSLATOR_PF1_NAMES[s]).join(', ')}.`);
+      }
+      line = parts.length ? parts.join(' ') : 'Applied — nothing needed writing.';
+    }
+
+    const state = choice === 'apply' ? 'applied' : 'skipped';
+    await message.update({
+      content: _translatorClosedContent(message.content, line),
+      [`flags.${MODULE_ID}.translatorPrompt.state`]: state,
+    });
+    return { ok: true, state };
+  } finally {
+    _translatorResolving.delete(messageId);
+  }
+}
+
+// The buttons, wired on GM clients only (v13: `html` is an HTMLElement).
+Hooks.on('renderChatMessageHTML', (message, html, data) => {
+  if (!game.user?.isGM) return;
+  if (message?.flags?.[MODULE_ID]?.translatorPrompt?.state !== 'open') return;
+  const root = _baphNormalizeHtml(html);
+  if (!root?.querySelectorAll) return;
+  for (const btn of root.querySelectorAll('[data-baph-translate]')) {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      _resolveTranslation(message.id, btn.dataset.baphTranslate).catch(err => {
+        console.error(`${MODULE_ID} | Condition translator card could not be resolved`, err);
+      });
+    });
+  }
+});
