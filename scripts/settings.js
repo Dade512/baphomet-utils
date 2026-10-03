@@ -1,6 +1,12 @@
 /* ============================================================
-   BAPHOMET UTILS — SETTINGS v1.15
+   BAPHOMET UTILS — SETTINGS v1.16
    Central module settings registration.
+
+   v1.16 (module v2.41.0 — "What the Icon Means", FIX-1):
+   - autoConditionTranslate registered. World scope, Boolean, default false.
+     Off: when one of nine pf1 statuses appears on an actor, the GM is asked
+     on a whispered card to apply the Ledger condition. On: the module applies
+     it itself. No onChange. The translator lives in scripts/condition-overlay.js.
 
    v1.15 (module v2.37.8 — "Declare and Withdraw", FIX-4 / TD-36(a)):
    - New Hooks.once('ready') nag (not GM-gated — pf1.skipActionDialogs is
@@ -178,6 +184,23 @@ Hooks.once('init', () => {
     config: true,
     type: Boolean,
     default: true
+  });
+
+  /* ----------------------------------------------------------
+     AUTO-TRANSLATE PF1 CONDITIONS — v2.41.0 (GOAL_v2.41.0, FIX-1, TD-38 part 2)
+
+     World scope, Boolean, default OFF. Read by the condition translator in
+     scripts/condition-overlay.js each time a pf1 status appears on an actor.
+     OFF = the GM is asked on a whispered card (canon Shape C); ON = the module
+     applies the Ledger condition itself (canon Shape B). No onChange.
+     ---------------------------------------------------------- */
+  game.settings.register(SETTINGS_MODULE_ID, 'autoConditionTranslate', {
+    name: 'Auto-Translate PF1 Conditions',
+    hint: 'When one of pf1\'s Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled or Nauseated statuses appears on an actor: off, the GM is asked on a whispered card whether to apply the matching Ledger condition; on, the module applies it itself. Default OFF.',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: false
   });
 
   /* ----------------------------------------------------------

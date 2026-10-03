@@ -3,19 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.40.0 — *What the Icon Says*
+**Current Version:** 2.41.0 — *What the Icon Means*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**The six Pathfinder 1e statuses that PF1.5 canon redefines — Shaken, Frightened, Panicked, Sickened,
-Stunned and Blind — no longer apply pf1's own penalty, and their token-HUD icons now say which Ledger
-condition to apply instead.** Clicking one of those icons (or a spell that sets one) puts the icon on
-the token and nothing else: no attack, save, skill, damage or AC penalty, and no lost Dex bonus. You
-apply the matching Ledger condition from the condition panel, so the two penalties no longer stack.
-A task request the GM declines now reads `GM declined.` for the player, once, instead of repeating
-itself. See the [changelog](#changelog) for the full entry.
+**When a Pathfinder 1e Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled or
+Nauseated status lands on an actor — from the token HUD, a spell's effect or a buff — the module now
+turns it into the matching Ledger condition.** By default the GM gets a whispered card with **Apply**
+and **Skip**; switch on **Auto-Translate PF1 Conditions** and the module applies it without asking.
+Taking the status off releases what the module put on, for the conditions that do not count themselves
+down. Ledger Paralyzed and Deafened now set pf1's own status, so their Dex 0 and initiative −4 are
+counted once. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -70,7 +70,7 @@ version-history / SYNC_STAMP notes if you suspect drift.
 ## Features
 
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
-- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. Until the condition translator ships, pf1's Shaken, Frightened, Panicked, Sickened, Stunned and Blind statuses carry no penalty, and their icons name the Ledger condition to apply from the condition panel
+- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. When one of the nine pf1 statuses (Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled, Nauseated) appears on an actor, the GM is asked on a whispered card to apply its Ledger condition, or, with **Auto-Translate PF1 Conditions** on, the module applies it
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic. Players click their own pips to spend them; **returning a spent pip is a GM action**, so a mis-click is undone by the GM rather than by the player who made it
 - **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll). In PF1.5 Mode, a multi-projectile spell (or consumable) or an NPC's natural attack keeps its Full Attack button, because canon prices that bundle at a single action; every weapon, every PC's own natural attack, and any spell whose extra attacks are really BAB iteratives does not, and stays a single Strike per action.
 - **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
@@ -186,6 +186,47 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.41.0 — What the Icon Means
+
+`v2.40.0` made pf1's Shaken, Frightened, Panicked, Sickened, Stunned and Blind inert and left the GM to
+apply the Ledger condition by hand. This release does that translation: when one of nine pf1 statuses
+appears on an actor, the module applies the Ledger condition canon assigns it, or asks the GM first.
+
+- **The nine rows** (canon's Translation Table). Shaken → Frightened 1; Frightened → Frightened 2;
+  Panicked → Frightened 3; Sickened → Sickened 2; Stunned → Stunned 1; Blind → Blinded; Staggered →
+  Slowed 1; Disabled → Slowed 1; Nauseated → Nauseated. A status appears however it arrives: the token
+  HUD or sheet toggle, a plain active effect carrying the status, or a pf1 buff whose conditions list it
+  (a spell's buff, switched on or created already on).
+- **Auto-Translate PF1 Conditions, off (the default).** The GM is whispered one card per change naming
+  the source, the pf1 condition, the actor and the Ledger condition to apply — *"<source> applied
+  Shaken to <actor>. Apply Frightened 1?"* — with one **Apply** and one **Skip** for the whole card.
+  Nothing is applied until the GM answers; players never see the card. Apply re-reads the actor at that
+  moment: a status already gone is not applied and a Ledger condition already at or above the default is
+  left alone. A card is answered once.
+- **Auto-Translate PF1 Conditions, on.** The module applies the Ledger condition itself, at the same
+  default.
+- **The Ledger tier wins; the pf1 status is a floor.** If the actor already carries a higher Ledger
+  tier, nothing is written (Frightened 3 plus Shaken stays Frightened 3, never 4, never 1, and a running
+  Stunned countdown is not reset). A lower tier is raised to the default. Only the active GM's client
+  acts, and only on a status that appears: a status already on an actor when the GM loads is not
+  translated, and one set while no GM is online is not translated later (the player's console says so).
+- **Translated once.** Frightened and Stunned count themselves down at end of turn; the translator does
+  not put them back while the pf1 status stays on the actor.
+- **Removal, in both settings.** When the status goes, the module removes the Ledger condition only if
+  it created it, it is Blinded, Sickened, Slowed or Nauseated, its tier is unchanged since, and no other
+  mapped status still holds it. Frightened and Stunned are left to count down. A condition the GM applied
+  or changed is never taken away.
+- **Not yet (1.7c).** *Panicked* gives Frightened 3 but **Fleeing is not automated** — the card and a GM
+  whisper say so, and it is adjudicated by hand. Off-Guard is not yet derived from pf1's own statuses
+  (Flat-Footed, Paralyzed, Cowering, Pinned), and Deaf, Dazzled and every other status pf1 keeps are not
+  translated.
+- **Ledger Paralyzed and Deafened set pf1's own status.** Their own Dex −20 and initiative −4 are retired
+  as second writers; applying either from the panel or the API now also sets pf1's `paralyzed` (Dex 0,
+  Str 0) or `deaf` (initiative −4) when it is not already set, and removing the Ledger condition clears
+  pf1's status only if the module set it. A status a spell, a buff or the GM set on their own survives.
+- **API.** `game.baphometConditions` gains `translationTable()`, `translatorLog()` (the last 50 checks,
+  GM client only), `translatorIdle()` and `resolveTranslation(messageId, 'apply' | 'skip')`.
 
 ### v2.40.0 — What the Icon Says
 
