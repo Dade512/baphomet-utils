@@ -3,19 +3,18 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.41.0 — *What the Icon Means*
+**Current Version:** 2.42.0 — *Caught Off-Guard*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**When a Pathfinder 1e Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled or
-Nauseated status lands on an actor — from the token HUD, a spell's effect or a buff — the module now
-turns it into the matching Ledger condition.** By default the GM gets a whispered card with **Apply**
-and **Skip**; switch on **Auto-Translate PF1 Conditions** and the module applies it without asking.
-Taking the status off releases what the module put on, for the conditions that do not count themselves
-down. Ledger Paralyzed and Deafened now set pf1's own status, so their Dex 0 and initiative −4 are
-counted once. See the [changelog](#changelog) for the full entry.
+**A creature is now Off-Guard — a flat −2 to AC and CMD — for every reason canon names: Blinded, Stunned,
+Paralyzed, pf1's Flat-Footed, Cowering and Pinned, the Dex-0 conditions (Dying, Helpless, Petrified, Asleep,
+Stable, Unconscious), and, in a combat started after this update, not yet having taken its first turn.** A
+creature whose Uncanny Dodge item carries the flag is spared the last of these. Panicked now brings
+**Fleeing** with its Frightened 3, and the two count down together. See the [changelog](#changelog) for the
+full entry.
 
 ---
 
@@ -70,7 +69,7 @@ version-history / SYNC_STAMP notes if you suspect drift.
 ## Features
 
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
-- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. When one of the nine pf1 statuses (Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled, Nauseated) appears on an actor, the GM is asked on a whispered card to apply its Ledger condition, or, with **Auto-Translate PF1 Conditions** on, the module applies it
+- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. When one of the nine pf1 statuses (Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled, Nauseated) appears on an actor, the GM is asked on a whispered card to apply its Ledger condition, or, with **Auto-Translate PF1 Conditions** on, the module applies it. **Off-Guard** is derived from Blinded, Stunned, Paralyzed, pf1's Flat-Footed, Cowering, Pinned and Dex-0 conditions, and from not yet having acted in a combat (Uncanny Dodge excepted); **Fleeing** is a new tiered condition that a translated Panicked brings with its Frightened 3
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic. Players click their own pips to spend them; **returning a spent pip is a GM action**, so a mis-click is undone by the GM rather than by the player who made it
 - **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll). In PF1.5 Mode, a multi-projectile spell (or consumable) or an NPC's natural attack keeps its Full Attack button, because canon prices that bundle at a single action; every weapon, every PC's own natural attack, and any spell whose extra attacks are really BAB iteratives does not, and stays a single Strike per action.
 - **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
@@ -186,6 +185,45 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.42.0 — Caught Off-Guard
+
+`v2.41.0` translated pf1's statuses but left Off-Guard reading only Blinded, Stunned and Paralyzed, left
+pf1's Flat-Footed, Cowering and Pinned costing a creature its whole Dex bonus, and left Panicked without its
+Fleeing. This release closes all three.
+
+- **What makes a creature Off-Guard now** — one flat −2 to AC (and CMD, as before), however many reasons
+  hold: the Ledger's Blinded, a running Stunned countdown, Ledger Paralyzed; any active pf1 status that
+  denies Dex to AC — Flat-Footed, Cowering, Pinned and the seven Dex-0 statuses (Dying, Helpless,
+  Paralyzed, Petrified, Sleep, Stable, Unconscious); the GM's force-on toggle; and **not yet having acted in
+  an encounter**. Grappled, Entangled, Fatigued and flanking are not sources. Clumsy stacks with it.
+- **The first turn.** In a combat started after this update, everyone is Off-Guard until their own turn
+  starts — silently, with no chat line. A combatant who joins mid-encounter is Off-Guard until its own turn;
+  a creature that Delays has already started its turn, so Delay does not extend it. The mark ends with the
+  combat. A combat started before the update has no marks and gives no initiative Off-Guard.
+- **Uncanny Dodge.** It is pf1's item boolean flag `uncannyDodge` (item sheet → Advanced → Boolean Flags),
+  and it blocks **only** the first-turn source: a Blinded or flat-footed Uncanny Dodge creature is still
+  Off-Guard. Improved Uncanny Dodge never carries the flag. At load the GM is whispered a list of actors
+  whose *Uncanny Dodge* item lacks the flag; the module never sets it. **An NPC whose Uncanny Dodge exists
+  only in its stat-block text needs the flag added by hand** (or Off-Guard forced off).
+- **Numbers that change.** Flat-Footed and Cowering now also cost 2 CMD (pf1 charged them none). Pinned is
+  −4 AC, −4 CMD and Off-Guard, and keeps its Reflex and initiative (pf1's Dex cap on it is gone). A
+  high-Dex creature loses a flat −2 instead of its whole Dex bonus. Every Dex-0 status keeps what pf1 does
+  to it and adds Off-Guard on top. The Ledger's Blinded is unchanged.
+- **Fleeing.** A new tiered condition, 1–10 (a tracker limit; a longer fear source is extended by hand from
+  the panel), that counts down by 1 at the end of the creature's turn together with Frightened. A translated
+  Panicked now applies Frightened 3 **and** Fleeing 3 (the card offers both: *"Apply Frightened 3 and
+  Fleeing 3?"*); when the Panicked comes from an active pf1 buff with a duration, Fleeing takes that duration
+  in rounds. Fleeing is not released when Panicked goes — it counts itself down. The *"Fleeing is not
+  automated yet"* text is gone.
+- **Pf1 registry.** The pass records which pf1 conditions carry `loseDexToAC` before it clears anything,
+  clears it on Flat-Footed, Cowering and Pinned (and Pinned's Dex cap), and warns the GM — in the console and
+  one whispered line — if the set pf1 ships ever differs from the ten the module expects. It warns; it
+  never acts. The registry canary expects the cleared entries.
+- **Stacking.** Verified, not changed: actions lost remain the largest single loss, never the sum.
+- **API.** `game.baphometConditions` gains `offGuardState(actor)`, `offGuardSources()`,
+  `loseDexDrift(ids)` and `uncannyDodgeAudit()`, and `neutralizeState()` also returns
+  `loseDexRecorded` and `dexCleared`.
 
 ### v2.41.0 — What the Icon Means
 
