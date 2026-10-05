@@ -2,6 +2,26 @@
    ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.9
    Applies PF2e-style conditions as PF1e system Buffs.
 
+   v2.43.0 Changes (GOAL_v2.43.0_CONDITION_CANON — "The Number on the Card"):
+   - [FIX-1] Clumsy, Enfeebled and Stupefied write -X to the rolls canon names (CC:33-35, H:384-397)
+     instead of lowering an ability score. None of the three writes an ability score, an ability
+     check or initiative. Clumsy writes ac / ref / dexSkills / rattack; Enfeebled writes mattack /
+     mwdamage / twdamage / fort / strSkills / carryStr; Stupefied writes will / dc / intSkills /
+     wisSkills / chaSkills. `tattack`, `cmb`, `nattack` and `ndamage` are deliberately NOT written:
+     pf1 already applies the base target to those rolls (SF-3, SF-4, SF-5 — live facts supplied by
+     Michael, read on dev with pf1 11.11), so writing them would lower the roll twice.
+   - [FIX-2] Frightened and Sickened add `allChecks` (ability checks and initiative, once); Sickened's
+     damage change is `wdamage` (weapon damage), not `damage`.
+   - [FIX-3] Fatigued writes no changes; applying it sets pf1's own `fatigued` status (-2 Str / -2 Dex).
+   - [FIX-4] Fascinated is on/off with one change: -4 to `skill.per`.
+   - [FIX-5] The pf1RegisterConditions pass gives pf1's `cowering` and `squeezing` a `cmd` change copied
+     from their own `ac` change (R-1: every AC penalty reaches CMD); `neutralizeState().cmdAdded`.
+   - [FIX-6] Cards say what canon says. Drained and Persistent Dmg leave the catalog.
+   - [FIX-7] `refreshConditionChanges(actors)` and `conditionOrphanAudit(actors)`; both run once at
+     `ready` on the active GM's client.
+   - [FIX-10] Every write of a Ledger buff's changes ends with one more write (`changesAt`), so pf1's
+     second prepare moves CMD for an `ac` change; re-applying a tier rewrites the card.
+
    v2.42.0 Changes (GOAL_v2.42.0_OFF_GUARD_FLEEING — "Caught Off-Guard"):
    - [FIX-1] The neutralize pass records every pf1 registry entry that ships `loseDexToAC` BEFORE it
      clears anything, derives the pf1 Off-Guard source set (recorded minus the frozen six), then
@@ -156,15 +176,15 @@
      removed in v14, so Math.clamp is the correct, forward-compatible call.
 
    TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
-                  Enfeebled, Drained, Stunned, Slowed, Fascinated
-   TOGGLE (on/off): Fatigued, Off-Guard, Persistent Damage,
+                  Enfeebled, Stunned, Slowed, Fleeing
+   TOGGLE (on/off): Fatigued, Fascinated, Off-Guard,
                     Blinded, Deafened, Nauseated, Confused,
                     Paralyzed
    (Staggered is NOT a live tracked condition — SS5 folds it into Slowed 1
    at the point of application; see v2.8 Changes above, MECH-3.)
 
    For Foundry VTT v13 + PF1e System
-   Source: Homebrew_Master_File.md § Simplified Conditions
+   Source: PF1 Three Action Hybrid System.md §9 and Condition_Conversion.md
    ============================================================ */
 
 const MODULE_ID = 'baphomet-utils';
@@ -220,14 +240,17 @@ const CONDITIONS = {
     icon: 'icons/svg/terror.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to attack rolls, saving throws, skill checks, and ability checks. Decreases by 1 at end of your turn.',
+    description: '–X penalty to attack rolls, saving throws, skill checks, and ability checks (initiative included). Decreases by 1 at end of your turn.',
     autoDecrement: true,
     buildChanges(tier) {
       const v = String(-tier);
+      // v2.43.0 FIX-2 (P-4): `allChecks` reaches the six ability-check modifiers and initiative, and
+      // not skills (SF read live 2026-10-05), so it never overlaps `skills`; no separate `init` change.
       return [
         { formula: v, operator: 'add', target: 'attack',         modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'allSavingThrows', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'skills',         modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'allChecks',      modifier: 'penalty', priority: 0 },
       ];
     }
   },
@@ -237,15 +260,18 @@ const CONDITIONS = {
     icon: 'icons/svg/poison.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to attack rolls, weapon damage, saving throws, skill checks, and ability checks. Cannot eat or drink (including potions). Spend 1 action to Retch (Fort save vs. source DC) to reduce by 1.',
+    description: '–X penalty to attack rolls, weapon damage rolls, saving throws, skill checks, and ability checks (initiative included). Does not decrease automatically; a specific action, spell or ability removes or reduces it.',
     autoDecrement: false,
     buildChanges(tier) {
       const v = String(-tier);
+      // v2.43.0 FIX-2 (P-4): `wdamage` (weapon damage) replaces `damage`, which also reached spells;
+      // `allChecks` adds ability checks and initiative once.
       return [
         { formula: v, operator: 'add', target: 'attack',         modifier: 'penalty', priority: 0 },
-        { formula: v, operator: 'add', target: 'damage',         modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'wdamage',        modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'allSavingThrows', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'skills',         modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'allChecks',      modifier: 'penalty', priority: 0 },
       ];
     }
   },
@@ -255,14 +281,18 @@ const CONDITIONS = {
     icon: 'icons/svg/daze.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to INT/WIS/CHA-based rolls, spell DCs, and Will saves. Casting a spell requires a DC (5 + X) flat check or it fails.',
+    description: '–X penalty to spell DCs, Will saves, and Int-, Wis- and Cha-based skill checks. An attack roll that uses a mental ability takes –X from the GM.',
     autoDecrement: false,
     buildChanges(tier) {
       const v = String(-tier);
+      // v2.43.0 FIX-1 (P-3, P-4): -X to the rolls, never an ability score or an ability check. No
+      // PF1 attack roll uses a mental ability by default, so nothing is written for attacks.
       return [
-        { formula: v, operator: 'add', target: 'int', modifier: 'penalty', priority: 0 },
-        { formula: v, operator: 'add', target: 'wis', modifier: 'penalty', priority: 0 },
-        { formula: v, operator: 'add', target: 'cha', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'will',      modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'dc',        modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'intSkills', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'wisSkills', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'chaSkills', modifier: 'penalty', priority: 0 },
       ];
     }
   },
@@ -272,12 +302,19 @@ const CONDITIONS = {
     icon: 'icons/svg/falling.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to DEX-based attack rolls, Reflex saves, DEX-based skill checks, and AC.',
+    description: '–X penalty to AC (and CMD), Reflex saves, ranged and thrown attack rolls, and Dex-based skill checks. A finesse melee attack, and damage that uses Dexterity, take –X from the GM. Stacks with Off-Guard.',
     autoDecrement: false,
     buildChanges(tier) {
       const v = String(-tier);
+      // v2.43.0 FIX-1 (P-1, P-4, R-1): -X to the rolls, never `dex`, a `…Checks` target or initiative.
+      // `ac` reaches CMD (FIX-10 supplies the second prepare), so there is no `cmd` change.
+      // `rattack` alone covers a thrown attack: a thrown roll already adds both `rattack` and `tattack`
+      // (SF-3, live fact supplied by Michael), so `tattack` is NOT written, to avoid lowering it twice.
       return [
-        { formula: v, operator: 'add', target: 'dex', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'ac',        modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'ref',       modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'dexSkills', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'rattack',   modifier: 'penalty', priority: 0 },
       ];
     }
   },
@@ -287,27 +324,22 @@ const CONDITIONS = {
     icon: 'icons/svg/downgrade.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to STR-based attack rolls, damage rolls, Fortitude saves, STR-based skill checks, and carrying capacity.',
+    description: '–X penalty to melee attack rolls, combat maneuver checks, melee and thrown weapon damage, Fortitude saves, and Str-based skill checks; carrying capacity as if Strength were X lower. The –X also reaches a finesse melee attack; whether it should is the GM\'s call. A composite bow\'s Strength damage takes –X from the GM.',
     autoDecrement: false,
     buildChanges(tier) {
       const v = String(-tier);
+      // v2.43.0 FIX-1 (P-2, P-4): -X to the rolls, never `str`, a `…Checks` target or `allChecks`.
+      // `cmb`, `nattack` and `ndamage` are deliberately NOT written (live facts supplied by Michael,
+      // read on dev with pf1 11.11): a real maneuver roll already adds `mattack` (SF-4), and `mattack`
+      // and `mwdamage` already reach a natural attack and its damage (SF-5), so each would be lowered
+      // twice. `mattack` / `mwdamage` / `twdamage` are the base targets that carry canon's -X.
       return [
-        { formula: v, operator: 'add', target: 'str', modifier: 'penalty', priority: 0 },
-      ];
-    }
-  },
-
-  drained: {
-    name: 'Drained',
-    icon: 'icons/svg/blood.svg',
-    maxTier: 4,
-    type: 'tiered',
-    description: '–X penalty to CON-based checks, Fortitude saves, and Max HP reduced by X × character level. Decreases by 1 after a full night\'s rest.',
-    autoDecrement: false,
-    buildChanges(tier) {
-      const v = String(-tier);
-      return [
-        { formula: v, operator: 'add', target: 'con', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'mattack',   modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'mwdamage',  modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'twdamage',  modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'fort',      modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'strSkills', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'carryStr',  modifier: 'penalty', priority: 0 },
       ];
     }
   },
@@ -317,7 +349,7 @@ const CONDITIONS = {
     icon: 'icons/svg/stoned.svg',
     maxTier: 4,
     type: 'tiered',
-    description: 'You lose X actions on your next turn. If Stunned exceeds 3, excess carries over to subsequent turns.',
+    description: 'You lose X actions on your next turn. If Stunned exceeds 3, excess carries over to subsequent turns. While Stunned is above 0 you are also Off-Guard.',
     // v2.34.0: `autoDecrement: true` still marks this as an auto-decrementing condition for
     // the token HUD's "↓" indicator, but `_handleAutoDecrement` skips 'stunned' in its
     // generic per-tier -1 loop — the real decrement is the bespoke, multi-action
@@ -347,15 +379,15 @@ const CONDITIONS = {
   fascinated: {
     name: 'Fascinated',
     icon: 'icons/svg/eye.svg',
-    maxTier: 4,
-    type: 'tiered',
-    description: '–X penalty to Perception and skill checks. Cannot use Concentrate actions except to investigate the source of fascination.',
+    maxTier: 1,
+    type: 'toggle',
+    description: 'PF1 Fascinated: entranced by a supernatural or spell effect — you stand or sit quietly, taking no actions other than paying attention to it. –4 on Perception (applied) and on other skill checks made as reactions (by the GM). A potential threat allows a new saving throw; an obvious threat (a weapon drawn, a spell cast, a ranged weapon aimed at you) breaks it. An ally may shake you free (PF1: a standard action).',
     autoDecrement: false,
-    buildChanges(tier) {
-      const v = String(-tier);
+    buildChanges() {
+      // v2.43.0 FIX-4 (R-2, P-5): on/off, PF1 as written. Exactly one change: -4 to Perception.
+      // Other reactive skill checks are the GM's; no `skills` change.
       return [
-        { formula: v, operator: 'add', target: 'skill.per', modifier: 'penalty', priority: 0 },
-        { formula: v, operator: 'add', target: 'skills',    modifier: 'penalty', priority: 0 },
+        { formula: '-4', operator: 'add', target: 'skill.per', modifier: 'penalty', priority: 0 },
       ];
     }
   },
@@ -382,13 +414,12 @@ const CONDITIONS = {
     icon: 'icons/svg/unconscious.svg',
     maxTier: 1,
     type: 'toggle',
-    description: '–1 penalty to AC and all saving throws. Cannot run or charge. Cannot use Exploration activities during travel.',
+    description: 'PF1 Fatigued: –2 to Strength and Dexterity (pf1\'s own Fatigued status applies them; this condition adds none of its own). Cannot run or charge. Anything that would fatigue you again makes you exhausted. Ends after 8 hours of complete rest.',
     autoDecrement: false,
     buildChanges() {
-      return [
-        { formula: '-1', operator: 'add', target: 'ac',              modifier: 'penalty', priority: 0 },
-        { formula: '-1', operator: 'add', target: 'allSavingThrows', modifier: 'penalty', priority: 0 },
-      ];
+      // v2.43.0 FIX-3 (R-2): pf1's own `fatigued` status carries -2 Str / -2 Dex and is the only
+      // writer; applying this condition sets that status (see `_LEDGER_PF1_STATUS`).
+      return [];
     }
   },
 
@@ -405,24 +436,12 @@ const CONDITIONS = {
     // GM toggle below is now a force-on override feeding that helper, never a direct write.
     // v2.42.0 FIX-2: the description names canon's sources (Blinded, Stunned, Paralyzed, Cowering,
     // Pinned, flat-footed, the Dex-0 conditions, not yet having acted in an encounter).
-    description: '–2 circumstance penalty to AC (and CMD). (Formerly Flat-Footed.) Automatically derived from Blinded, Stunned, Paralyzed, Cowering, Pinned, flat-footed, the Dex-0 conditions (Dying, Helpless, Petrified, Asleep, Stable, Unconscious), and not yet having acted in an encounter (Uncanny Dodge excepted); also granted by surprise. The GM toggle force-applies Off-Guard as an override — it no longer writes the buff directly.',
+    description: '–2 penalty to AC (and CMD). You are a valid target for precision damage (sneak attack and similar). (Formerly Flat-Footed.) Automatically derived from Blinded, Stunned, Paralyzed, Cowering, Pinned, flat-footed, the Dex-0 conditions (Dying, Helpless, Petrified, Asleep, Stable, Unconscious), and not yet having acted in an encounter (Uncanny Dodge excepted); also granted by surprise. The GM toggle force-applies Off-Guard as an override — it no longer writes the buff directly.',
     autoDecrement: false,
     buildChanges() {
       return [
         { formula: '-2', operator: 'add', target: 'ac', modifier: 'untyped', priority: 0 },
       ];
-    }
-  },
-
-  persistentDamage: {
-    name: 'Persistent Dmg',
-    icon: 'icons/svg/fire.svg',
-    maxTier: 1,
-    type: 'toggle',
-    description: 'Take damage at end of every turn. DC 15 flat check to end it. Receiving healing grants an immediate extra flat check.',
-    autoDecrement: false,
-    buildChanges() {
-      return [];
     }
   },
 
@@ -472,7 +491,7 @@ const CONDITIONS = {
     // release (see GOAL_v2.37.3_CONDITION_CANON.md "Explicitly out of scope" / follow-up docket).
     // Sentence order is deliberate: the auto-fail clause precedes the '-4' initiative figure so
     // no dead numeric substring reads as a Perception penalty claim.
-    description: 'Cannot hear. Automatically fails hearing-based Perception checks (table-adjudicated, not enforced). pf1\'s own Deaf status applies the –4 penalty to initiative (this buff adds none of its own). 20% arcane spell failure on spells with verbal components.',
+    description: 'Cannot hear. Automatically fails hearing-based Perception checks (table-adjudicated, not enforced). pf1\'s own Deaf status applies the –4 penalty to initiative (this buff adds none of its own). 20% spell failure chance on spells with verbal components (every caster).',
     autoDecrement: false,
     buildChanges() {
       // v2.41.0 FIX-4 (D-2, P-5): the module's `-4 init` is RETIRED — pf1's own `deaf` status
@@ -495,7 +514,7 @@ const CONDITIONS = {
     icon: 'icons/svg/acid.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'Can only take a single move action each turn. Cannot attack, cast spells, or concentrate. Cannot eat or drink (including potions).',
+    description: 'You lose 1 action at the start of your turn (2 actions remain, as Slowed 1). None of your remaining actions may be used to attack or to cast a spell; you may move, reposition, withdraw, drink a potion, or take other non-offensive actions.',
     autoDecrement: false,
     buildChanges() {
       return [
@@ -900,9 +919,12 @@ Hooks.on('updateCombatant', (combatant, changes) => {
    Removing the Ledger condition clears pf1's status ONLY when that flag is present, so a status
    a spell, a buff or the GM set independently survives the Ledger toggle's removal (Michael's
    refinement, 2026-10-01).
+
+   v2.43.0 FIX-3 (R-2): Ledger `fatigued` joins them. It writes no changes of its own; pf1's own
+   `fatigued` status (-2 Str / -2 Dex) is the only writer and follows the same set/clear rule.
    ---------------------------------------------------------- */
 
-const _LEDGER_PF1_STATUS = Object.freeze({ paralyzed: 'paralyzed', deafened: 'deaf' });
+const _LEDGER_PF1_STATUS = Object.freeze({ paralyzed: 'paralyzed', deafened: 'deaf', fatigued: 'fatigued' });
 
 async function _ledgerSetsPf1Status(actor, condKey) {
   const status = _LEDGER_PF1_STATUS[condKey];
@@ -916,6 +938,30 @@ async function _ledgerSetsPf1Status(actor, condKey) {
 function _pf1StatusToClear(buff, condKey) {
   const status = _LEDGER_PF1_STATUS[condKey];
   return status && buff?.getFlag(MODULE_ID, 'setPf1Status') === true ? status : null;
+}
+
+/* ----------------------------------------------------------
+   v2.43.0 — THE CARD, THE SIGNATURE AND THE SECOND WRITE (FIX-7, FIX-10)
+
+   `_conditionCardHtml` is the card text `applyCondition`'s create branch writes (the same
+   expression); the `existing` branch and the load rebuild use it so a re-apply or a rebuild
+   writes exactly what a fresh buff would carry.
+
+   `_stampChangesAt` (FIX-10, B-1): pf1 moves CMD for a negative `ac` change only on the SECOND
+   prepare after it is written. After every write of a Ledger buff's changes, one more update that
+   really changes data (`flags.baphomet-utils.changesAt`; Foundry skips an update with no diff)
+   makes that second prepare happen. Strictly increasing so two stamps in one millisecond still diff.
+   ---------------------------------------------------------- */
+
+function _conditionCardHtml(cond, tier) {
+  return cond.type === 'tiered'
+    ? `<p><strong>${cond.name} ${tier}:</strong> ${cond.description.replace(/–X/g, `–${tier}`).replace(/\bX\b/g, String(tier))}</p>`
+    : `<p><strong>${cond.name}:</strong> ${cond.description}</p>`;
+}
+
+async function _stampChangesAt(buff) {
+  const previous = Number(buff.getFlag(MODULE_ID, 'changesAt')) || 0;
+  await buff.setFlag(MODULE_ID, 'changesAt', Math.max(Date.now(), previous + 1));
 }
 
 async function applyCondition(actor, condKey, tier) {
@@ -943,6 +989,8 @@ async function applyCondition(actor, condKey, tier) {
     const changes = cond.buildChanges(tier);
     await existing.update({
       name: _buffName(condKey, tier),
+      // v2.43.0 FIX-10 (A-1): the card is rewritten for the new tier, as the create branch writes it.
+      'system.description.value': _conditionCardHtml(cond, tier),
       'system.changes': [],
       [`flags.${MODULE_ID}.tier`]: tier,
     });
@@ -952,6 +1000,7 @@ async function applyCondition(actor, condKey, tier) {
     if (!existing.system.active) {
       await existing.setActive(true);
     }
+    await _stampChangesAt(existing); // v2.43.0 FIX-10 (B-1): the last write to the buff
   } else {
     const changes = cond.buildChanges(tier);
 
@@ -981,6 +1030,7 @@ async function applyCondition(actor, condKey, tier) {
       await pf1.components.ItemChange.create(changes, { parent: created });
     }
     await created.setActive(true);
+    await _stampChangesAt(created); // v2.43.0 FIX-10 (B-1): the last write to the buff
   }
 
   // v2.41.0 FIX-4 (P-5): paralyzed / deafened also set pf1's own status (no-op for any other key).
@@ -1283,9 +1333,17 @@ const _BAPH_DEX_CLEARED_IDS = Object.freeze(['cowering', 'flatFooted', 'pinned']
 // Pinned's Dex cap (`_baphChangeSig` form), removed by the pass (R-5). Its ac:-4 and cmd:-4 stay.
 const _BAPH_PINNED_DEXMOD_SIG = 'dexMod:min(0, @abilities.dex.mod):untyped:set:1001';
 
+// v2.43.0 FIX-5 (R-1, GOAL_v2.43.0_CONDITION_CANON): every AC penalty reaches CMD. This extends the
+// frozen neutralize pass (R1 above, Michael 2026-08-29, which CLAUDE.md allows only through a GOAL):
+// pf1's kept `cowering` (ac -2) and `squeezing` (ac -4) gain a `cmd` change copied from their own
+// `ac` change, unless the entry already carries one. Nothing else on either entry changes and no
+// other entry is touched. pf1's registry condition changes never reach CMD through `ac` themselves.
+const _BAPH_CMD_FROM_AC_IDS = Object.freeze(['cowering', 'squeezing']);
+
 // Kept entries with changes: exact expected set, `target:formula:type:operator:priority`.
+// v2.43.0 FIX-5 (R-1): `cowering` and `squeezing` each also expect their copied `cmd` change.
 const _BAPH_KEPT_CHANGES = Object.freeze({
-  cowering: ['ac:-2:untyped:add:0'],
+  cowering: ['ac:-2:untyped:add:0', 'cmd:-2:untyped:add:0'],
   dazzled: ['attack:-1:untyped:add:0'],
   deaf: ['init:-4:untyped:add:0'],
   dying: ['dex:0:untypedPerm:set:1001'],
@@ -1300,7 +1358,7 @@ const _BAPH_KEPT_CHANGES = Object.freeze({
   pinned: ['ac:-4:untyped:add:0', 'cmd:-4:untyped:add:0'],
   prone: ['mattack:-4:untyped:add:0'],
   sleep: ['dex:0:untypedPerm:set:1001'],
-  squeezing: ['ac:-4:untyped:add:0', 'attack:-4:untyped:add:0'],
+  squeezing: ['ac:-4:untyped:add:0', 'attack:-4:untyped:add:0', 'cmd:-4:untyped:add:0'],
   stable: ['dex:0:untypedPerm:set:1001'],
   unconscious: ['dex:0:untypedPerm:set:1001'],
 });
@@ -1377,7 +1435,33 @@ Hooks.once('pf1RegisterConditions', registry => {
   }
   dexCleared.sort();
 
-  _baphNeutralizeState = { ranAt: Date.now(), ids, beforeDocuments, loseDexRecorded, loseDexSources, dexCleared };
+  // v2.43.0 FIX-5 (R-1): after the tier-1 loop — copy the entry's own `ac` change as a `cmd` change on
+  // cowering and squeezing (same formula, type, operator and priority), unless a `cmd` change is already
+  // there. A copy that carries a document `_id` gets a fresh one so the two changes never share it.
+  const cmdAdded = [];
+  for (const id of _BAPH_CMD_FROM_AC_IDS) {
+    try {
+      const entry = registry?.get?.(id);
+      if (!entry) continue;
+      const changes = Array.from(entry.toObject().mechanics?.changes ?? []);
+      if (changes.some(c => c?.target === 'cmd')) continue;
+      const ac = changes.find(c => c?.target === 'ac');
+      if (!ac) continue;
+      const copy = { ...ac, target: 'cmd' };
+      if (typeof copy._id === 'string') {
+        // `foundry.utils.randomID()`: used in docs/reference/socket-authority/socketlib-v1.1.4-source.js:165.
+        if (typeof foundry.utils?.randomID === 'function') copy._id = foundry.utils.randomID();
+        else delete copy._id;
+      }
+      entry.updateSource({ 'mechanics.changes': [...changes, copy] });
+      cmdAdded.push(id);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Condition neutralize pass failed to add a cmd change on '${id}'`, err);
+    }
+  }
+  cmdAdded.sort();
+
+  _baphNeutralizeState = { ranAt: Date.now(), ids, beforeDocuments, loseDexRecorded, loseDexSources, dexCleared, cmdAdded };
 
   // v2.42.0 FIX-1 (P-h): drift guard — warn on every client, never act.
   const drift = _baphLoseDexCompare(loseDexSources);
@@ -1518,6 +1602,151 @@ function _baphConditionRegistryCanary() {
 }
 
 /* ----------------------------------------------------------
+   THE LOAD REBUILD AND THE ORPHAN AUDIT — v2.43.0 (GOAL_v2.43.0, FIX-7; P-6, P-7)
+
+   A Ledger buff stores its changes, name and card text when it is created, so a condition already on
+   an actor keeps yesterday's numbers until it is rewritten. `refreshConditionChanges(actors)` rewrites
+   every buff whose stored changes (as sorted `target:formula:type:operator:priority`), name,
+   `system.description.value` or `conditionType` differ from what the create branch of `applyCondition`
+   would write now, with the tier clamped to 1...maxTier. It never creates or deletes a buff, never
+   changes `system.active`, touches no other flag, posts no chat, and is idempotent. Off-Guard compares
+   and writes its description only (`_syncOffGuard` owns its changes). A buff whose `conditionKey` is no
+   longer in the catalog (an orphan: Drained, Persistent Dmg) is only LISTED — never written.
+   `conditionOrphanAudit(actors)` whispers the GMs one flagged line naming them and sets nothing.
+   Both are GM-only (a non-GM gets `null`) and both run once at `ready` on the active GM's client.
+   ---------------------------------------------------------- */
+
+function _condChangeSig(change) {
+  return [change?.target, change?.formula, change?.type ?? change?.modifier, change?.operator, change?.priority].join(':');
+}
+
+// Every Ledger-keyed buff on an actor. Foundry collections lack several array methods, so the item
+// collection is read through `.contents`.
+function _conditionBuffsOf(actor) {
+  return Array.from(actor?.items?.contents ?? []).filter(i => i.type === 'buff' && i.getFlag(MODULE_ID, 'conditionKey'));
+}
+
+function _conditionOrphansOf(actors) {
+  const orphans = [];
+  for (const actor of actors) {
+    for (const buff of _conditionBuffsOf(actor)) {
+      const key = buff.getFlag(MODULE_ID, 'conditionKey');
+      if (Object.hasOwn(CONDITIONS, key)) continue;
+      orphans.push({ actorId: actor.id, actorName: actor.name, itemId: buff.id, itemName: buff.name, key: String(key) });
+    }
+  }
+  return orphans;
+}
+
+// The given actors, each once (by uuid), in order.
+function _conditionActorList(actors) {
+  const seen = new Set();
+  const list = [];
+  for (const actor of Array.from(actors ?? [])) {
+    if (!actor || actor.pack || seen.has(actor.uuid)) continue;
+    seen.add(actor.uuid);
+    list.push(actor);
+  }
+  return list;
+}
+
+async function _refreshConditionChanges(actors) {
+  if (!game.user?.isGM) return null;
+  const list = _conditionActorList(actors);
+  let checked = 0;
+  const updated = [];
+
+  for (const actor of list) {
+    for (const buff of _conditionBuffsOf(actor)) {
+      const key = buff.getFlag(MODULE_ID, 'conditionKey');
+      if (!Object.hasOwn(CONDITIONS, key)) continue;
+      checked += 1;
+      const cond = CONDITIONS[key];
+      try {
+        if (key === 'offGuard') {
+          const card = _conditionCardHtml(cond, 1);
+          if ((buff.system?.description?.value ?? '') !== card) {
+            await buff.update({ 'system.description.value': card });
+            updated.push({ actorId: actor.id, itemId: buff.id, key });
+          }
+          continue;
+        }
+
+        const storedTier = Number(buff.getFlag(MODULE_ID, 'tier'));
+        const tier = Math.clamp(Number.isFinite(storedTier) ? storedTier : 1, 1, cond.maxTier);
+        const changes = cond.buildChanges(tier);
+        const name = _buffName(key, tier);
+        const card = _conditionCardHtml(cond, tier);
+        const same =
+          Array.from(buff.system?.changes ?? []).map(_condChangeSig).sort().join('|')
+            === changes.map(_condChangeSig).sort().join('|')
+          && buff.name === name
+          && (buff.system?.description?.value ?? '') === card
+          && buff.getFlag(MODULE_ID, 'conditionType') === cond.type;
+        if (same) continue;
+
+        await buff.update({
+          name,
+          'system.description.value': card,
+          'system.changes': [],
+          [`flags.${MODULE_ID}.tier`]: tier,
+          [`flags.${MODULE_ID}.conditionType`]: cond.type,
+        });
+        if (changes.length > 0) {
+          await pf1.components.ItemChange.create(changes, { parent: buff });
+        }
+        await _stampChangesAt(buff); // FIX-10 (B-1): the last write to the buff
+        if (key === 'fatigued' && buff.system?.active === true) await _ledgerSetsPf1Status(actor, key);
+        updated.push({ actorId: actor.id, itemId: buff.id, key });
+      } catch (err) {
+        console.error(`${MODULE_ID} | Condition rebuild failed for '${key}' on ${actor.name}`, err);
+      }
+    }
+  }
+
+  updated.sort((a, b) => a.key.localeCompare(b.key) || String(a.actorId).localeCompare(String(b.actorId)));
+  return { checked, updated, orphans: _conditionOrphansOf(list) };
+}
+
+async function _conditionOrphanAudit(actors) {
+  if (!game.user?.isGM) return null;
+  const orphans = _conditionOrphansOf(_conditionActorList(actors));
+  let messageId = null;
+  if (orphans.length) {
+    const esc = foundry.utils.escapeHTML;
+    messageId = await _baphGmWhisper(
+      `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;">`
+      + `These buffs are no longer Ledger conditions, but they still apply their changes, so remove them by hand: `
+      + `${orphans.map(o => `${esc(o.actorName)} — ${esc(o.itemName)}`).join('; ')}. `
+      + `Nothing was changed.</div>`,
+      'conditionOrphans'
+    );
+  }
+  return { orphans, messageId };
+}
+
+// Every world actor and the synthetic actor of every unlinked token on every scene.
+function _conditionSweepActors() {
+  const actors = Array.from(game.actors?.contents ?? []);
+  for (const scene of Array.from(game.scenes?.contents ?? [])) {
+    for (const token of Array.from(scene.tokens?.contents ?? [])) {
+      try {
+        if (token.actor?.isToken) actors.push(token.actor);
+      } catch (err) { /* token without a usable actor */ }
+    }
+  }
+  return actors;
+}
+
+// Once per load, on the active GM's client: rebuild, then list orphans (one whisper at most).
+async function _conditionLoadSweep() {
+  const actors = _conditionSweepActors();
+  const refreshed = await _refreshConditionChanges(actors);
+  const audit = await _conditionOrphanAudit(actors);
+  console.info(`${MODULE_ID} | Condition load sweep: ${refreshed?.checked ?? 0} buffs checked, ${refreshed?.updated?.length ?? 0} rebuilt, ${audit?.orphans?.length ?? 0} orphans listed.`);
+}
+
+/* ----------------------------------------------------------
    HOOKS
    ---------------------------------------------------------- */
 
@@ -1561,6 +1790,8 @@ Hooks.once('ready', () => {
         // cleared it from.
         loseDexRecorded: [..._baphNeutralizeState.loseDexRecorded],
         dexCleared: [..._baphNeutralizeState.dexCleared],
+        // v2.43.0 FIX-5: the sorted ids that gained a `cmd` change copied from their `ac` change.
+        cmdAdded: [..._baphNeutralizeState.cmdAdded],
       };
     },
     // v2.42.0 FIX-1 — the recorded set, the pf1 Off-Guard source set (recorded minus the frozen
@@ -1587,6 +1818,13 @@ Hooks.once('ready', () => {
     uncannyDodgeAudit() {
       return _baphUncannyDodgeAudit();
     },
+    // v2.43.0 FIX-7 — GM-only (a non-GM gets null). `{ checked, updated, orphans }` and `{ orphans, messageId }`.
+    refreshConditionChanges(actors) {
+      return _refreshConditionChanges(actors);
+    },
+    conditionOrphanAudit(actors) {
+      return _conditionOrphanAudit(actors);
+    },
     // v2.41.0 — condition translator (TD-38 part 2). Defined at the end of this file.
     translationTable() {
       return _translationTableCopy();
@@ -1611,6 +1849,8 @@ Hooks.once('ready', () => {
   _baphLoseDexReport(drift, { consoleWarn: !_baphNeutralizeState, activeOnly: true });
   if (_isActiveGMClient()) {
     _baphUncannyDodgeAudit().catch(err => console.error(`${MODULE_ID} | Uncanny Dodge audit failed`, err));
+    // v2.43.0 FIX-7 (P-6, P-7): rebuild old-shape buffs once, then list any orphans — after the API object exists.
+    _conditionLoadSweep().catch(err => console.error(`${MODULE_ID} | Condition load sweep failed`, err));
   }
 
   console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.9 ready.`);

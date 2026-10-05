@@ -3,18 +3,17 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.42.0 — *Caught Off-Guard*
+**Current Version:** 2.43.0 — *The Number on the Card*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**A creature is now Off-Guard — a flat −2 to AC and CMD — for every reason canon names: Blinded, Stunned,
-Paralyzed, pf1's Flat-Footed, Cowering and Pinned, the Dex-0 conditions (Dying, Helpless, Petrified, Asleep,
-Stable, Unconscious), and, in a combat started after this update, not yet having taken its first turn.** A
-creature whose Uncanny Dodge item carries the flag is spared the last of these. Panicked now brings
-**Fleeing** with its Frightened 3, and the two count down together. See the [changelog](#changelog) for the
-full entry.
+**Clumsy, Enfeebled and Stupefied now cost the full −X on the rolls canon names — Clumsy 2 is −2 to AC and CMD,
+not −1 — instead of lowering an ability score, and Fatigued and Fascinated are PF1's own, not PF2's.** Every
+AC penalty now reaches CMD (pf1's Cowering and Squeezing too), Frightened and Sickened reach ability checks and
+initiative, and several cards no longer promise rules canon does not have. Conditions already on an actor are
+brought up to date when the GM first loads this version. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -69,7 +68,7 @@ version-history / SYNC_STAMP notes if you suspect drift.
 ## Features
 
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
-- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. When one of the nine pf1 statuses (Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled, Nauseated) appears on an actor, the GM is asked on a whispered card to apply its Ledger condition, or, with **Auto-Translate PF1 Conditions** on, the module applies it. **Off-Guard** is derived from Blinded, Stunned, Paralyzed, pf1's Flat-Footed, Cowering, Pinned and Dex-0 conditions, and from not yet having acted in a combat (Uncanny Dodge excepted); **Fleeing** is a new tiered condition that a translated Panicked brings with its Frightened 3
+- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. When one of the nine pf1 statuses (Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled, Nauseated) appears on an actor, the GM is asked on a whispered card to apply its Ledger condition, or, with **Auto-Translate PF1 Conditions** on, the module applies it. **Off-Guard** is derived from Blinded, Stunned, Paralyzed, pf1's Flat-Footed, Cowering, Pinned and Dex-0 conditions, and from not yet having acted in a combat (Uncanny Dodge excepted); **Fleeing** is a new tiered condition that a translated Panicked brings with its Frightened 3. **Clumsy, Enfeebled, Stupefied, Fatigued and Fascinated** now follow canon, and every AC penalty reaches CMD
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic. Players click their own pips to spend them; **returning a spent pip is a GM action**, so a mis-click is undone by the GM rather than by the player who made it
 - **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll). In PF1.5 Mode, a multi-projectile spell (or consumable) or an NPC's natural attack keeps its Full Attack button, because canon prices that bundle at a single action; every weapon, every PC's own natural attack, and any spell whose extra attacks are really BAB iteratives does not, and stays a single Strike per action.
 - **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
@@ -185,6 +184,46 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.43.0 — The Number on the Card
+
+Canon says Clumsy 2 is −2 to AC; the module lowered Dexterity by 2, which moved AC by about 1. This release
+brings Clumsy, Enfeebled, Stupefied, Fatigued and Fascinated to canon, makes every AC penalty reach CMD, and
+corrects the cards that told players rules canon does not have.
+
+- **Clumsy X, Enfeebled X, Stupefied X now cost −X on the rolls, not on an ability score.** Ability scores and
+  modifiers are untouched, and none of the three touches ability checks or initiative.
+  - **Clumsy X** — −X to AC (and so CMD), Reflex, Dex-based skills, and ranged and thrown attacks. A finesse
+    melee attack and damage that uses Dexterity take −X from the GM, by hand. It stacks with Off-Guard.
+  - **Enfeebled X** — −X to melee attacks, melee and thrown weapon damage, Fortitude, Str-based skills, and
+    carrying capacity as if Strength were X lower; a combat maneuver, a natural attack and its damage take the
+    melee penalties through pf1's own attack and damage buckets. The −X also reaches a finesse melee attack
+    (the GM's call); a composite bow's Strength damage is the GM's.
+  - **Stupefied X** — −X to spell DCs, Will, and Int-, Wis- and Cha-based skills. An attack roll that uses a
+    mental ability takes −X from the GM. The PF2 *"DC 5 + X flat check to cast"* line is gone.
+- **Fatigued is PF1's.** It writes nothing itself: applying it sets pf1's own Fatigued (−2 Str, −2 Dex), and
+  removing the Ledger's clears that status only if the Ledger set it. The PF2 −1 AC and −1 to all saves are gone.
+- **Fascinated is on or off**, with −4 to Perception (once, not twice). Other reactive checks, such as Sense
+  Motive against a Bluff, are the GM's.
+- **Frightened and Sickened now reach ability checks and initiative**, each by exactly X. **Sickened's damage
+  penalty is weapon damage**, no longer spell damage.
+- **Every AC penalty reaches CMD.** pf1's Cowering (−2) and Squeezing (−4) now lower CMD as well as AC; the
+  Ledger's own buffs already did. Cowering is also Off-Guard; Squeezing is not.
+- **The cards.** Sickened loses *"cannot eat or drink"* and *"Retch"*; Nauseated may drink a potion and loses
+  the PF2 single-move line; Stupefied loses the flat check; Deafened's 20% spell failure is for every caster;
+  Off-Guard is a plain −2 and a valid target for precision damage; Stunned notes it is Off-Guard; Fatigued and
+  Fascinated read as PF1; Clumsy, Enfeebled and Stupefied name what the GM applies by hand.
+- **Drained and Persistent Dmg leave the panel.** Neither is in canon; pf1 has its own Bleed status and ability
+  drain. A buff already on an actor still applies its changes: the first GM load whispers the GMs one line
+  naming each, and the GM removes them by hand. Nothing is deleted for you.
+- **Existing conditions are rebuilt at the first GM load.** Every Clumsy, Enfeebled, Stupefied, Frightened,
+  Sickened, Fatigued, Fascinated and other Ledger buff already on a world actor or an unlinked token is
+  rewritten once to today's numbers, name and card, silently. An up-to-date buff is left alone; a Fascinated
+  above 1 becomes the plain toggle; Fatigued also sets pf1's status.
+- **A re-apply rewrites the card** for the new tier, and every write of a condition's changes ends with one
+  more small write so pf1 carries an AC penalty into CMD at once.
+- **API.** `game.baphometConditions` gains `refreshConditionChanges(actors)` and `conditionOrphanAudit(actors)`
+  (GM only), and `neutralizeState()` also returns `cmdAdded`.
 
 ### v2.42.0 — Caught Off-Guard
 
