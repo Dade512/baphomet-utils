@@ -2,6 +2,21 @@
    ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.9
    Applies PF2e-style conditions as PF1e system Buffs.
 
+   v2.42.0 Changes (GOAL_v2.42.0_OFF_GUARD_FLEEING — "Caught Off-Guard"):
+   - [FIX-1] The neutralize pass records every pf1 registry entry that ships `loseDexToAC` BEFORE it
+     clears anything, derives the pf1 Off-Guard source set (recorded minus the frozen six), then
+     clears `loseDexToAC` on `flatFooted`, `cowering` and `pinned` (and Pinned's `dexMod` cap) so
+     Off-Guard replaces it. A source set that differs from the pinned ten is warned about, never
+     acted on. The canary expects the cleared tier-1 entries.
+   - [FIX-2] Off-Guard is derived from Blinded, a running Stunned countdown, Ledger Paralyzed, any
+     active pf1 status in the source set, the initiative source, and the GM's force-on flag.
+     `_syncOffGuard` is still the sole writer. Every translator check ends with it.
+   - [FIX-3] The initiative source: a creature is Off-Guard until its first turn STARTS in a started
+     combat the module flagged at `combatStart` (Uncanny Dodge blocks this source only).
+   - [FIX-4] `uncannyDodgeAudit()` whispers the GM the actors whose Uncanny Dodge lacks the flag.
+   - [FIX-5] `fleeing` joins the catalog; a translated Panicked also writes Fleeing.
+   - API: `offGuardState()`, `offGuardSources()`, `loseDexDrift()`, `uncannyDodgeAudit()`.
+
    v2.41.0 Changes (GOAL_v2.41.0_CONDITION_TRANSLATOR — "What the Icon Means"):
    - [FIX-2/FIX-3] Condition translator (end of file): when one of nine pf1 statuses appears on an
      actor, the active GM's client applies the matching Ledger condition (setting
@@ -345,6 +360,21 @@ const CONDITIONS = {
     }
   },
 
+  // v2.42.0 FIX-5 (R-2, P-f): behavioural, no numeric changes. `maxTier: 10` is a tracker limit, not
+  // a rule (P-f): a fear source longer than 10 rounds is extended by hand from the panel. It counts
+  // down with Frightened in `_handleAutoDecrement`, unchanged. Description from canon § Fleeing.
+  fleeing: {
+    name: 'Fleeing',
+    icon: 'icons/svg/door-exit.svg',
+    maxTier: 10,
+    type: 'tiered',
+    description: 'On your turn you must spend your actions moving away from the source of your fear by the most direct safe route. You cannot willingly move toward it or take offensive actions against it (you may defend yourself if cornered). You provoke attacks of opportunity normally — Fleeing is not the Withdraw action. Decreases by 1 at end of your turn.',
+    autoDecrement: true,
+    buildChanges(_tier) {
+      return [];
+    }
+  },
+
   // ======== TOGGLE CONDITIONS (on/off, no tiers) ========
 
   fatigued: {
@@ -373,7 +403,9 @@ const CONDITIONS = {
     // 'Surprise' stays — canon (master :658). Reworded: v2.37.3 FIX-5 makes this buff fully
     // derived (Blinded / Stunned-countdown>0 / Paralyzed) via _syncOffGuard, the sole writer; the
     // GM toggle below is now a force-on override feeding that helper, never a direct write.
-    description: '–2 circumstance penalty to AC. (Formerly Flat-Footed.) Automatically derived from Blinded, Stunned, or Paralyzed; also granted by surprise or other conditions. The GM toggle force-applies Off-Guard as an override — it no longer writes the buff directly.',
+    // v2.42.0 FIX-2: the description names canon's sources (Blinded, Stunned, Paralyzed, Cowering,
+    // Pinned, flat-footed, the Dex-0 conditions, not yet having acted in an encounter).
+    description: '–2 circumstance penalty to AC (and CMD). (Formerly Flat-Footed.) Automatically derived from Blinded, Stunned, Paralyzed, Cowering, Pinned, flat-footed, the Dex-0 conditions (Dying, Helpless, Petrified, Asleep, Stable, Unconscious), and not yet having acted in an encounter (Uncanny Dodge excepted); also granted by surprise. The GM toggle force-applies Off-Guard as an override — it no longer writes the buff directly.',
     autoDecrement: false,
     buildChanges() {
       return [
@@ -557,19 +589,98 @@ function _findExistingBuff(actor, condKey) {
    goal's case 7 exists to guard against.
    ---------------------------------------------------------- */
 
-function _offGuardDerived(actor) {
-  return !!_findExistingBuff(actor, 'blinded')
-    || (Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0) > 0
-    || !!_findExistingBuff(actor, 'paralyzed');
+/* ----------------------------------------------------------
+   OFF-GUARD SOURCES — v2.42.0 (GOAL_v2.42.0, FIX-2/FIX-3; R-1, R-3, R-4, R-7)
+
+   `_offGuardDerived(actor)` returns the sorted source tokens that hold (the force-on flag is
+   added by `_offGuardSources`):
+
+     ledger:blinded     the Ledger Blinded buff exists
+     ledger:stunned     stunnedCountdown > 0
+     ledger:paralyzed   the Ledger Paralyzed buff exists
+     pf1:<id>           actor.statuses holds an id in the pf1 source set recorded by the neutralize
+                        pass (see `_baphNeutralizeState.loseDexSources`)
+     initiative         FIX-3 — a combatant whose turn has not started in a started, flagged combat;
+                        the ONLY source Uncanny Dodge blocks
+     forced             offGuardForced (the GM's force-on flag)
+
+   Grappled, Entangled, Fatigued and flanking are not sources (R-7): they carry no `loseDexToAC`.
+   Uncanny Dodge is pf1's item boolean flag, read as `actor.itemFlags.boolean.uncannyDodge` (R-1).
+   A combatant belongs to an actor only when `combatant.actor?.uuid === actor.uuid` — never by
+   actorId or `combat.getCombatantsByActor`, which also returns an actor's unlinked tokens.
+   ---------------------------------------------------------- */
+
+const _OFFGUARD_PF1_LABELS = Object.freeze({
+  cowering: 'Cowering', dying: 'Dying', flatFooted: 'Flat-Footed', helpless: 'Helpless',
+  paralyzed: 'Paralyzed', petrified: 'Petrified', pinned: 'Pinned', sleep: 'Asleep',
+  stable: 'Stable', unconscious: 'Unconscious',
+});
+
+function _offGuardPf1SourceIds() {
+  return _baphNeutralizeState?.loseDexSources ?? [];
 }
 
-function _offGuardSourceLabel(actor) {
+function _offGuardHasUncannyDodge(actor) {
+  return !!actor?.itemFlags?.boolean?.uncannyDodge;
+}
+
+// FIX-3: the initiative source. Holds for an actor that is a combatant (matched by uuid) in a started
+// combat the module flagged at its start (P-k, P-g) whose combatant lacks the turn-start mark.
+function _offGuardInitiativeHolds(actor) {
+  if (!actor || _offGuardHasUncannyDodge(actor)) return false;
+  const uuid = actor.uuid;
+  for (const combat of Array.from(game.combats ?? [])) {
+    if (combat?.started !== true) continue;
+    if (combat.getFlag(MODULE_ID, 'offGuardInitiative') !== true) continue;
+    for (const combatant of Array.from(combat.combatants ?? [])) {
+      if (combatant.actor?.uuid !== uuid) continue;
+      if (combatant.getFlag(MODULE_ID, 'offGuardTurnStarted') !== true) return true;
+    }
+  }
+  return false;
+}
+
+function _offGuardDerived(actor) {
   const sources = [];
-  if (_findExistingBuff(actor, 'blinded')) sources.push('Blinded');
-  if ((Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0) > 0) sources.push('Stunned');
-  if (_findExistingBuff(actor, 'paralyzed')) sources.push('Paralyzed');
-  if (actor.getFlag(MODULE_ID, 'offGuardForced') === true) sources.push('manual override');
-  return sources.length ? sources.join(' + ') : 'unknown';
+  if (_findExistingBuff(actor, 'blinded')) sources.push('ledger:blinded');
+  if ((Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0) > 0) sources.push('ledger:stunned');
+  if (_findExistingBuff(actor, 'paralyzed')) sources.push('ledger:paralyzed');
+  for (const id of _offGuardPf1SourceIds()) {
+    if (actor.statuses?.has(id)) sources.push(`pf1:${id}`);
+  }
+  if (_offGuardInitiativeHolds(actor)) sources.push('initiative');
+  return sources.sort();
+}
+
+// Derived sources plus the GM's force-on flag, sorted.
+function _offGuardSources(actor) {
+  const sources = _offGuardDerived(actor);
+  if (actor.getFlag(MODULE_ID, 'offGuardForced') === true) sources.push('forced');
+  return sources.sort();
+}
+
+function _offGuardTokenLabel(token) {
+  switch (token) {
+    case 'ledger:blinded': return 'Blinded';
+    case 'ledger:stunned': return 'Stunned';
+    case 'ledger:paralyzed': return 'Paralyzed';
+    case 'initiative': return 'not yet acted';
+    case 'forced': return 'manual override';
+    default: {
+      const id = String(token).startsWith('pf1:') ? String(token).slice(4) : String(token);
+      return _OFFGUARD_PF1_LABELS[id] ?? id;
+    }
+  }
+}
+
+function _offGuardSourceLabel(actor, sources) {
+  const labels = [...new Set((sources ?? _offGuardSources(actor)).map(_offGuardTokenLabel))];
+  return labels.length ? labels.join(' + ') : 'unknown';
+}
+
+// P-j: a transition whose only source, before or after, is the initiative source posts no chat line.
+function _offGuardInitiativeOnly(sources) {
+  return Array.isArray(sources) && sources.length === 1 && sources[0] === 'initiative';
 }
 
 // Named as a distinct function from `_postConditionChat`: a derived Off-Guard transition is not
@@ -595,15 +706,36 @@ function _postOffGuardSyncChat(actor, created, sourceLabel) {
   });
 }
 
+// v2.42.0 FIX-2: syncs now arrive from the translator's checks as well as from `applyCondition`,
+// `removeCondition` and the countdown, so two can overlap for one actor; each reads `have` before it
+// writes. They are serialised per actor so the second always reads what the first wrote.
+const _offGuardSyncChain = new Map();
+
 async function _syncOffGuard(actor) {
   if (!actor) return;
   if (!_isActiveGMClient()) return;
 
+  const uuid = actor.uuid;
+  const run = (_offGuardSyncChain.get(uuid) ?? Promise.resolve())
+    .catch(() => {})
+    .then(() => _syncOffGuardNow(actor));
+  _offGuardSyncChain.set(uuid, run);
+  try {
+    await run;
+  } finally {
+    if (_offGuardSyncChain.get(uuid) === run) _offGuardSyncChain.delete(uuid);
+  }
+}
+
+async function _syncOffGuardNow(actor) {
   const cond = CONDITIONS.offGuard;
-  const derived = _offGuardDerived(actor);
-  const forced = actor.getFlag(MODULE_ID, 'offGuardForced') === true;
-  const want = derived || forced;
+  const sources = _offGuardSources(actor);
+  const want = sources.length > 0;
   const have = _findExistingBuff(actor, 'offGuard');
+  // v2.42.0 P-j: the Off-Guard buff's own `offGuardSources` flag is the authoritative record of the
+  // sources that last held, so a reload or a change of active GM reads the same truth. It is written
+  // at creation and rewritten below whenever the sorted sources change while the buff stays.
+  const before = have?.getFlag(MODULE_ID, 'offGuardSources') ?? null;
 
   if (want && !have) {
     const changes = cond.buildChanges();
@@ -623,6 +755,7 @@ async function _syncOffGuard(actor) {
           tier: 1,
           autoDecrement: cond.autoDecrement,
           conditionType: cond.type,
+          offGuardSources: sources,
         }
       }
     }]);
@@ -632,13 +765,128 @@ async function _syncOffGuard(actor) {
     }
     await created.setActive(true);
 
-    _postOffGuardSyncChat(actor, true, _offGuardSourceLabel(actor));
+    if (!_offGuardInitiativeOnly(sources)) {
+      _postOffGuardSyncChat(actor, true, _offGuardSourceLabel(actor, sources));
+    }
   } else if (!want && have) {
     await have.delete();
-    _postOffGuardSyncChat(actor, false, null);
+    if (!_offGuardInitiativeOnly(before)) {
+      _postOffGuardSyncChat(actor, false, null);
+    }
+  } else if (want && have) {
+    // Buff stays: record the sources only when they differ from the record. No chat, no other write;
+    // a repeat call with unchanged sources is a complete no-op.
+    const recorded = Array.isArray(before) ? Array.from(before).sort() : null;
+    if (!recorded || JSON.stringify(recorded) !== JSON.stringify(sources)) {
+      await have.setFlag(MODULE_ID, 'offGuardSources', sources);
+    }
   }
   // otherwise: NO-OP. No rewrite, no re-create, no chat — idempotent by construction.
 }
+
+/* ----------------------------------------------------------
+   THE INITIATIVE SOURCE — v2.42.0 (GOAL_v2.42.0, FIX-3; R-4, P-g, P-k)
+
+   A creature is Off-Guard until its first turn STARTS in an encounter. Two module-owned flags:
+
+     Combat    flags['baphomet-utils'].offGuardInitiative = true  — set by the active GM's client
+               at `combatStart`; only a flagged combat feeds the source, so a combat started before
+               this release (no turn marks) never makes everyone Off-Guard at its first check (P-k).
+     Combatant flags['baphomet-utils'].offGuardTurnStarted = true — set when that combatant's turn
+               starts, in a started, flagged combat. It lives on the combatant, so it ends with the
+               combat, and a Delay (an initiative write) cannot clear it.
+
+   HOW THE TURN START IS DETECTED: by a read of `combat.combatant` in a LATER MACROTASK
+   (`setTimeout(…, 0)`, the translator's scheduling pattern) after `combatStart` and after an
+   `updateCombat` whose changes carry `turn` or `round` — never at hook-fire time (three hook-time
+   reads of the turn are disproven, see the PROACTIVE BREADCRUMB comment below). It does NOT use
+   the render-based `globalThis.baphometActiveCombatant` stamp.
+
+   `combatStart` fires BEFORE `startCombat()` saves { round: 1, turn: 0 } (verified in the served
+   Foundry 13 client), so at `combatStart` the combat may still read `started === false`. Both paths
+   therefore run the SAME handler, which re-reads `combat.started`, the P-k flag and `combat.combatant`
+   at the time it runs and marks only when all three hold; the `combatStart` path awaits the flag
+   first. ORDER: the handler awaits the mark's write and only THEN schedules the translator checks
+   for the combat's combatants — writing the mark triggers no re-check by itself (the Combatant
+   hook below ignores everything but an initiative change), so a check scheduled before the mark
+   landed would leave a stale Off-Guard behind. Checks are scheduled ONLY after the mark is
+   confirmed: a not-yet-started or unflagged combat, a missing combatant, a non-GM client or a
+   failed write schedules nothing.
+
+   Hook references: docs/reference/foundry-v13/99_Combined_Foundry_v13_PF1_[KnowledgeFiles.md] —
+   `combatStart(combat, updateData)` (:2337), `updateCombatant(combatant, changes, options, userId)`
+   (:2767), the document lifecycle pattern create/update/delete<Document> (:2177, :2306); the
+   `updateCombat`, `createCombatant`, `deleteCombatant` and `deleteCombat` hooks are the same ones
+   scripts/action-tracker.js already uses.
+   ---------------------------------------------------------- */
+
+// Schedule a translator check (FIX-2) for every combatant's actor in a combat.
+function _offGuardScheduleCombat(combat) {
+  for (const combatant of Array.from(combat?.combatants ?? [])) {
+    try { _translatorSchedule(combatant.actor); } catch (err) { /* combatant without a usable actor */ }
+  }
+}
+
+// One turn-start pass for a combat: mark (active GM only, all conditions re-read now), then
+// schedule the checks ONLY once the current combatant's mark is confirmed (FIX-3 Ordering). If any
+// condition fails, or the mark's write throws, nothing is scheduled. Safe to run from either path
+// and more than once; a combatant already marked has its mark landed, so scheduling is correct.
+async function _offGuardTurnStartRun(combat) {
+  try {
+    if (!_isActiveGMClient()) return;
+    if (combat?.started !== true) return;
+    if (combat.getFlag(MODULE_ID, 'offGuardInitiative') !== true) return;
+    const current = combat.combatant;
+    if (!current) return;
+    if (current.getFlag(MODULE_ID, 'offGuardTurnStarted') !== true) {
+      await current.setFlag(MODULE_ID, 'offGuardTurnStarted', true);
+    }
+    if (current.getFlag(MODULE_ID, 'offGuardTurnStarted') !== true) return;
+  } catch (err) {
+    console.error(`${MODULE_ID} | Off-Guard turn-start mark failed`, err);
+    return;
+  }
+  _offGuardScheduleCombat(combat);
+}
+
+function _offGuardTurnStartLater(combat) {
+  setTimeout(() => { _offGuardTurnStartRun(combat); }, 0);
+}
+
+async function _offGuardOnCombatStart(combat) {
+  try {
+    if (_isActiveGMClient() && combat.getFlag(MODULE_ID, 'offGuardInitiative') !== true) {
+      await combat.setFlag(MODULE_ID, 'offGuardInitiative', true);
+    }
+  } catch (err) {
+    console.error(`${MODULE_ID} | Off-Guard combat flag failed`, err);
+  }
+  _offGuardTurnStartLater(combat);
+}
+
+Hooks.on('combatStart', (combat) => { _offGuardOnCombatStart(combat); });
+
+Hooks.on('updateCombat', (combat, changes) => {
+  if (!foundry.utils.hasProperty(changes, 'turn') && !foundry.utils.hasProperty(changes, 'round')) return;
+  _offGuardTurnStartLater(combat);
+});
+
+Hooks.on('createCombatant', (combatant) => {
+  try { _translatorSchedule(combatant.actor); } catch (err) { /* combatant without a usable actor */ }
+});
+
+Hooks.on('deleteCombatant', (combatant) => {
+  try { _translatorSchedule(combatant.actor); } catch (err) { /* combatant without a usable actor */ }
+});
+
+Hooks.on('deleteCombat', (combat) => _offGuardScheduleCombat(combat));
+
+// Only an initiative change (a Delay, a re-roll) re-derives. The turn-start mark is itself a Combatant
+// flag write and must trigger no re-check.
+Hooks.on('updateCombatant', (combatant, changes) => {
+  if (!foundry.utils.hasProperty(changes, 'initiative')) return;
+  try { _translatorSchedule(combatant.actor); } catch (err) { /* combatant without a usable actor */ }
+});
 
 /* ----------------------------------------------------------
    RETIRED SECOND WRITERS — v2.41.0 (GOAL_v2.41.0, FIX-4, D-2, P-5)
@@ -1013,11 +1261,27 @@ const _BAPH_NEUTRALIZED_LABELS = Object.freeze({
   blind: 'Blind → Blinded (Ledger)',
 });
 
-// Kept entries that carry pf1's loseDexToAC flag (fact pack addendum).
+// Kept entries that STILL carry pf1's loseDexToAC flag after the pass: the tier-3 Dex-0 statuses.
+// v2.42.0 FIX-1 (R-3, R-5): `cowering`, `flatFooted` and `pinned` (tier 1) are cleared by the pass
+// so Off-Guard replaces their lost Dex bonus; the canary now expects no flag on them.
 const _BAPH_KEPT_DEX_LOST = Object.freeze([
+  'dying', 'helpless', 'paralyzed',
+  'petrified', 'sleep', 'stable', 'unconscious',
+]);
+
+// v2.42.0 FIX-1 (R-3): the pf1 Off-Guard source set, PINNED. pf1 11.11 ships `loseDexToAC` on twelve
+// entries (blind and stunned are two of the frozen six, so not pf1 sources); these ten are the rest.
+// The pass warns when what pf1 recorded differs (P-h) — warn, never act.
+const _BAPH_OFFGUARD_SOURCES_EXPECTED = Object.freeze([
   'cowering', 'dying', 'flatFooted', 'helpless', 'paralyzed',
   'petrified', 'pinned', 'sleep', 'stable', 'unconscious',
 ]);
+
+// Tier 1 (R-3, R-5): the entries whose `loseDexToAC` the pass clears.
+const _BAPH_DEX_CLEARED_IDS = Object.freeze(['cowering', 'flatFooted', 'pinned']);
+
+// Pinned's Dex cap (`_baphChangeSig` form), removed by the pass (R-5). Its ac:-4 and cmd:-4 stay.
+const _BAPH_PINNED_DEXMOD_SIG = 'dexMod:min(0, @abilities.dex.mod):untyped:set:1001';
 
 // Kept entries with changes: exact expected set, `target:formula:type:operator:priority`.
 const _BAPH_KEPT_CHANGES = Object.freeze({
@@ -1033,7 +1297,7 @@ const _BAPH_KEPT_CHANGES = Object.freeze({
   incorporeal: ['ac:max(1, @abilities.cha.mod):deflection:add:0', 'nac:0:base:set:-10'],
   paralyzed: ['dex:0:untypedPerm:set:1001', 'str:0:untypedPerm:set:1001'],
   petrified: ['dex:0:untypedPerm:set:1001'],
-  pinned: ['ac:-4:untyped:add:0', 'cmd:-4:untyped:add:0', 'dexMod:min(0, @abilities.dex.mod):untyped:set:1001'],
+  pinned: ['ac:-4:untyped:add:0', 'cmd:-4:untyped:add:0'],
   prone: ['mattack:-4:untyped:add:0'],
   sleep: ['dex:0:untypedPerm:set:1001'],
   squeezing: ['ac:-4:untyped:add:0', 'attack:-4:untyped:add:0'],
@@ -1063,6 +1327,22 @@ function _baphEntryFlags(entry) {
  */
 Hooks.once('pf1RegisterConditions', registry => {
   const beforeDocuments = !game._documentsReady;
+
+  // v2.42.0 FIX-1 (R-3): RECORD, before anything is cleared, every registry entry whose
+  // `mechanics.flags` holds `loseDexToAC` as pf1 ships it. The pf1 Off-Guard source set is that
+  // recorded set minus the frozen six (blind and stunned reach Off-Guard through the Ledger's own
+  // Blinded and Stunned).
+  const loseDexRecorded = [];
+  try {
+    for (const [id, entry] of registry.entries()) {
+      if (_baphEntryFlags(entry).includes('loseDexToAC')) loseDexRecorded.push(id);
+    }
+  } catch (err) {
+    console.error(`${MODULE_ID} | Condition neutralize pass could not record loseDexToAC`, err);
+  }
+  loseDexRecorded.sort();
+  const loseDexSources = loseDexRecorded.filter(id => !Object.hasOwn(_BAPH_NEUTRALIZED_LABELS, id));
+
   const ids = [];
   for (const [id, label] of Object.entries(_BAPH_NEUTRALIZED_LABELS)) {
     try {
@@ -1074,8 +1354,101 @@ Hooks.once('pf1RegisterConditions', registry => {
       console.error(`${MODULE_ID} | Condition neutralize pass failed for '${id}'`, err);
     }
   }
-  _baphNeutralizeState = { ranAt: Date.now(), ids, beforeDocuments };
+
+  // v2.42.0 FIX-1 (R-3, R-5): tier 1 — remove `loseDexToAC` from flatFooted, cowering and pinned,
+  // and Pinned's `dexMod` cap change. Nothing else on those three changes; no other entry is touched.
+  const dexCleared = [];
+  for (const id of _BAPH_DEX_CLEARED_IDS) {
+    try {
+      const entry = registry?.get?.(id);
+      if (!entry) continue;
+      const mechanics = entry.toObject().mechanics ?? {};
+      const update = { 'mechanics.flags': Array.from(mechanics.flags ?? []).filter(f => f !== 'loseDexToAC') };
+      if (id === 'pinned') {
+        const changes = Array.from(mechanics.changes ?? []);
+        const kept = changes.filter(c => _baphChangeSig(c) !== _BAPH_PINNED_DEXMOD_SIG);
+        if (kept.length !== changes.length) update['mechanics.changes'] = kept;
+      }
+      entry.updateSource(update);
+      dexCleared.push(id);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Condition neutralize pass failed to clear loseDexToAC on '${id}'`, err);
+    }
+  }
+  dexCleared.sort();
+
+  _baphNeutralizeState = { ranAt: Date.now(), ids, beforeDocuments, loseDexRecorded, loseDexSources, dexCleared };
+
+  // v2.42.0 FIX-1 (P-h): drift guard — warn on every client, never act.
+  const drift = _baphLoseDexCompare(loseDexSources);
+  if (!drift.ok) _baphLoseDexWarn(drift);
 });
+
+/* ----------------------------------------------------------
+   OFF-GUARD SOURCE DRIFT GUARD + UNCANNY DODGE AUDIT — v2.42.0 (FIX-1, FIX-4; P-h, R-1)
+   ---------------------------------------------------------- */
+
+function _baphLoseDexCompare(ids) {
+  const have = new Set(Array.from(ids ?? []).map(String));
+  const want = new Set(_BAPH_OFFGUARD_SOURCES_EXPECTED);
+  const missing = [...want].filter(id => !have.has(id)).sort();
+  const extra = [...have].filter(id => !want.has(id)).sort();
+  return { ok: missing.length === 0 && extra.length === 0, missing, extra };
+}
+
+function _baphLoseDexWarn(drift) {
+  console.warn(`${MODULE_ID} | Off-Guard source set differs from the pinned ten — missing: [${drift.missing.join(', ')}], extra: [${drift.extra.join(', ')}]. Nothing was changed; Off-Guard uses what pf1 recorded.`);
+}
+
+// One GM-only whisper, flagged so a probe or a sweep can find it. Returns the message id.
+async function _baphGmWhisper(html, flag) {
+  const message = await ChatMessage.create({
+    content: html,
+    whisper: _translatorGMIds(),
+    flags: { [MODULE_ID]: { [flag]: true } },
+  });
+  return message?.id ?? null;
+}
+
+// The drift guard's reporting: a console warning, and one flagged GM whisper from a GM client
+// (`activeOnly`: from the active GM's client only — what `ready` uses so a load posts it once).
+function _baphLoseDexReport(drift, { consoleWarn = true, activeOnly = false } = {}) {
+  if (drift.ok) return;
+  if (consoleWarn) _baphLoseDexWarn(drift);
+  if (!(activeOnly ? _isActiveGMClient() : game.user?.isGM)) return;
+  const esc = foundry.utils.escapeHTML;
+  _baphGmWhisper(
+    `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;">`
+    + `Off-Guard sources: the pf1 conditions that deny Dex to AC differ from the pinned ten. `
+    + `Missing: ${esc(drift.missing.join(', ') || 'none')}. Extra: ${esc(drift.extra.join(', ') || 'none')}. `
+    + `Nothing was changed; Off-Guard uses what pf1 recorded.</div>`,
+    'offGuardDrift'
+  ).catch(err => console.error(`${MODULE_ID} | Off-Guard drift whisper failed`, err));
+}
+
+// FIX-4 (R-1): world actors holding an item named like "Uncanny Dodge" (not "Improved") whose
+// `actor.itemFlags.boolean.uncannyDodge` is not set. Warn-only: one GM whisper, sets nothing.
+async function _baphUncannyDodgeAudit() {
+  const actors = [];
+  for (const actor of Array.from(game.actors ?? [])) {
+    const named = Array.from(actor.items ?? []).some(i => /uncanny dodge/i.test(i.name ?? '') && !/improved/i.test(i.name ?? ''));
+    if (named && !_offGuardHasUncannyDodge(actor)) actors.push({ id: actor.id, name: actor.name });
+  }
+  actors.sort((a, b) => a.name.localeCompare(b.name));
+
+  let messageId = null;
+  if (actors.length && game.user?.isGM) {
+    const esc = foundry.utils.escapeHTML;
+    messageId = await _baphGmWhisper(
+      `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;">`
+      + `These actors have an Uncanny Dodge item without the flag, so they are Off-Guard until their first turn: `
+      + `${actors.map(a => esc(a.name)).join(', ')}. `
+      + `Add the flag on the item sheet (Advanced → Boolean Flags → uncannyDodge). Nothing was changed.</div>`,
+      'uncannyDodgeAudit'
+    );
+  }
+  return { actors, messageId };
+}
 
 /**
  * Fail-loud canary (TD-13 shape). Checks the live registry; warns, never fixes,
@@ -1184,7 +1557,35 @@ Hooks.once('ready', () => {
         ranAt: _baphNeutralizeState.ranAt,
         ids: [..._baphNeutralizeState.ids],
         beforeDocuments: _baphNeutralizeState.beforeDocuments,
+        // v2.42.0 FIX-1: every entry pf1 shipped with loseDexToAC (sorted), and the entries the pass
+        // cleared it from.
+        loseDexRecorded: [..._baphNeutralizeState.loseDexRecorded],
+        dexCleared: [..._baphNeutralizeState.dexCleared],
       };
+    },
+    // v2.42.0 FIX-1 — the recorded set, the pf1 Off-Guard source set (recorded minus the frozen
+    // six), the pinned expectation, and the drift result.
+    offGuardSources() {
+      const recorded = [...(_baphNeutralizeState?.loseDexRecorded ?? [])];
+      const sources = [...(_baphNeutralizeState?.loseDexSources ?? [])];
+      return { recorded, sources, expected: [..._BAPH_OFFGUARD_SOURCES_EXPECTED], ..._baphLoseDexCompare(sources) };
+    },
+    // v2.42.0 FIX-1 — compare any id list with the pinned ten; a mismatch warns exactly as the drift
+    // guard does (console, and one flagged GM whisper on a GM client).
+    loseDexDrift(ids) {
+      const result = _baphLoseDexCompare(ids);
+      _baphLoseDexReport(result);
+      return result;
+    },
+    // v2.42.0 FIX-2 — { want, have, sources }: the sorted source tokens that hold, and whether the
+    // Off-Guard buff exists.
+    offGuardState(actor) {
+      const sources = _offGuardSources(actor);
+      return { want: sources.length > 0, have: !!_findExistingBuff(actor, 'offGuard'), sources };
+    },
+    // v2.42.0 FIX-4 — { actors: [{ id, name }], messageId }
+    uncannyDodgeAudit() {
+      return _baphUncannyDodgeAudit();
     },
     // v2.41.0 — condition translator (TD-38 part 2). Defined at the end of this file.
     translationTable() {
@@ -1202,6 +1603,15 @@ Hooks.once('ready', () => {
   };
 
   _baphConditionRegistryCanary();
+
+  // v2.42.0 (P-h, FIX-4): once per load, from the active GM's client — the drift whisper when the
+  // recorded set differs from the pinned ten (the pass already warned in the console on a recorded
+  // set), and the Uncanny Dodge audit. Both warn only; neither sets anything.
+  const drift = game.baphometConditions.offGuardSources();
+  _baphLoseDexReport(drift, { consoleWarn: !_baphNeutralizeState, activeOnly: true });
+  if (_isActiveGMClient()) {
+    _baphUncannyDodgeAudit().catch(err => console.error(`${MODULE_ID} | Uncanny Dodge audit failed`, err));
+  }
 
   console.log(`${MODULE_ID} | PF1.5 Condition Overlay v2.9 ready.`);
   console.log(`${MODULE_ID} | API: game.baphometConditions.apply(actor, 'frightened', 3)`);
@@ -1612,11 +2022,12 @@ Hooks.on('deleteItem', (item) => _onDeleteItemCleanupOrphanedStunnedFlags(item))
    ---------------------------------------------------------- */
 
 // The nine rows, pf1 id -> Ledger catalog key + default tier (toggles at 1). `panicked` is
-// Frightened 3: Fleeing is 1.7c, and the card and the record say so.
+// Frightened 3 plus Fleeing (v2.42.0 FIX-5, R-2): its `also` row is a second write, Fleeing, whose
+// tier is 3 unless the source is a buff with a duration (see `_translatorAlsoTier`).
 const _TRANSLATION_TABLE = Object.freeze({
   shaken:     Object.freeze({ key: 'frightened', tier: 1 }),
   frightened: Object.freeze({ key: 'frightened', tier: 2 }),
-  panicked:   Object.freeze({ key: 'frightened', tier: 3 }),
+  panicked:   Object.freeze({ key: 'frightened', tier: 3, also: Object.freeze({ key: 'fleeing', tier: 3 }) }),
   sickened:   Object.freeze({ key: 'sickened',   tier: 2 }),
   stunned:    Object.freeze({ key: 'stunned',     tier: 1 }),
   blind:      Object.freeze({ key: 'blinded',     tier: 1 }),
@@ -1631,7 +2042,7 @@ const _TRANSLATOR_PF1_NAMES = Object.freeze({
 });
 
 // Ledger conditions that count themselves down: R-B never releases these.
-const _TRANSLATOR_SELF_DECREMENTING = Object.freeze(['frightened', 'stunned']);
+const _TRANSLATOR_SELF_DECREMENTING = Object.freeze(['frightened', 'stunned', 'fleeing']);
 
 const _TRANSLATOR_LOG_MAX = 50;
 
@@ -1643,7 +2054,9 @@ let _translatorSeq = 0;
 
 function _translationTableCopy() {
   return Object.fromEntries(
-    Object.entries(_TRANSLATION_TABLE).map(([id, row]) => [id, { key: row.key, tier: row.tier }])
+    Object.entries(_TRANSLATION_TABLE).map(([id, row]) => [id, row.also
+      ? { key: row.key, tier: row.tier, also: { key: row.also.key, tier: row.also.tier } }
+      : { key: row.key, tier: row.tier }])
   );
 }
 
@@ -1723,7 +2136,48 @@ function _translatorPlan(actor, ids) {
     if (from >= tier) skipped.push(...statuses);
     else writes.push({ key, status: statuses[0], statuses, tier, from });
   }
-  return { writes, skipped: skipped.sort() };
+
+  // v2.42.0 FIX-5: a row's `also` is a second write under the same rule (max(current, default), no
+  // write at or above). A status counts as skipped only when none of its writes was needed.
+  const alsoWritten = new Set();
+  for (const id of [...ids].sort()) {
+    const also = _TRANSLATION_TABLE[id]?.also;
+    if (!also || writes.some(w => w.key === also.key)) continue;
+    const tier = _translatorAlsoTier(actor, id, also);
+    const from = _translatorCurrentTier(actor, also.key);
+    if (from >= tier) continue;
+    writes.push({ key: also.key, status: id, statuses: [id], tier, from, also: true });
+    alsoWritten.add(id);
+  }
+  return { writes, skipped: skipped.filter(id => !alsoWritten.has(id)).sort() };
+}
+
+// FIX-5 (R-2, P-f): the tier of a row's `also` write. Fleeing matches the default (3), except when the
+// status's source is an ACTIVE pf1 buff with a finite duration: then it is
+// Math.ceil(remaining / CONFIG.time.roundTime), clamped to 1-10 (the clamp is a tracker limit, P-f).
+// `remaining` is in seconds — read from the buff's own seconds-type ActiveEffect
+// (`duration.remaining`), else `item.getDuration()` (both verified live 2026-10-04, GOAL_v2.42.0).
+function _translatorAlsoTier(actor, status, also) {
+  const buff = actor.items.find(i =>
+    i.type === 'buff' && i.system?.active && Array.from(i.system?.conditions ?? []).includes(status)
+  );
+  const seconds = buff ? _translatorBuffSeconds(buff) : null;
+  const round = Number(CONFIG.time?.roundTime);
+  if (seconds === null || !(round > 0)) return also.tier;
+  return Math.clamp(Math.ceil(seconds / round), 1, 10);
+}
+
+function _translatorBuffSeconds(buff) {
+  for (const effect of Array.from(buff.effects ?? [])) {
+    if (effect.disabled || effect.duration?.type !== 'seconds') continue;
+    const remaining = Number(effect.duration.remaining);
+    if (Number.isFinite(remaining) && remaining > 0) return remaining;
+  }
+  try {
+    const seconds = buff.getDuration?.();
+    if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) return seconds;
+  } catch (err) { /* no readable duration: the default applies */ }
+  return null;
 }
 
 // One Ledger write. P-2: the buff is marked `translatedFrom` only when the translator created it
@@ -1770,19 +2224,24 @@ async function _translatorWhisper(actor, html) {
   });
 }
 
-function _translatorCardLine(actor, item, source) {
+// One line per pf1 status. `items` are that status's card items (v2.42.0 FIX-5: a Panicked line
+// carries two, Frightened and Fleeing: "Apply Frightened 3 and Fleeing 3?").
+function _translatorCardLine(actor, items, source) {
   const esc = foundry.utils.escapeHTML;
-  const fleeing = item.status === 'panicked'
-    ? ' Fleeing is not automated yet (1.7c) — adjudicate it by hand.'
-    : '';
-  return `<li>${esc(source)} applied ${_TRANSLATOR_PF1_NAMES[item.status]} to ${esc(actor.name)}. `
-    + `Apply ${esc(_buffName(item.key, item.tier))}?${fleeing}</li>`;
+  const names = items.map(item => esc(_buffName(item.key, item.tier))).join(' and ');
+  return `<li>${esc(source)} applied ${_TRANSLATOR_PF1_NAMES[items[0].status]} to ${esc(actor.name)}. `
+    + `Apply ${names}?</li>`;
 }
 
 // Shape C: one card per check, whispered to GMs only, speaker the actor. Returns the message id.
 async function _translatorPostCard(actor, items, sources) {
   const esc = foundry.utils.escapeHTML;
-  const lines = items.map(item => _translatorCardLine(actor, item, sources[item.status] ?? 'unknown')).join('');
+  const byStatus = new Map();
+  for (const item of items) {
+    if (!byStatus.has(item.status)) byStatus.set(item.status, []);
+    byStatus.get(item.status).push(item);
+  }
+  const lines = [...byStatus].map(([status, group]) => _translatorCardLine(actor, group, sources[status] ?? 'unknown')).join('');
   const btn = 'font-family: var(--baph-font-heading, \'Courier Prime\', monospace); text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; cursor: pointer; margin-right: 6px;';
   const content = `<div class="baph-translator-card">
     <div style="font-family: var(--baph-font-heading, 'Courier Prime', monospace); text-transform: uppercase; letter-spacing: 0.05em; color: var(--baph-gold, #b8943e); font-size: 13px;">
@@ -1824,18 +2283,12 @@ async function _translatorTranslate(actor, rec, had, now) {
     const plan = _translatorPlan(actor, rec.appeared);
     rec.skipped = plan.skipped;
 
-    if (rec.appeared.includes('panicked')) rec.notes.push('fleeing-not-automated');
-
     if (rec.mode === 'auto') {
       for (const write of plan.writes) rec.applied.push(await _translatorWrite(actor, write));
-      if (rec.appeared.includes('panicked')) {
-        await _translatorWhisper(actor,
-          `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;">`
-          + `${foundry.utils.escapeHTML(actor.name)} — Panicked: Fleeing is not automated yet (1.7c). Adjudicate it by hand.</div>`);
-      }
     } else {
+      // v2.42.0 FIX-5: an `also` write (Fleeing) carries its own tier on the card, not the row's.
       const items = plan.writes.flatMap(w => w.statuses.map(status => ({
-        status, key: w.key, tier: _TRANSLATION_TABLE[status].tier,
+        status, key: w.key, tier: w.also ? w.tier : _TRANSLATION_TABLE[status].tier,
       }))).sort((a, b) => a.status.localeCompare(b.status));
       if (items.length) rec.promptId = await _translatorPostCard(actor, items, rec.sources);
     }
@@ -1866,6 +2319,17 @@ async function _translatorTranslate(actor, rec, had, now) {
         await removeCondition(actor, key);
         rec.released.push(key);
       }
+    }
+
+    // v2.42.0 FIX-5: a row's `also` condition (Fleeing) counts itself down, so it is kept like
+    // Frightened and never released (R-2). Only the self-decrementing path exists for it.
+    const alsoSeen = new Set();
+    for (const id of [...rec.removed].sort()) {
+      const also = _TRANSLATION_TABLE[id]?.also;
+      if (!also || alsoSeen.has(also.key)) continue;
+      alsoSeen.add(also.key);
+      if (!_TRANSLATOR_SELF_DECREMENTING.includes(also.key) || !_findExistingBuff(actor, also.key)) continue;
+      rec.kept.push({ status: id, key: also.key, reason: 'self-decrementing' });
     }
   }
 }
@@ -1906,6 +2370,16 @@ async function _translatorCheck(actor) {
     else await _translatorTranslate(actor, rec, had, now);
   } catch (err) {
     console.error(`${MODULE_ID} | Condition translator failed for ${actor.name}`, err);
+    rec.notes.push('error');
+  }
+
+  // v2.42.0 FIX-2: every check ends by re-deriving Off-Guard (a first-sight check translates nothing
+  // but still syncs), so a pf1 status, a buff, an item flag or a combat change reaches
+  // `_syncOffGuard` through this one coalesced, macrotask-scheduled check.
+  try {
+    await _syncOffGuard(actor);
+  } catch (err) {
+    console.error(`${MODULE_ID} | Off-Guard sync failed for ${actor.name}`, err);
     rec.notes.push('error');
   }
 
