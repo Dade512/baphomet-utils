@@ -1118,6 +1118,86 @@ function _resetReactionReflexPips(combatantId, combatant) {
     state.reaction = [false];
     state.reflexPip = state.reflexPip.map(() => false);
   }
+  // v2.44.0 FIX-3 (R-4): a creature cannot take reactions while its Stunned value is above 0, so a
+  // turn start that refills the pips leaves the Reaction and Combat Reflexes pips locked — on every
+  // client, from the same actor flag (as Paralyzed does above).
+  if (_baphStunnedCountdownOf(combatant?.actor) > 0) {
+    state.reaction = [false];
+    state.reflexPip = state.reflexPip.map(() => false);
+  }
+}
+
+/* ----------------------------------------------------------
+   v2.44.0 FIX-3 — THE STUNNED REACTION LOCK
+
+   No reactions while `stunnedCountdown` is above 0 (ruled 2026-10-05, canon edit owed item 20).
+   The Combatant flag `flags['baphomet-utils'].stunLock` records what was available when the stun
+   locked the Reaction and Combat Reflexes pips ({ reaction, reflexPip: [...] }), so lifting the
+   stun gives back exactly that and never a pip the creature had already spent (Q2).
+   `game.baphometActions.syncStunLock(actor)` runs on the active GM's client only and is called by
+   condition-overlay.js after every write or unset of `stunnedCountdown` (Q3: off-turn included).
+   ---------------------------------------------------------- */
+
+const AT_STUN_LOCK_FLAG_KEY = 'stunLock';
+
+function _baphStunnedCountdownOf(actor) {
+  return Number(actor?.getFlag?.(AT_MODULE_ID, 'stunnedCountdown')) || 0;
+}
+
+// Calls are chained so two syncs for the same stun can never both read "no stunLock yet".
+let _baphStunLockChain = Promise.resolve();
+
+function _baphSyncStunLock(actor) {
+  if (!actor) return Promise.resolve(null);
+  if (!game.user?.isGM || game.user !== game.users?.activeGM) return Promise.resolve(null);
+  const run = _baphStunLockChain.then(() => _baphSyncStunLockNow(actor));
+  _baphStunLockChain = run.catch(() => null);
+  return run;
+}
+
+async function _baphSyncStunLockNow(actor) {
+  const result = { combatants: 0, locked: 0, restored: 0 };
+  const combat = game.combat;
+  if (!combat) return result;
+
+  const countdown = _baphStunnedCountdownOf(actor);
+
+  for (const combatant of Array.from(combat.combatants ?? [])) {
+    if (!combatant?.actor || combatant.actor.uuid !== actor.uuid) continue;
+    result.combatants += 1;
+
+    let state = _getState(combatant.id);
+    if (!state) { _initState(combatant.id); state = _getState(combatant.id); }
+    if (!state) continue;
+
+    const record = combatant.getFlag(AT_MODULE_ID, AT_STUN_LOCK_FLAG_KEY) ?? null;
+
+    if (countdown > 0 && !record) {
+      // Q2: what was available when it locked. Q3: lock at once, off-turn included.
+      await combatant.setFlag(AT_MODULE_ID, AT_STUN_LOCK_FLAG_KEY, {
+        reaction: state.reaction[0] === true,
+        reflexPip: state.reflexPip.map(p => p === true),
+      });
+      state.reaction = [false];
+      state.reflexPip = state.reflexPip.map(() => false);
+      state.pipSeq = (Number(state.pipSeq) || 0) + 1;
+      _refreshPipRow(combatant.id);
+      _writePipFlag(combatant.id);
+      result.locked += 1;
+    } else if (countdown <= 0 && record) {
+      // Q2: give back only what the record says was available.
+      if (record.reaction === true) state.reaction = [true];
+      const held = Array.isArray(record.reflexPip) ? record.reflexPip : [];
+      state.reflexPip = state.reflexPip.map((p, i) => (held[i] === true ? true : p));
+      state.pipSeq = (Number(state.pipSeq) || 0) + 1;
+      _refreshPipRow(combatant.id);
+      _writePipFlag(combatant.id);
+      await combatant.unsetFlag(AT_MODULE_ID, AT_STUN_LOCK_FLAG_KEY);
+      result.restored += 1;
+    }
+  }
+
+  return result;
 }
 
 /* ----------------------------------------------------------
@@ -1336,6 +1416,25 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   if (game.user.isGM) {
     _writePipFlag(combatantId);
     _writeOffBudget(combatantId); // v2.30.0: persist the reset off-hand budget (isolated flag)
+    // v2.44.0 FIX-3 (Q3): while the creature is Stunned the turn start refilled the pips and then locked
+    // them again (`_resetReactionReflexPips`); the stun's record becomes what the refill just made
+    // available, so lifting the stun later gives back exactly that. The write joins the stun-lock
+    // chain, so a later `syncStunLock` runs only after it settles; the countdown is re-read inside
+    // the queued task and the record is written only if the stun is still on.
+    if (combatant && _baphStunnedCountdownOf(combatant.actor) > 0) {
+      const reflexAtTurnStart = state.reflexPip.map(() => true);
+      const run = _baphStunLockChain.then(async () => {
+        if (!(_baphStunnedCountdownOf(combatant.actor) > 0)) return;
+        await combatant.setFlag(AT_MODULE_ID, AT_STUN_LOCK_FLAG_KEY, {
+          reaction: true,
+          reflexPip: reflexAtTurnStart,
+        });
+      });
+      _baphStunLockChain = run.catch(err => {
+        console.error(`${AT_MODULE_ID} | stunLock write error: ${err}`);
+        return null;
+      });
+    }
   }
 
   _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${combat.round ?? 0}, seq ${seq})`);
@@ -1882,6 +1981,11 @@ Hooks.once('ready', () => {
     // declare — zeroes every remaining normal pip AND a live Haste bonus pip, by its own
     // path (see _endTurnActionsCore). Never widens _spendActionCore's allowBonus.
     endTurnActions: (combatantId) => _endTurnActionsCore(combatantId),
+    // v2.44.0 FIX-3 (R-4): locks / restores the Reaction and Combat Reflexes pips of every combatant
+    // of the active combat whose actor is `actor`, from its `stunnedCountdown`. Active GM's client
+    // only (null elsewhere); condition-overlay.js calls it after every write or unset of the countdown.
+    // Resolves { combatants, locked, restored }.
+    syncStunLock: (actor) => _baphSyncStunLock(actor),
     spendReaction: (combatantId) => {
       const state = _getState(combatantId);
       if (!state || !state.reaction[0]) return false;
@@ -4172,7 +4276,10 @@ function _baphSpendReactionForSpell(combatant, actor, item) {
     _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — Reaction spent`);
   } else {
     _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — no Reaction available, not charged`);
-    ui.notifications?.warn?.(`${actor.name}: no Reaction available to cast ${item.name} — not charged.`);
+    // v2.44.0 FIX-3 (Q4): still warn-only; while Stunned the warning names it.
+    ui.notifications?.warn?.(_baphStunnedCountdownOf(actor) > 0
+      ? `${actor.name}: Stunned — no reaction available to cast ${item.name} — not charged. The GM decides.`
+      : `${actor.name}: no Reaction available to cast ${item.name} — not charged.`);
   }
 }
 

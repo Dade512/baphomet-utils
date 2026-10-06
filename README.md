@@ -3,17 +3,16 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.43.0 — *The Number on the Card*
+**Current Version:** 2.44.0 — *The Lost Round*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Clumsy, Enfeebled and Stupefied now cost the full −X on the rolls canon names — Clumsy 2 is −2 to AC and CMD,
-not −1 — instead of lowering an ability score, and Fatigued and Fascinated are PF1's own, not PF2's.** Every
-AC penalty now reaches CMD (pf1's Cowering and Squeezing too), Frightened and Sickened reach ability checks and
-initiative, and several cards no longer promise rules canon does not have. Conditions already on an actor are
-brought up to date when the GM first loads this version. See the [changelog](#changelog) for the full entry.
+**A stun from pf1 now costs whole turns, and a stunned creature has no reactions.** A PF1 stun becomes Stunned 3 per round of its
+duration (3 when no duration is given) instead of Stunned 1, Stunned has no cap, and until the stun ends the creature
+loses its Reaction and its attacks of opportunity. A stun from the token HUD takes pf1's own Stunned icon off with it.
+See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -68,7 +67,7 @@ version-history / SYNC_STAMP notes if you suspect drift.
 ## Features
 
 - **Croaker's Ledger Theme** (`noir-theme.css`) — Full Gaslamp Gothic theme for Foundry V13 and PF1e character sheets
-- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. When one of the nine pf1 statuses (Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled, Nauseated) appears on an actor, the GM is asked on a whispered card to apply its Ledger condition, or, with **Auto-Translate PF1 Conditions** on, the module applies it. **Off-Guard** is derived from Blinded, Stunned, Paralyzed, pf1's Flat-Footed, Cowering, Pinned and Dex-0 conditions, and from not yet having acted in a combat (Uncanny Dodge excepted); **Fleeing** is a new tiered condition that a translated Panicked brings with its Frightened 3. **Clumsy, Enfeebled, Stupefied, Fatigued and Fascinated** now follow canon, and every AC penalty reaches CMD
+- **Condition Overlay** — Visual condition tracking on tokens; panel styled as a brass-and-leather index card. When one of the nine pf1 statuses (Shaken, Frightened, Panicked, Sickened, Stunned, Blind, Staggered, Disabled, Nauseated) appears on an actor, the GM is asked on a whispered card to apply its Ledger condition, or, with **Auto-Translate PF1 Conditions** on, the module applies it. **Off-Guard** is derived from Blinded, Stunned, Paralyzed, pf1's Flat-Footed, Cowering, Pinned and Dex-0 conditions, and from not yet having acted in a combat (Uncanny Dodge excepted); **Fleeing** is a new tiered condition that a translated Panicked brings with its Frightened 3. **Clumsy, Enfeebled, Stupefied, Fatigued and Fascinated** now follow canon, and every AC penalty reaches CMD. **Stunned** has no cap (the panel offers 1–12), a PF1 stun becomes Stunned 3 per round of its duration, and a stunned creature cannot take reactions
 - **Action Tracker** — PF1.5 three-action economy UI with pips calibrated for the parchment aesthetic. Players click their own pips to spend them; **returning a spent pip is a GM action**, so a mis-click is undone by the GM rather than by the player who made it
 - **Combat Action Automation** — layers PF1.5 combat onto the action economy: attack & spell auto-spend (opt-in), a Haste bonus-action pip (auto-granted from an active Haste buff), cost-aware Vital Strike / Charge / Cleave declare-macros, a Two-Weapon Fighting per-turn off-hand budget, and automatic **Multiple Attack Penalty** on repeated Strikes (default on, applied silently to the attack roll). In PF1.5 Mode, a multi-projectile spell (or consumable) or an NPC's natural attack keeps its Full Attack button, because canon prices that bundle at a single action; every weapon, every PC's own natural attack, and any spell whose extra attacks are really BAB iteratives does not, and stays a single Strike per action.
 - **Task Tracker** — Multi-round task tracking with combat widget: Continue Task, Resolve Task (Disable Device), automatic success/failure/catastrophic classification
@@ -184,6 +183,30 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.44.0 — The Lost Round
+
+A PF1 stun became Stunned 1 and the panel stopped Stunned at 4, so a stunned creature lost almost nothing and kept
+every reaction. This release makes a stun cost what canon says, removes the cap, and takes the Reaction away.
+
+- **A PF1 stun converts at Stunned 3 per round of its duration.** A 2-round stun is Stunned 6, a 1d4-round stun is
+  Stunned 3 to 12 (the dice are read from the stun's own effect, never re-rolled), and a stun with no stated duration —
+  the token HUD toggle — is Stunned 3. This holds for a pf1 buff and for a pf1 condition toggle that carries a
+  duration. The same condition from two sources takes the highest, never the sum.
+- **Stunned has no cap.** The panel offers 1–12; a larger value set by a buff or the API is kept, counts down three
+  at a time, and shows on the row (*Stunned 15*).
+- **A stunned creature cannot take reactions.** While its Stunned value is above 0 its Reaction and Combat Reflexes
+  pips (its attacks of opportunity) are locked — at once if the stun lands off-turn, and still locked when its turn
+  starts. When the stun ends they come back, minus any it had already spent. An immediate-action spell while Stunned
+  warns the GM and leaves the call to them.
+- **A stun from the HUD toggle clears its icon when it ends**, so the next round's stun registers. A stun from a
+  buff is never cleared by the module; the buff expires on its own.
+- **The Stunned card** now says the creature cannot take reactions.
+- **Housekeeping.** Removing a condition by a key the panel no longer has (Drained, Persistent Dmg) deletes the buff
+  quietly instead of throwing; a buff whose effect has already expired counts as having no duration; the reference
+  doc now describes Uncanny Dodge's flag; stale comments and an unused helper are gone.
+- **API.** `game.baphometActions` gains `syncStunLock(actor)` (active GM only), which the condition code calls after
+  every change to the Stunned countdown.
 
 ### v2.43.0 — The Number on the Card
 
