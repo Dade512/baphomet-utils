@@ -175,8 +175,12 @@
      note here had this backwards — Math.clamped is deprecated (since v12) and
      removed in v14, so Math.clamp is the correct, forward-compatible call.
 
-   TIERED (1-4):  Frightened, Sickened, Stupefied, Clumsy,
-                  Enfeebled, Stunned, Slowed, Fleeing
+   TIERED, by range:
+     1-4:   Frightened, Sickened, Stupefied, Clumsy, Enfeebled
+     1-3:   Slowed
+     1-10:  Fleeing
+     no cap: Stunned (v2.44.0 — `uncapped`; the panel draws buttons 1-12, but a
+             larger value is kept and counts down)
    TOGGLE (on/off): Fatigued, Fascinated, Off-Guard,
                     Blinded, Deafened, Nauseated, Confused,
                     Paralyzed
@@ -347,9 +351,13 @@ const CONDITIONS = {
   stunned: {
     name: 'Stunned',
     icon: 'icons/svg/stoned.svg',
-    maxTier: 4,
+    // v2.44.0 FIX-1: Stunned has no cap. `maxTier` is only the panel's button range (1-12),
+    // never a clamp — `uncapped` makes applyCondition and the v2.43.0 rebuild keep any whole
+    // number >= 1. Never `Infinity`: the panel draws one button per tier up to `maxTier`.
+    maxTier: 12,
+    uncapped: true,
     type: 'tiered',
-    description: 'You lose X actions on your next turn. If Stunned exceeds 3, excess carries over to subsequent turns. While Stunned is above 0 you are also Off-Guard.',
+    description: 'You lose X actions on your next turn. If Stunned exceeds 3, excess carries over to subsequent turns. While Stunned is above 0 you are also Off-Guard and cannot take reactions.',
     // v2.34.0: `autoDecrement: true` still marks this as an auto-decrementing condition for
     // the token HUD's "↓" indicator, but `_handleAutoDecrement` skips 'stunned' in its
     // generic per-tier -1 loop — the real decrement is the bespoke, multi-action
@@ -487,8 +495,8 @@ const CONDITIONS = {
     type: 'toggle',
     // v2.37.3 FIX-6/RULED-4: flat Perception-penalty claim removed — canon (master :657, :816)
     // grants a hearing-based auto-fail, not a flat -4 (see buildChanges comment below). The 20%
-    // arcane spell failure claim is left UNCHANGED — unenforced and out of scope for this
-    // release (see GOAL_v2.37.3_CONDITION_CANON.md "Explicitly out of scope" / follow-up docket).
+    // spell failure claim was out of scope for v2.37.3 (see GOAL_v2.37.3_CONDITION_CANON.md);
+    // v2.43.0 made the card every caster's, so it now reads "(every caster)".
     // Sentence order is deliberate: the auto-fail clause precedes the '-4' initiative figure so
     // no dead numeric substring reads as a Perception penalty claim.
     description: 'Cannot hear. Automatically fails hearing-based Perception checks (table-adjudicated, not enforced). pf1\'s own Deaf status applies the –4 penalty to initiative (this buff adds none of its own). 20% spell failure chance on spells with verbal components (every caster).',
@@ -941,6 +949,23 @@ function _pf1StatusToClear(buff, condKey) {
 }
 
 /* ----------------------------------------------------------
+   v2.44.0 FIX-3 — the Stunned reaction lock
+
+   While `stunnedCountdown` is above 0 a creature cannot take reactions. The pips live in
+   action-tracker.js; `game.baphometActions.syncStunLock(actor)` (active GM's client only, a no-op
+   elsewhere) locks or restores them for the actor's combatants. It is called, awaited, after every
+   write or unset of `stunnedCountdown`. A failure never breaks the write that called it.
+   ---------------------------------------------------------- */
+
+async function _syncStunLock(actor) {
+  try {
+    await game.baphometActions?.syncStunLock?.(actor);
+  } catch (err) {
+    console.warn(`${MODULE_ID} | syncStunLock failed for ${actor?.name ?? 'unknown actor'}`, err);
+  }
+}
+
+/* ----------------------------------------------------------
    v2.43.0 — THE CARD, THE SIGNATURE AND THE SECOND WRITE (FIX-7, FIX-10)
 
    `_conditionCardHtml` is the card text `applyCondition`'s create branch writes (the same
@@ -968,7 +993,11 @@ async function applyCondition(actor, condKey, tier) {
   if (!actor || !CONDITIONS[condKey]) return;
 
   const cond = CONDITIONS[condKey];
-  tier = Math.clamp(tier, 0, cond.maxTier);
+  // v2.44.0 FIX-1 (R-2): an `uncapped` condition (Stunned) takes any whole number >= 1 as written —
+  // `maxTier` is only its panel's button range. Every other condition keeps the clamp.
+  tier = cond.uncapped
+    ? Math.max(0, Math.floor(Number(tier) || 0))
+    : Math.clamp(tier, 0, cond.maxTier);
 
   if (tier === 0) return removeCondition(actor, condKey);
 
@@ -1052,6 +1081,7 @@ async function applyCondition(actor, condKey, tier) {
       round:    game.combat?.round ?? null,
       turn:     game.combat?.turn ?? null,
     });
+    await _syncStunLock(actor); // v2.44.0 FIX-3: the countdown was just written — lock the Reaction pips
   }
 
   _postConditionChat(actor, cond, tier, 'apply');
@@ -1077,6 +1107,13 @@ async function removeCondition(actor, condKey) {
 
   const existing = _findExistingBuff(actor, condKey);
 
+  // v2.44.0 FIX-5 (TD-79 (a)): a key no longer in the catalog (`drained`, `persistentDamage`, removed
+  // in v2.43.0) — delete the buff if there is one, post no chat, and return. Never throw.
+  if (!CONDITIONS[condKey]) {
+    if (existing) await existing.delete();
+    return;
+  }
+
   // v2.34.0: clear the Stunned countdown lifecycle flags regardless of whether a buff was
   // found — defensive: no removal path (GM "X" button, adjustCondition reaching tier 0, or
   // _decrementStunnedCountdown's own zero-remainder cleanup) should leave a stale countdown
@@ -1092,14 +1129,22 @@ async function removeCondition(actor, condKey) {
     if (condKey === 'blinded' || condKey === 'stunned' || condKey === 'paralyzed') {
       await _syncOffGuard(actor);
     }
+    if (condKey === 'stunned') await _syncStunLock(actor); // v2.44.0 FIX-3: restore what the stun locked
     return;
   }
 
   const cond = CONDITIONS[condKey];
   const pf1StatusToClear = _pf1StatusToClear(existing, condKey); // v2.41.0 FIX-4 (P-5): read before the buff is gone
+  // v2.44.0 FIX-4 (D-3, Q5): a Ledger Stunned the translator made from pf1's condition toggle
+  // (mark `{ status: 'stunned', source: 'condition toggle' }`) takes pf1's own `stunned` status with
+  // it. Read before the buff is gone. A buff-sourced stun, or a Stunned with no/other mark, never clears it.
+  const stunMark = condKey === 'stunned' ? existing.getFlag(MODULE_ID, 'translatedFrom') : null;
+  const clearToggleStun = stunMark?.status === 'stunned' && stunMark?.source === 'condition toggle';
   await existing.delete();
   if (pf1StatusToClear) await actor.setCondition(pf1StatusToClear, false);
+  if (clearToggleStun && actor.statuses?.has('stunned')) await actor.setCondition('stunned', false);
   _postConditionChat(actor, cond, 0, 'remove');
+  if (condKey === 'stunned') await _syncStunLock(actor); // v2.44.0 FIX-3: the buff is gone — restore the locked pips
 
   // v2.37.3 FIX-5: resync the derived Off-Guard buff after removing a source condition.
   if (condKey === 'blinded' || condKey === 'stunned' || condKey === 'paralyzed') {
@@ -1193,7 +1238,9 @@ function _buildTieredRow(actor, key, cond) {
 
   const label = document.createElement('span');
   label.classList.add('baph-condition-label');
-  label.textContent = cond.name;
+  // v2.44.0 FIX-1 (Q1): above the button range (an uncapped Stunned 15) the label carries the tier
+  // and no button is selected — `t === currentTier` below can never hold.
+  label.textContent = currentTier > cond.maxTier ? `${cond.name} ${currentTier}` : cond.name;
   label.title = cond.description;
   labelRow.appendChild(label);
 
@@ -1673,7 +1720,10 @@ async function _refreshConditionChanges(actors) {
         }
 
         const storedTier = Number(buff.getFlag(MODULE_ID, 'tier'));
-        const tier = Math.clamp(Number.isFinite(storedTier) ? storedTier : 1, 1, cond.maxTier);
+        // v2.44.0 FIX-1: an `uncapped` condition keeps its stored tier (a Stunned 15 is never rebuilt to 12).
+        const tier = cond.uncapped
+          ? Math.max(1, Number.isFinite(storedTier) ? storedTier : 1)
+          : Math.clamp(Number.isFinite(storedTier) ? storedTier : 1, 1, cond.maxTier);
         const changes = cond.buildChanges(tier);
         const name = _buffName(key, tier);
         const card = _conditionCardHtml(cond, tier);
@@ -2072,6 +2122,7 @@ async function _decrementStunnedCountdown(actor, breadcrumb) {
     await removeCondition(actor, 'stunned'); // clears the buff + both lifecycle flags
   } else {
     await actor.setFlag(MODULE_ID, 'stunnedCountdown', remaining);
+    await _syncStunLock(actor); // v2.44.0 FIX-3: after the partial pay-down write (the lock stays while > 0)
   }
 }
 
@@ -2196,7 +2247,7 @@ Hooks.on('combatRound', (combat, updateData, updateOptions) => {
    — the only other `deleteItem` hook anywhere in this tree.
    ---------------------------------------------------------- */
 
-function _onDeleteItemCleanupOrphanedStunnedFlags(item) {
+async function _onDeleteItemCleanupOrphanedStunnedFlags(item) {
   if (!_isActiveGMClient()) return;
   if (item?.type !== 'buff') return;
   if (item.getFlag(MODULE_ID, 'conditionKey') !== 'stunned') return;
@@ -2205,8 +2256,10 @@ function _onDeleteItemCleanupOrphanedStunnedFlags(item) {
   if (!actor) return;
 
   console.debug(`${MODULE_ID} | deleteItem: clearing any orphaned Stunned countdown flags for ${actor.name}`);
-  actor.unsetFlag(MODULE_ID, 'stunnedCountdown');
-  actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
+  // v2.44.0 FIX-3: awaited so `syncStunLock` reads the cleared countdown and restores the locked pips.
+  await actor.unsetFlag(MODULE_ID, 'stunnedCountdown');
+  await actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
+  await _syncStunLock(actor);
 }
 Hooks.on('deleteItem', (item) => _onDeleteItemCleanupOrphanedStunnedFlags(item));
 
@@ -2269,7 +2322,7 @@ const _TRANSLATION_TABLE = Object.freeze({
   frightened: Object.freeze({ key: 'frightened', tier: 2 }),
   panicked:   Object.freeze({ key: 'frightened', tier: 3, also: Object.freeze({ key: 'fleeing', tier: 3 }) }),
   sickened:   Object.freeze({ key: 'sickened',   tier: 2 }),
-  stunned:    Object.freeze({ key: 'stunned',     tier: 1 }),
+  stunned:    Object.freeze({ key: 'stunned',     tier: 3 }), // v2.44.0 FIX-2: the default; see `_translatorStunnedTier`
   blind:      Object.freeze({ key: 'blinded',     tier: 1 }),
   staggered:  Object.freeze({ key: 'slowed',      tier: 1 }),
   disabled:   Object.freeze({ key: 'slowed',      tier: 1 }),
@@ -2371,7 +2424,7 @@ function _translatorPlan(actor, ids) {
   const writes = [];
   const skipped = [];
   for (const [key, statuses] of _translatorGroupByKey(ids)) {
-    const tier = Math.max(...statuses.map(id => _TRANSLATION_TABLE[id].tier));
+    const tier = Math.max(...statuses.map(id => _translatorDefaultTier(actor, id)));
     const from = _translatorCurrentTier(actor, key);
     if (from >= tier) skipped.push(...statuses);
     else writes.push({ key, status: statuses[0], statuses, tier, from });
@@ -2392,11 +2445,46 @@ function _translatorPlan(actor, ids) {
   return { writes, skipped: skipped.filter(id => !alsoWritten.has(id)).sort() };
 }
 
+// v2.44.0 FIX-2 (R-1, R-3): a table id's default tier on THIS actor. Every id uses its table tier,
+// except the one whose Ledger key is `stunned`, which converts at 3 per round of its source's duration.
+function _translatorDefaultTier(actor, id) {
+  return _TRANSLATION_TABLE[id].key === 'stunned'
+    ? _translatorStunnedTier(actor)
+    : _TRANSLATION_TABLE[id].tier;
+}
+
+// v2.44.0 FIX-2 (R-1, R-3, Q6, L-5): a PF1 stun converts at Stunned 3 per round of its duration
+// (3 when no duration is stated, as for the HUD toggle). The highest across every source wins: each
+// ACTIVE buff whose `system.conditions` lists `stunned`, and each non-disabled ActiveEffect on the
+// actor itself that carries the `stunned` status with `flags.pf1.autoDelete` true (pf1's condition
+// toggle, which can carry a duration). Seconds come from the source's own seconds-type ActiveEffect
+// only; an expired or durationless effect gives 3. No cap here (R-2).
+function _translatorStunnedTier(actor) {
+  const round = Number(CONFIG.time?.roundTime);
+  const tierOf = seconds => (seconds !== null && round > 0 ? 3 * Math.ceil(seconds / round) : 3);
+  let best = 0;
+
+  for (const buff of Array.from(actor.items ?? [])) {
+    if (buff.type !== 'buff' || !buff.system?.active) continue;
+    if (!Array.from(buff.system?.conditions ?? []).includes('stunned')) continue;
+    best = Math.max(best, tierOf(_translatorBuffSeconds(buff)));
+  }
+
+  for (const effect of Array.from(actor.effects ?? [])) {
+    if (effect.disabled || !effect.statuses?.has?.('stunned')) continue;
+    if (effect.getFlag('pf1', 'autoDelete') !== true) continue;
+    best = Math.max(best, tierOf(_translatorEffectSeconds(effect)));
+  }
+
+  return best > 0 ? best : 3;
+}
+
 // FIX-5 (R-2, P-f): the tier of a row's `also` write. Fleeing matches the default (3), except when the
 // status's source is an ACTIVE pf1 buff with a finite duration: then it is
 // Math.ceil(remaining / CONFIG.time.roundTime), clamped to 1-10 (the clamp is a tracker limit, P-f).
-// `remaining` is in seconds — read from the buff's own seconds-type ActiveEffect
-// (`duration.remaining`), else `item.getDuration()` (both verified live 2026-10-04, GOAL_v2.42.0).
+// `remaining` is in seconds — read from the buff's own seconds-type ActiveEffect (`duration.remaining`)
+// only (v2.44.0 FIX-2: a pf1 dice duration is re-rolled by reading it from the item, so the item is never
+// asked). An expired (remaining <= 0) or durationless effect gives the default.
 function _translatorAlsoTier(actor, status, also) {
   const buff = actor.items.find(i =>
     i.type === 'buff' && i.system?.active && Array.from(i.system?.conditions ?? []).includes(status)
@@ -2407,27 +2495,37 @@ function _translatorAlsoTier(actor, status, also) {
   return Math.clamp(Math.ceil(seconds / round), 1, 10);
 }
 
+// One effect's remaining seconds: a non-disabled seconds-type ActiveEffect whose `duration.remaining`
+// is finite and above 0 (an expired one is no duration, Q6), else null.
+function _translatorEffectSeconds(effect) {
+  if (!effect || effect.disabled || effect.duration?.type !== 'seconds') return null;
+  const remaining = Number(effect.duration.remaining);
+  return Number.isFinite(remaining) && remaining > 0 ? remaining : null;
+}
+
 function _translatorBuffSeconds(buff) {
   for (const effect of Array.from(buff.effects ?? [])) {
-    if (effect.disabled || effect.duration?.type !== 'seconds') continue;
-    const remaining = Number(effect.duration.remaining);
-    if (Number.isFinite(remaining) && remaining > 0) return remaining;
+    const seconds = _translatorEffectSeconds(effect);
+    if (seconds !== null) return seconds;
   }
-  try {
-    const seconds = buff.getDuration?.();
-    if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) return seconds;
-  } catch (err) { /* no readable duration: the default applies */ }
   return null;
 }
 
 // One Ledger write. P-2: the buff is marked `translatedFrom` only when the translator created it
 // (no buff for the key existed before); a buff it merely raised is left unmarked.
+// v2.44.0 FIX-4: the mark also records the `source` (`_translatorSource` at the time of the write —
+// 'condition toggle' for pf1's own condition effect), so `removeCondition` knows whether pf1's own
+// status should clear with a toggle-sourced Stunned.
 async function _translatorWrite(actor, write) {
   const existed = !!_findExistingBuff(actor, write.key);
   await applyCondition(actor, write.key, write.tier);
   if (!existed) {
     const buff = _findExistingBuff(actor, write.key);
-    if (buff) await buff.setFlag(MODULE_ID, 'translatedFrom', { status: write.status, tier: write.tier });
+    if (buff) {
+      await buff.setFlag(MODULE_ID, 'translatedFrom', {
+        status: write.status, tier: write.tier, source: _translatorSource(actor, write.status),
+      });
+    }
   }
   return { status: write.status, key: write.key, from: write.from, to: write.tier };
 }
@@ -2454,14 +2552,6 @@ function _translatorAppend(rec) {
   rec.seq = ++_translatorSeq;
   _translatorLog.push(rec);
   while (_translatorLog.length > _TRANSLATOR_LOG_MAX) _translatorLog.shift();
-}
-
-async function _translatorWhisper(actor, html) {
-  await ChatMessage.create({
-    content: html,
-    speaker: ChatMessage.getSpeaker({ actor }),
-    whisper: _translatorGMIds(),
-  });
 }
 
 // One line per pf1 status. `items` are that status's card items (v2.42.0 FIX-5: a Panicked line
@@ -2528,7 +2618,7 @@ async function _translatorTranslate(actor, rec, had, now) {
     } else {
       // v2.42.0 FIX-5: an `also` write (Fleeing) carries its own tier on the card, not the row's.
       const items = plan.writes.flatMap(w => w.statuses.map(status => ({
-        status, key: w.key, tier: w.also ? w.tier : _TRANSLATION_TABLE[status].tier,
+        status, key: w.key, tier: w.also ? w.tier : _translatorDefaultTier(actor, status),
       }))).sort((a, b) => a.status.localeCompare(b.status));
       if (items.length) rec.promptId = await _translatorPostCard(actor, items, rec.sources);
     }
