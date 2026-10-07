@@ -3,16 +3,16 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.44.0 — *The Lost Round*
+**Current Version:** 2.44.1 — *Whose Turn It Was*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**A stun from pf1 now costs whole turns, and a stunned creature has no reactions.** A PF1 stun becomes Stunned 3 per round of its
-duration (3 when no duration is given) instead of Stunned 1, Stunned has no cap, and until the stun ends the creature
-loses its Reaction and its attacks of opportunity. A stun from the token HUD takes pf1's own Stunned icon off with it.
-See the [changelog](#changelog) for the full entry.
+**A GM reload in the middle of a turn no longer loses that turn.** The end-of-turn countdowns (Stunned, Frightened, Fleeing)
+still run, and an action lost to Slowed or Stunned stays lost. A stun applied after an initiative change no longer
+pays down the same turn it landed, and an attack made off-turn by a creature with no Reaction left now warns the GM,
+naming Stunned while the creature is stunned. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -183,6 +183,23 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.44.1 — Whose Turn It Was
+
+A turn the GM's client picked up in the middle (after a page reload, or a GM joining mid-combat) was treated as
+already started, so none of its turn-start state was rebuilt; and a stun's same-turn guard compared an array position
+that an initiative change can move. This release fixes both and closes a silent gap in the off-turn attack warning.
+
+- **A GM reload mid-turn no longer skips that turn's countdowns.** The turn is still recognised as current, so its
+  end-of-turn pay-downs run: a stunned creature no longer loses an extra turn, and Frightened and Fleeing no longer
+  freeze for a turn. A GM joining mid-combat takes the same path.
+- **An action pip lost to a condition stays lost across a reload.** The turn's condition lock is now saved with the
+  pip state and read back, so a reload no longer lets Slowed, Stunned or Nauseated hand the pip back.
+- **An initiative change mid-turn no longer lets a fresh stun pay down at once.** The guard now names the creature and
+  the round instead of its position in the turn order; a stun recorded by the previous version is still read.
+- **Every off-turn attack with no Reaction left now warns.** The warning names the weapon, or says *Stunned* while the
+  creature is stunned; the Combat Reflexes attack-of-opportunity warning gains the same Stunned wording. Nothing is
+  charged and the roll is never blocked, so the GM decides.
 
 ### v2.44.0 — The Lost Round
 
