@@ -1080,6 +1080,9 @@ async function applyCondition(actor, condKey, tier) {
       combatId: game.combat?.id ?? null,
       round:    game.combat?.round ?? null,
       turn:     game.combat?.turn ?? null,
+      // v2.44.1 FIX-B (TD-84): who was current when the stun was applied. `turn` is an array index
+      // that a mid-turn initiative change moves; the combatant and the round name the turn.
+      combatantId: game.combat?.combatant?.id ?? null,
     });
     await _syncStunLock(actor); // v2.44.0 FIX-3: the countdown was just written — lock the Reaction pips
   }
@@ -2085,6 +2088,13 @@ function _getBreadcrumbCombatant(combat) {
    whichever turn is currently ending, this self-resolves on the
    combatant's NEXT turn without any explicit clearing.
 
+   v2.44.1 FIX-B (TD-84): `turn` is an array index, and a mid-turn
+   initiative change moves it while the same combatant stays current. A
+   stamp that carries a `combatantId` is therefore compared by
+   {combatId, round, combatantId} (a combatant has one turn per round, so
+   combatant and round name the turn). A stamp written by v2.44.0, or one
+   whose `combatantId` is null, keeps the {combatId, round, turn} comparison.
+
    Implementation-trap note (named explicitly in the goal): a naive
    design decrements by calling back into `applyCondition('stunned',
    remaining)`, which would re-stamp `stunnedAppliedAt` on every internal
@@ -2102,11 +2112,14 @@ async function _decrementStunnedCountdown(actor, breadcrumb) {
   if (countdown <= 0) return;
 
   const appliedAt = actor.getFlag(MODULE_ID, 'stunnedAppliedAt') ?? null;
+  const _stampNamesCombatant = typeof appliedAt?.combatantId === 'string' && appliedAt.combatantId !== '';
   const sameTurn = !!(
     appliedAt && breadcrumb &&
     appliedAt.combatId === breadcrumb.combatId &&
     appliedAt.round === breadcrumb.round &&
-    appliedAt.turn === breadcrumb.turn
+    (_stampNamesCombatant
+      ? appliedAt.combatantId === breadcrumb.combatantId
+      : appliedAt.turn === breadcrumb.turn)
   );
 
   if (sameTurn) {

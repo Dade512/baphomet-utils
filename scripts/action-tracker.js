@@ -790,6 +790,11 @@ function _getButtonPosition() {
   catch { return 'bottom-right'; }
 }
 
+// v2.44.1 FIX-A: a saved `conditionLocked` is trusted only when it is a whole number from 0 to 3.
+function _isSavedConditionLock(v) {
+  return Number.isInteger(v) && v >= 0 && v <= 3;
+}
+
 function _initState(combatantId) {
   // Hydrate from the shared combatant flag if it exists (cross-client reload support).
   // getFlag is synchronous — reads from the document's in-memory data.
@@ -834,12 +839,17 @@ function _initState(combatantId) {
   const offHandUsed = _obIsCurrent ? (Number(ob.used) || 0) : 0;
   const offSeq      = Number(ob?.seq) || 0;
 
+  // v2.44.1 FIX-A (TD-81 / P1-05): the turn start's condition lock rides in the pip flag, so a
+  // reload (or a GM joining) hydrates it instead of resetting it to 0. A flag written before
+  // 2.44.1 carries no number and hydrates 0, as before.
+  const savedLock = _isSavedConditionLock(saved?.conditionLocked) ? saved.conditionLocked : 0;
+
   pipState.set(combatantId, {
     actions:         (saved?.actions  && saved.actions.length  === 3) ? [...saved.actions]  : [true, true, true],
     reaction:        (saved?.reaction && saved.reaction.length === 1)  ? [...saved.reaction] : [true],
     combatReflex:    reflexCount > 0,
     reflexPip,
-    conditionLocked: 0,
+    conditionLocked: savedLock,
     bonusManual,
     bonusAuto,
     bonusPip,
@@ -935,6 +945,7 @@ function _writePipFlag(combatantId) {
     actions:      [...state.actions],
     reaction:     [...state.reaction],
     reflexPip:    [...state.reflexPip],
+    conditionLocked: Number(state.conditionLocked) || 0, // v2.44.1 FIX-A: the turn's lock survives a reload
     bonusManual:  !!state.bonusManual,
     bonusAuto:    !!state.bonusAuto,
     bonusPip:     Array.isArray(state.bonusPip) ? [...state.bonusPip] : [],
@@ -1365,6 +1376,16 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   if (!state) return;
 
   const { advanced, seq } = _advanceTurnSeq(combat, combatantId);
+
+  // v2.44.1 FIX-A (TD-81): a turn this client ADOPTS (after a GM reload, or a GM joining
+  // mid-combat) still has its proactive breadcrumb stamped, and an already-caught-up render
+  // refreshes a stale `turn` index after a reorder. The end-of-turn decrements read that
+  // breadcrumb; with none they skip the whole turn. Only the stamp lives above the early
+  // return; everything else a turn start sets up stays below it.
+  if (combatantId === combat.combatant?.id) {
+    _stampActiveCombatantBreadcrumb(combat, combatantId);
+  }
+
   if (!advanced) return; // adopted, or already reset for this turn instance — no genuine new turn-start
 
   // Mark first to prevent any chance of re-entry (defensive).
@@ -4628,7 +4649,19 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — Combat Reflexes (jade) pip spent`);
       } else {
         const r = game.baphometActions?.spendReaction?.(own.id);
-        if (wantsCR && !r) ui.notifications?.warn?.(`${actor.name}: no Combat Reflexes AoO or reaction left.`);
+        if (!r) {
+          // v2.44.1 FIX-C (TD-82, Q1): every off-turn attack that finds no Reaction warns once,
+          // naming Stunned while the creature is stunned. Warn only: nothing is charged and the
+          // roll is never blocked (the GM decides).
+          const _stunnedNow = _baphStunnedCountdownOf(actor) > 0;
+          ui.notifications?.warn?.(wantsCR
+            ? (_stunnedNow
+              ? `${actor.name}: Stunned — no Combat Reflexes AoO or reaction left — not charged. The GM decides.`
+              : `${actor.name}: no Combat Reflexes AoO or reaction left.`)
+            : (_stunnedNow
+              ? `${actor.name}: Stunned — no reaction available for ${item.name} — not charged. The GM decides.`
+              : `${actor.name}: no Reaction available for ${item.name} — not charged.`));
+        }
         _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — ${wantsCR ? 'no jade → ' : ''}reaction ${r ? 'spent' : 'unavailable'} (no action, no swing)`);
       }
     }
@@ -5576,7 +5609,9 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   const saved = combatant.getFlag('baphomet-utils', PIP_FLAG_KEY);
   if (!saved) return;
 
-  // Hydrate pip arrays only; conditionLocked is derived from actor, not stored.
+  // Hydrate the pip arrays and (v2.44.1) the turn start's condition lock, which now rides in the
+  // flag. A flag without a whole number from 0 to 3 leaves the local lock unchanged.
+  if (_isSavedConditionLock(saved.conditionLocked))                    existing.conditionLocked = saved.conditionLocked;
   if (Array.isArray(saved.actions)   && saved.actions.length   === 3) existing.actions   = [...saved.actions];
   if (Array.isArray(saved.reaction)  && saved.reaction.length  === 1) existing.reaction  = [...saved.reaction];
   if (Array.isArray(saved.reflexPip))                                  existing.reflexPip = [...saved.reflexPip];
