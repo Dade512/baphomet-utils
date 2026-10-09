@@ -778,9 +778,9 @@ function _currentActiveCombatantId(combat) {
 // pf1PreAttackRoll (candidate penalty), promoted to `_mapPendingConfirm` at the
 // threat's pf1AttackRoll iff roll.isCrit; the confirmation's pf1PreAttackRoll reuses
 // that penalty and does NOT advance the swing counter (canon: same swing's MAP).
-// Both keyed by actor.id; cleared on turn reset.
-const _mapArmCrit = new Map();        // actorId -> { penalty }
-const _mapPendingConfirm = new Map(); // actorId -> { penalty }
+// Both keyed by actor.uuid (v2.44.2, TD-85: unlinked twins share an id); cleared on turn reset.
+const _mapArmCrit = new Map();        // actorUuid -> { penalty }
+const _mapPendingConfirm = new Map(); // actorUuid -> { penalty }
 
 // Resolve the floating Action Spend Panel / task-widget corner from the
 // 'moveButtonPosition' client setting, defaulting to 'bottom-right' (and on any
@@ -921,7 +921,7 @@ function _resetState(combatantId) {
   // revert captured BEFORE this call must never clobber it (Trap 3).
   state.pipSeq = (Number(state.pipSeq) || 0) + 1;
   const _rsActor = game.combat?.combatants?.get(combatantId)?.actor;
-  if (_rsActor) { _mapArmCrit.delete(_rsActor.id); _mapPendingConfirm.delete(_rsActor.id); }
+  if (_rsActor) { _mapArmCrit.delete(_rsActor.uuid); _mapPendingConfirm.delete(_rsActor.uuid); }
   // _resetForSeq is metadata, not pip state — DO NOT touch it here.
   // It's owned by the render-based reset logic (_maybeResetForNewTurn).
 }
@@ -1417,8 +1417,8 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   state.routineClosed = null;
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1; // bump so this reset write supersedes prior values
-  const _resetActorId = combatant?.actor?.id;
-  if (_resetActorId) { _mapArmCrit.delete(_resetActorId); _mapPendingConfirm.delete(_resetActorId); }
+  const _resetActorUuid = combatant?.actor?.uuid;
+  if (_resetActorUuid) { _mapArmCrit.delete(_resetActorUuid); _mapPendingConfirm.delete(_resetActorUuid); }
 
   if (combatant?.actor) {
     _applyConditionLocks(combatantId, combatant.actor);
@@ -2610,11 +2610,17 @@ function _getActiveCombatant() {
  * spend pips for a combatant who hasn't taken their turn yet.
  *
  * Returns null if: combat is inactive, no actor provided,
- * the active combatant has no actor, or the actor IDs do not match.
+ * the active combatant has no actor, or the actor uuids do not match.
  *
- * NOTE: Matches on actor.id. Unlinked tokens use synthetic actors
- * not in game.actors — verify behavior with unlinked tokens before
- * enabling automation in v2.10.0. A token-ID fallback may be needed.
+ * Matches by actor.uuid (v2.44.2, TD-85): an unlinked token's synthetic
+ * actor has the same id as every twin but its own uuid, so id would hand
+ * Goblin 1's turn to Goblin 2's roll. A linked actor with two combatants
+ * (two tokens of one PC) shares one uuid too; there the token CONTROLLED
+ * on this client decides when exactly one of that actor's tokens is
+ * (_selectedCombatantAmong). With none or several selected the current
+ * combatant counts when it is one of the actor's (today's on-turn
+ * behaviour). actionUse.token is never consulted: pf1 does not take it
+ * from control (v2.44.2 L-4).
  *
  * @param {Actor} actor
  * @returns {Combatant|null}
@@ -2623,7 +2629,45 @@ function _getActiveCombatantForActor(actor) {
   if (!actor || !game.combat) return null;
   const active = game.combat.combatant;
   if (!active?.actor) return null;
-  return active.actor.id === actor.id ? active : null;
+  const mine = _combatantsForActor(actor);
+  if (mine.length > 1) {
+    const picked = _selectedCombatantAmong(mine);
+    if (picked) return picked.id === active.id ? active : null;
+  }
+  return active.actor.uuid === actor.uuid ? active : null;
+}
+
+/**
+ * Every combatant of the current combat that belongs to this actor, in
+ * turn order. A combatant belongs to an actor when
+ * combatant.actor?.uuid === actor.uuid (v2.44.2, TD-85) — never by id,
+ * which unlinked twins share. [] when there is no actor or no combat.
+ *
+ * @param {Actor} actor
+ * @returns {Combatant[]}
+ */
+function _combatantsForActor(actor) {
+  if (!actor?.uuid || !game.combat) return [];
+  const turns = Array.from(game.combat.turns ?? []);
+  const list = turns.length ? turns : Array.from(game.combat.combatants ?? []);
+  return list.filter((c) => c.actor?.uuid === actor.uuid);
+}
+
+/**
+ * Of an actor's combatants, the one whose token is controlled on THIS
+ * client — only when exactly one of them is; none or several controlled
+ * means "no selection" (null). A missing canvas or tokens layer is no
+ * selection. Never warns (v2.44.2, Q1).
+ *
+ * @param {Combatant[]} list
+ * @returns {Combatant|null}
+ */
+function _selectedCombatantAmong(list) {
+  const controlled = Array.from(canvas?.tokens?.controlled ?? []);
+  if (!controlled.length) return null;
+  const ids = new Set(controlled.map((t) => t.id ?? t.document?.id));
+  const hits = list.filter((c) => ids.has(c.tokenId));
+  return hits.length === 1 ? hits[0] : null;
 }
 
 /**
@@ -2752,9 +2796,8 @@ function _onBuffChangeForHasteBonus(item) {
   if (!settingOn) return;
   const actor = item.actor ?? item.parent;
   if (!actor) return;
-  const combatant = _getCombatantForActor(actor);
-  if (!combatant) return;
-  _reconcileBonusAutoFor(combatant.id);
+  // v2.44.2 (TD-85): a buff on a linked actor is on all its tokens — reconcile every combatant.
+  for (const combatant of _combatantsForActor(actor)) _reconcileBonusAutoFor(combatant.id);
 }
 Hooks.on('createItem', (item) => _onBuffChangeForHasteBonus(item));
 Hooks.on('updateItem', (item) => _onBuffChangeForHasteBonus(item));
@@ -3550,7 +3593,7 @@ const _actionUseSpendDedupeSet = new Set();
 function _isActionUseSpendDuped(actor, actionUse) {
   const actId  = actionUse?.action?.id ?? actionUse?.action?.data?.id ?? '?';
   const itemId = actionUse?.item?.id ?? actionUse?.item?.name ?? '?';
-  const key = `${actor?.id}:${itemId}:${actId}`;
+  const key = `${actor?.uuid}:${itemId}:${actId}`;
   if (_actionUseSpendDedupeSet.has(key)) return true;
   _actionUseSpendDedupeSet.add(key);
   setTimeout(() => _actionUseSpendDedupeSet.delete(key), 500);
@@ -3561,10 +3604,21 @@ function _isActionUseSpendDuped(actor, actionUse) {
  * Find the combatant for an actor in the current combat, whether or
  * not it is the active combatant. Used for off-turn reaction spends.
  * (_getActiveCombatantForActor returns only the *active* match.)
+ *
+ * Matches by actor.uuid (v2.44.2, TD-85). With more than one combatant
+ * for the actor, the one whose token is the single controlled token
+ * decides; with no single selection nothing is charged (null) and the
+ * GM is warned once. It never guesses.
  */
 function _getCombatantForActor(actor) {
   if (!actor || !game.combat) return null;
-  return game.combat.combatants.find((c) => c.actor?.id === actor.id) ?? null;
+  const mine = _combatantsForActor(actor); // matched by combatant.actor.uuid
+  if (!mine.length) return null;
+  if (mine.length === 1) return mine[0];
+  const picked = _selectedCombatantAmong(mine);
+  if (picked) return picked;
+  ui.notifications?.warn?.(`${actor.name}: two combatants share this actor and no single one of its tokens is selected — nothing charged. The GM decides.`);
+  return null;
 }
 
 // FIX-1 (GOAL_v2.37.6, D-1/D-2/D-3): the nine chained casting-time -> action-cost
@@ -4188,16 +4242,16 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
 
     // Crit-confirmation guard: a confirmation pre reuses the threat swing's MAP and does NOT
     // advance the counter (canon: same swing's MAP). Armed at the threat's pf1AttackRoll below.
-    const pending = _mapPendingConfirm.get(actor.id);
+    const pending = _mapPendingConfirm.get(actor.uuid);
     if (pending) {
-      _mapPendingConfirm.delete(actor.id);
+      _mapPendingConfirm.delete(actor.uuid);
       if (pending.penalty < 0) {
         rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + pending.penalty);
       }
       return; // confirmation roll — do NOT advance
     }
 
-    _mapArmCrit.delete(actor.id); // never carry an arm across rolls
+    _mapArmCrit.delete(actor.uuid); // never carry an arm across rolls
     const activeCombatant = _getActiveCombatantForActor(actor);
 
     // FIX-3 (GOAL_v2.38.1, D-3/TD-59): a Cleave follow-up takes no part in a routine — tested
@@ -4231,7 +4285,7 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
             // crit arm is set with penalty 0, so a confirmation roll inside the routine neither
             // advances the count nor takes a penalty (the existing guard above does the rest).
             routineState.swingsTaken = (Number(routineState.swingsTaken) || 0) + 1;
-            _mapArmCrit.set(actor.id, { penalty: 0 });
+            _mapArmCrit.set(actor.uuid, { penalty: 0 });
             return;
           }
           // FIX-2/D3 (canon :133): this item already completed its routine this turn (closed by
@@ -4243,7 +4297,7 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
             rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + routinePenalty);
           }
           routineState.swingsTaken = (Number(routineState.swingsTaken) || 0) + 1;
-          _mapArmCrit.set(actor.id, { penalty: routinePenalty });
+          _mapArmCrit.set(actor.uuid, { penalty: routinePenalty });
           return;
         }
       }
@@ -4260,7 +4314,7 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
       rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + penalty); // additive; stacks with TWF
     }
     state.swingsTaken = (Number(state.swingsTaken) || 0) + 1; // advance: this swing is now counted
-    _mapArmCrit.set(actor.id, { penalty });                   // candidate; promoted at atk iff crit threat
+    _mapArmCrit.set(actor.uuid, { penalty });                 // candidate; promoted at atk iff crit threat
   } catch (e) {
     _debugLog('MAP pf1PreAttackRoll error: ' + e.message);
   }
@@ -4274,10 +4328,10 @@ Hooks.on('pf1AttackRoll', (action, roll) => {
     if (!game.settings.get(AT_MODULE_ID, 'mapTracking')) return;
     const actor = action?.actor ?? action?.item?.actor ?? action?.parent?.actor;
     if (!actor) return;
-    const armed = _mapArmCrit.get(actor.id);
-    _mapArmCrit.delete(actor.id);
+    const armed = _mapArmCrit.get(actor.uuid);
+    _mapArmCrit.delete(actor.uuid);
     if (armed && roll?.isCrit === true) {
-      _mapPendingConfirm.set(actor.id, { penalty: armed.penalty });
+      _mapPendingConfirm.set(actor.uuid, { penalty: armed.penalty });
     }
   } catch (e) {
     _debugLog('MAP pf1AttackRoll (crit-arm) error: ' + e.message);
@@ -4550,10 +4604,11 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // on every path, scoped to THIS actor. The dialog checkbox sets a one-shot
     // globalThis.baphometAoO; consuming it here (not only in the off-turn branch)
     // stops a stale on-turn tick from surviving to a later off-turn attack, and the
-    // actor-id scope means actor A's attack never eats actor B's open-dialog flag.
+    // actor scope (v2.44.2: by uuid, so unlinked twins are told apart) means actor A's
+    // attack never eats actor B's open-dialog flag.
     const _aooFlag = globalThis.baphometAoO;
-    const aooIntentForActor = !!(_aooFlag?.active && _aooFlag.actorId === actor.id);
-    if (_aooFlag && _aooFlag.actorId === actor.id) globalThis.baphometAoO = null;
+    const aooIntentForActor = !!(_aooFlag?.active && _aooFlag.actorUuid === actor.uuid);
+    if (_aooFlag && _aooFlag.actorUuid === actor.uuid) globalThis.baphometAoO = null;
 
     if (activeCombatant) {
       // On-turn: spend the action cost (all-or-nothing).
@@ -6608,13 +6663,13 @@ function _diagHandleAttackDialogRender(app, element) {
     const hasCR = !!aooActor?.items?.some(i => i.type === 'feat' && (i.name || '').toLowerCase().includes('combat reflexes'));
     const flagsGroup = root.querySelector('.form-group.stacked.flags');
     if (hasCR && flagsGroup && !flagsGroup.querySelector('.baph-aoo-cb')) {
-      globalThis.baphometAoO = { active: false, actorId: aooActor.id };  // reset stale flag per dialog open
+      globalThis.baphometAoO = { active: false, actorId: aooActor.id, actorUuid: aooActor.uuid };  // reset stale flag per dialog open
       const label = document.createElement('label');
       label.classList.add('checkbox');
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.classList.add('baph-aoo-cb');
-      cb.addEventListener('change', () => { globalThis.baphometAoO = { active: cb.checked, actorId: aooActor.id }; });
+      cb.addEventListener('change', () => { globalThis.baphometAoO = { active: cb.checked, actorId: aooActor.id, actorUuid: aooActor.uuid }; });
       label.appendChild(cb);
       label.appendChild(document.createTextNode(' AoO (Combat Reflexes)'));
       flagsGroup.appendChild(label);

@@ -2169,17 +2169,20 @@ Hooks.on('updateActor', (actor, changes) => {
   const combat = game.combat;
   if (!combat) return;
 
-  // Find the combatant for this actor in the active combat.
-  const combatant = combat.combatants.find(c => c.actor?.id === actor.id);
-  if (!combatant) return;
+  // Every combatant of this actor in the active combat (v2.44.2, TD-85 / P1-08): matched by
+  // uuid, so unlinked twins stay apart and a linked actor's second token is refreshed too.
+  const matched = combat.combatants.filter(c => c.actor?.uuid === actor.uuid);
+  if (!matched.length) return;
 
-  // Rebuild this combatant's cache entry from the now-authoritative actor data.
+  // Rebuild each combatant's cache entry from the now-authoritative actor data.
   const freshTasks = actor.getFlag(BAPH_TASK_MODULE_ID, BAPH_TASK_FLAG_PUBLIC) ?? {};
-  _baphTaskUpdateCache(combatant.id, freshTasks);
+  for (const combatant of matched) {
+    _baphTaskUpdateCache(combatant.id, freshTasks);
 
-  _baphTaskDebugLog(
-    `updateActor: task cache refreshed for "${combatant.name}" — re-rendering widget`
-  );
+    _baphTaskDebugLog(
+      `updateActor: task cache refreshed for "${combatant.name}" — re-rendering widget`
+    );
+  }
 
   // Re-render floating UI on all clients so the widget shows fresh progress.
   _renderActionPanel();
