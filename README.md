@@ -3,16 +3,16 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.44.1 — *Whose Turn It Was*
+**Current Version:** 2.44.2 — *Which Goblin Swung*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**A GM reload in the middle of a turn no longer loses that turn.** The end-of-turn countdowns (Stunned, Frightened, Fleeing)
-still run, and an action lost to Slowed or Stunned stays lost. A stun applied after an initiative change no longer
-pays down the same turn it landed, and an attack made off-turn by a creature with no Reaction left now warns the GM,
-naming Stunned while the creature is stunned. See the [changelog](#changelog) for the full entry.
+**Two tokens of the same monster are now charged separately.** Each goblin's attacks, skill rolls and Reactions come out of
+its own row, so the second goblin no longer spends the first one's action. Two tokens of one character in the same
+combat are told apart by which token is selected; off-turn, with neither or both selected, nothing is charged and the
+GM is warned. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -183,6 +183,25 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.44.2 — Which Goblin Swung
+
+The action tracker found "the combatant for this actor" by the actor's id, which every token of an unlinked monster
+shares. In a fight with duplicate monsters the wrong one paid. This release finds each combatant by its own identity.
+
+- **Two tokens of the same monster are charged separately.** A goblin's attack, skill roll or Reaction now comes out of
+  that goblin's own row, not the first matching goblin's. A stunned goblin's sibling is no longer charged against the
+  stunned one's pips.
+- **Haste lands on the right token.** A Haste buff on one goblin grants that goblin's bonus pip and not its twin's; a
+  buff on a character reaches every token of that character in the combat.
+- **The task widget refreshes the right token.** A task update on one goblin no longer lands on its twin, and a
+  character's second token is refreshed with the first.
+- **The Multiple Attack Penalty crit confirmation and the attack-of-opportunity box follow the same rule.** One twin's
+  crit confirmation, an open AoO tick, and the 500 ms duplicate-use guard no longer collide with the other twin's.
+- **Two tokens of one character in the same combat are told apart by which token is selected.** The selected token pays.
+  Off-turn, with neither or both of that character's tokens selected, nothing is charged and the GM gets one warning
+  ("two combatants share this actor and no single one of its tokens is selected"). On the character's own turn with
+  no token selected, the current combatant pays, as before. No roll is ever blocked.
 
 ### v2.44.1 — Whose Turn It Was
 
