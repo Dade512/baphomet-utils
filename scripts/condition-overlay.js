@@ -2,6 +2,18 @@
    ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.9
    Applies PF2e-style conditions as PF1e system Buffs.
 
+   v2.45.0 Changes (GOAL_v2.45.0_ABILITY_CHECKS — "Every Roll That Uses It", TD-83):
+   - [FIX-1] Canon (rewritten 2026-10-06): a PF1 ability penalty reaches every roll that uses the
+     ability, so Clumsy, Enfeebled and Stupefied now reach ability checks. Clumsy writes ac / ref /
+     dexSkills / rattack / dexChecks; Enfeebled writes mattack / mwdamage / twdamage / strSkills /
+     carryStr / strChecks / cmd (and no longer fort); Stupefied writes will / dc / intSkills /
+     wisSkills / chaSkills / intChecks / wisChecks / chaChecks. `dexChecks` already reaches
+     initiative (live fact L-3), so Clumsy writes no `init`. Enfeebled's `cmd` lands on the first
+     prepare (L-2). Stupefied still writes nothing for attacks (Q2: P-3 kept). Existing buffs are
+     rebuilt by the v2.43.0 `refreshConditionChanges` at the first GM load; no new migration code.
+   - [FIX-2] The three cards name the new rolls (Dex ability checks and initiative; CMD and Str
+     ability checks, not Fortitude; Int-, Wis- and Cha-based ability checks).
+
    v2.43.0 Changes (GOAL_v2.43.0_CONDITION_CANON — "The Number on the Card"):
    - [FIX-1] Clumsy, Enfeebled and Stupefied write -X to the rolls canon names (CC:33-35, H:384-397)
      instead of lowering an ability score. None of the three writes an ability score, an ability
@@ -285,18 +297,23 @@ const CONDITIONS = {
     icon: 'icons/svg/daze.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to spell DCs, Will saves, and Int-, Wis- and Cha-based skill checks. An attack roll that uses a mental ability takes –X from the GM.',
+    description: '–X penalty to spell DCs, Will saves, Int-, Wis- and Cha-based skill checks, and Int-, Wis- and Cha-based ability checks. An attack roll that uses a mental ability takes –X from the GM.',
     autoDecrement: false,
     buildChanges(tier) {
       const v = String(-tier);
-      // v2.43.0 FIX-1 (P-3, P-4): -X to the rolls, never an ability score or an ability check. No
-      // PF1 attack roll uses a mental ability by default, so nothing is written for attacks.
+      // v2.45.0 FIX-1 (TD-83): -X to the rolls, never an ability score. `intChecks`, `wisChecks` and
+      // `chaChecks` add the three mental ability checks (canon: a PF1 ability penalty reaches every
+      // roll that uses the ability). No PF1 attack roll uses a mental ability by default, so nothing
+      // is written for attacks (Q2: P-3 kept, the GM applies it); no `allChecks`.
       return [
         { formula: v, operator: 'add', target: 'will',      modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'dc',        modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'intSkills', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'wisSkills', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'chaSkills', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'intChecks', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'wisChecks', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'chaChecks', modifier: 'penalty', priority: 0 },
       ];
     }
   },
@@ -306,11 +323,12 @@ const CONDITIONS = {
     icon: 'icons/svg/falling.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to AC (and CMD), Reflex saves, ranged and thrown attack rolls, and Dex-based skill checks. A finesse melee attack, and damage that uses Dexterity, take –X from the GM. Stacks with Off-Guard.',
+    description: '–X penalty to AC (and CMD), Reflex saves, ranged and thrown attack rolls, Dex-based skill checks, and Dex ability checks (initiative included). A finesse melee attack, and damage that uses Dexterity, take –X from the GM. Stacks with Off-Guard.',
     autoDecrement: false,
     buildChanges(tier) {
       const v = String(-tier);
-      // v2.43.0 FIX-1 (P-1, P-4, R-1): -X to the rolls, never `dex`, a `…Checks` target or initiative.
+      // v2.45.0 FIX-1 (TD-83): -X to the rolls, never `dex`. `dexChecks` adds Dex ability checks, and it
+      // already reaches initiative (live fact L-3), so there is no `init` change (it would land twice).
       // `ac` reaches CMD (FIX-10 supplies the second prepare), so there is no `cmd` change.
       // `rattack` alone covers a thrown attack: a thrown roll already adds both `rattack` and `tattack`
       // (SF-3, live fact supplied by Michael), so `tattack` is NOT written, to avoid lowering it twice.
@@ -319,6 +337,7 @@ const CONDITIONS = {
         { formula: v, operator: 'add', target: 'ref',       modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'dexSkills', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'rattack',   modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'dexChecks', modifier: 'penalty', priority: 0 },
       ];
     }
   },
@@ -328,11 +347,13 @@ const CONDITIONS = {
     icon: 'icons/svg/downgrade.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to melee attack rolls, combat maneuver checks, melee and thrown weapon damage, Fortitude saves, and Str-based skill checks; carrying capacity as if Strength were X lower. The –X also reaches a finesse melee attack; whether it should is the GM\'s call. A composite bow\'s Strength damage takes –X from the GM.',
+    description: '–X penalty to melee attack rolls, combat maneuver checks, CMD, melee and thrown weapon damage, Str-based skill checks, and Str ability checks; carrying capacity as if Strength were X lower. The –X also reaches a finesse melee attack; whether it should is the GM\'s call. A composite bow\'s Strength damage takes –X from the GM.',
     autoDecrement: false,
     buildChanges(tier) {
       const v = String(-tier);
-      // v2.43.0 FIX-1 (P-2, P-4): -X to the rolls, never `str`, a `…Checks` target or `allChecks`.
+      // v2.45.0 FIX-1 (TD-83): -X to the rolls, never `str` or `allChecks`. `strChecks` adds Str ability
+      // checks; `cmd` adds CMD and lands on the first prepare (live fact L-2). `fort` is gone: canon's
+      // Fortitude uses Constitution, so Enfeebled does not reach it.
       // `cmb`, `nattack` and `ndamage` are deliberately NOT written (live facts supplied by Michael,
       // read on dev with pf1 11.11): a real maneuver roll already adds `mattack` (SF-4), and `mattack`
       // and `mwdamage` already reach a natural attack and its damage (SF-5), so each would be lowered
@@ -341,9 +362,10 @@ const CONDITIONS = {
         { formula: v, operator: 'add', target: 'mattack',   modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'mwdamage',  modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'twdamage',  modifier: 'penalty', priority: 0 },
-        { formula: v, operator: 'add', target: 'fort',      modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'strSkills', modifier: 'penalty', priority: 0 },
         { formula: v, operator: 'add', target: 'carryStr',  modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'strChecks', modifier: 'penalty', priority: 0 },
+        { formula: v, operator: 'add', target: 'cmd',       modifier: 'penalty', priority: 0 },
       ];
     }
   },
