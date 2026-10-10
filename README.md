@@ -3,16 +3,16 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.44.2 — *Which Goblin Swung*
+**Current Version:** 2.45.0 — *Every Roll That Uses It*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Two tokens of the same monster are now charged separately.** Each goblin's attacks, skill rolls and Reactions come out of
-its own row, so the second goblin no longer spends the first one's action. Two tokens of one character in the same
-combat are told apart by which token is selected; off-turn, with neither or both selected, nothing is charged and the
-GM is warned. See the [changelog](#changelog) for the full entry.
+**Clumsy, Enfeebled and Stupefied now cost their penalty on ability checks too.** Clumsy 2 is −2 on Dexterity checks and
+on initiative; Enfeebled 2 is −2 on Strength checks and on CMD, and no longer touches Fortitude saves; Stupefied 2 is −2
+on Intelligence, Wisdom and Charisma checks. Conditions already on your characters are rebuilt quietly the first time the
+GM loads this version. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -184,6 +184,27 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 
 ## Changelog
 
+### v2.45.0 — Every Roll That Uses It
+
+Canon says a penalty to an ability reaches every roll that uses that ability. Clumsy, Enfeebled and Stupefied skipped
+the ability checks, and Enfeebled took its penalty on Fortitude, which uses Constitution. This release brings the three
+to canon.
+
+- **Clumsy X also costs −X on Dexterity ability checks and on initiative.** Initiative follows the Dexterity check, so
+  it is lowered once. AC, and through AC CMD, are unchanged.
+- **Enfeebled X also costs −X on Strength ability checks and on CMD, and no longer on Fortitude saves.** Fortitude
+  uses Constitution. Melee attacks and combat maneuvers, melee and thrown weapon damage, Str-based skills and carrying
+  capacity are unchanged.
+- **Stupefied X also costs −X on Intelligence, Wisdom and Charisma ability checks.** An attack roll that uses a
+  mental ability still takes −X from the GM, by hand; nothing is written for attacks.
+- **The three cards say so.** Each condition's card names the new rolls (Enfeebled's no longer names Fortitude).
+- **Different conditions still stack, each once.** Frightened's penalty on ability checks and initiative adds to
+  Clumsy's, Enfeebled's and Stupefied's.
+- **Existing conditions are rebuilt silently at the first GM load.** An Enfeebled buff written by 2.44.2 loses its
+  Fortitude penalty and gains the Strength-check and CMD penalties; nothing is posted to chat.
+- **Documentation.** The 2.44.2 entry below now says the shared-actor warning shows on the screen of whoever made the
+  attack, not on the GM's.
+
 ### v2.44.2 — Which Goblin Swung
 
 The action tracker found "the combatant for this actor" by the actor's id, which every token of an unlinked monster
@@ -199,7 +220,8 @@ shares. In a fight with duplicate monsters the wrong one paid. This release find
 - **The Multiple Attack Penalty crit confirmation and the attack-of-opportunity box follow the same rule.** One twin's
   crit confirmation, an open AoO tick, and the 500 ms duplicate-use guard no longer collide with the other twin's.
 - **Two tokens of one character in the same combat are told apart by which token is selected.** The selected token pays.
-  Off-turn, with neither or both of that character's tokens selected, nothing is charged and the GM gets one warning
+  Off-turn, with neither or both of that character's tokens selected, nothing is charged and one warning shows on the screen of whoever made the attack — the player's, for a
+  player's attack, not the GM's
   ("two combatants share this actor and no single one of its tokens is selected"). On the character's own turn with
   no token selected, the current combatant pays, as before. No roll is ever blocked.
 
