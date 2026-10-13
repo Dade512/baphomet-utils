@@ -95,6 +95,9 @@ function _detectNatResult(messageEl) {
   // Method 3: Check individual d20 die results in tooltip
   const dieResults = messageEl.querySelectorAll('.dice-rolls .roll.die.d20');
   for (const die of dieResults) {
+    // v2.45.1 FIX-7 (F-D-10): a dropped die (keep-high / keep-low) carries the
+    // class `discarded`; it never decided the roll, so it earns no label.
+    if (die.classList.contains('discarded')) continue;
     const val = parseInt(die.textContent?.trim(), 10);
     if (val === 20) return 'nat20';
     if (val === 1)  return 'nat1';

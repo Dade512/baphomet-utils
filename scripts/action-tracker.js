@@ -2809,6 +2809,14 @@ Hooks.on('deleteItem', (item) => _onBuffChangeForHasteBonus(item));
 function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   const state = _getState(combatantId);
   if (!state) return false;
+  // v2.45.1 FIX-6 (F-A-12 / F-B-06, F-A-14): a non-integer or negative count is
+  // refused on every client; a zero count is a successful no-op (no pip change,
+  // no flag write, no relay, no notification).
+  if (!Number.isInteger(count) || count < 0) {
+    console.warn(`${AT_MODULE_ID} | spendAction refused: count ${String(count)} is not a non-negative integer`);
+    return false;
+  }
+  if (count === 0) return true;
   const actor = game.combat?.combatants?.get(combatantId)?.actor;
   const incap = !!_readConditionActionLoss(actor).fullyIncapacitated;
   const normalAvail = state.actions.filter((a, i) => a && i >= state.conditionLocked).length;
@@ -5628,6 +5636,9 @@ Hooks.on('deleteCombat', () => {
   _removeTaskBuilderOverlay();
   _removeRequestTaskOverlay();
   _removeGMApprovalModal();
+  // v2.45.1 FIX-2 (F-D-03): release the approval slot a deleted combat left held,
+  // exactly as Approve and Reject do. No-op on an idle GM client.
+  if (game.user.isGM) _baphSignalNextGMRequest();
 });
 
 /* ----------------------------------------------------------
@@ -6186,6 +6197,18 @@ function _openGMApprovalModal(payload, validation, verifiedUserId) {
     event.preventDefault();
     event.stopPropagation();
 
+    // v2.45.1 FIX-3 (F-D-04, Q5): a request that has gone stale while the modal sat
+    // open is not approvable — GM-only notice, no initiateTask, no spend, no
+    // response to the player (the 60 s expiry already told them).
+    if (typeof _baphTaskRequestIsStale === 'function' && _baphTaskRequestIsStale(payload)) {
+      ui.notifications?.info?.(
+        `Skipped an expired task request from ${game.users.get(verifiedUserId)?.name ?? 'a player'}.`
+      );
+      _removeGMApprovalModal();
+      _baphSignalNextGMRequest();
+      return;
+    }
+
     // Re-validate at click time
     const combatant = game.combat?.combatants.get(payload.requestingCombatantId);
     if (!combatant) {
@@ -6278,7 +6301,7 @@ function _openGMApprovalModal(payload, validation, verifiedUserId) {
     await ChatMessage.create({
       content:
         `<p><strong>Task Request Declined.</strong></p>` +
-        `<p>Your <em>${skillLabel}</em> task request was declined by the GM. ` +
+        `<p>Your <em>${foundry.utils.escapeHTML(skillLabel)}</em> task request was declined by the GM. ` +
         `Try a different approach or wait for a better moment.</p>`,
       speaker: { alias: 'Baphomet Tasks' },
       whisper: requestingUser ? [requestingUser.id] : [],

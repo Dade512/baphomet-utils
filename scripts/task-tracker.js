@@ -1460,6 +1460,15 @@ async function _baphTaskResolve(combatantOrId, taskId) {
     return false;
   }
 
+  // v2.45.1 FIX-8 (F-D-06, Q2): a task whose hidden entry exists but carries no DC
+  // cannot be adjudicated — refuse before any spend or roll. A missing hidden
+  // entry keeps its own path (BAPH_TASK_MISSING_HIDDEN_WARNING in adjudicate).
+  if (game.user.isGM && _baphTaskHasHiddenEntry(taskId)
+      && _baphTaskReadHiddenAll()[taskId]?.metadataHidden?.dc == null) {
+    ui.notifications?.warn?.('This task has no DC — set one before resolving.');
+    return false;
+  }
+
   // Gate 10: action available (v2.36.0 split — GOAL_v2.36.0_TASK_AUTH.md row C4).
   // GM-direct: spend now, locally, as before. Non-GM: read-only pre-check only —
   // the GM's socketlib handler (_baphSocketResolveAdjudicate) performs the actual,
@@ -2204,6 +2213,16 @@ Hooks.on('updateActor', (actor, changes) => {
 const _baphGMRequestQueue = [];
 let _baphGMApprovalActive = false;
 
+// v2.45.1 FIX-3 (F-D-04): one staleness rule for a player task request, used on
+// arrival, at dequeue and at the GM's Approve click. 70 s is the buffer above
+// the player's 60 s expiry.
+const BAPH_TASK_REQUEST_STALE_MS = 70000;
+
+function _baphTaskRequestIsStale(payload) {
+  const ts = payload?.timestamp;
+  return !!ts && Date.now() - ts > BAPH_TASK_REQUEST_STALE_MS;
+}
+
 /**
  * Validate and dispatch a baphTaskRequest payload received from a player.
  * If a modal is already active, the request is queued for sequential handling.
@@ -2246,7 +2265,7 @@ function _baphHandleTaskRequest(payload) {
   }
 
   // Reject stale requests older than 70 s (buffer above the 60 s player timeout)
-  if (timestamp && Date.now() - timestamp > 70000) {
+  if (_baphTaskRequestIsStale(payload)) {
     _baphTaskDebugLog(`baphTaskRequest ${requestId} expired on arrival — ignoring`);
     return false;
   }
@@ -2361,13 +2380,26 @@ function _baphShowGMApprovalForPayload(payload, verifiedUserId) {
  */
 function _baphProcessNextGMRequest() {
   _baphGMApprovalActive = false;
-  if (_baphGMRequestQueue.length === 0) return;
-  const next = _baphGMRequestQueue.shift();
-  _baphTaskDebugLog(
-    `baphTaskRequest: dequeuing next request ${next.payload.requestId} ` +
-    `(${_baphGMRequestQueue.length} remaining)`
-  );
-  _baphShowGMApprovalForPayload(next.payload, next.verifiedUserId);
+  while (_baphGMRequestQueue.length > 0) {
+    const next = _baphGMRequestQueue.shift();
+    // v2.45.1 FIX-3 (F-D-04, Q5): a request that went stale while queued is
+    // skipped with a GM-only notice; the player was already told by the 60 s expiry.
+    if (_baphTaskRequestIsStale(next.payload)) {
+      const skippedName = game.users.get(next.verifiedUserId)?.name ?? 'a player';
+      _baphTaskDebugLog(
+        `baphTaskRequest: skipping stale queued request ${next.payload?.requestId} ` +
+        `(${_baphGMRequestQueue.length} remaining)`
+      );
+      ui.notifications?.info?.(`Skipped an expired task request from ${skippedName}.`);
+      continue;
+    }
+    _baphTaskDebugLog(
+      `baphTaskRequest: dequeuing next request ${next.payload.requestId} ` +
+      `(${_baphGMRequestQueue.length} remaining)`
+    );
+    _baphShowGMApprovalForPayload(next.payload, next.verifiedUserId);
+    return;
+  }
 }
 
 /* ============================================================
@@ -2530,6 +2562,14 @@ async function _baphSocketResolveAdjudicate(payload = {}) {
   _baphResolveInFlight.add(resolveReservationKey);
 
   try {
+    // v2.45.1 FIX-8 (F-D-06, Q2): same no-DC refusal as the GM-direct path — no
+    // spend, no round stamp. A missing hidden entry keeps today's path.
+    if (_baphTaskHasHiddenEntry(taskId)
+        && _baphTaskReadHiddenAll()[taskId]?.metadataHidden?.dc == null) {
+      ui.notifications?.warn?.('This task has no DC — set one before resolving.');
+      return;
+    }
+
     // Gate 10 replay (mirror _baphTaskResolve's Gate 10) — the GM performs the
     // actual spend, authoritatively. This is the only spend for a player-
     // triggered resolve.
