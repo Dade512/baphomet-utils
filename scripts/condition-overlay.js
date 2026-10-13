@@ -1351,8 +1351,10 @@ function _refreshPanel(element) {
   const panel = container.querySelector('.baph-condition-panel');
   if (!panel) return;
 
-  const actorId = container.dataset.actorId;
-  const actor = game.actors.get(actorId);
+  // v2.45.1 FIX-4 (F-C-01): resolve by uuid, never game.actors.get(actor.id) — an
+  // unlinked token's synthetic actor shares its world actor's id (v2.44.2 rule).
+  const resolved = fromUuidSync(container.dataset.actorUuid);
+  const actor = resolved instanceof foundry.documents.TokenDocument ? resolved.actor : resolved;
   if (!actor) return;
 
   setTimeout(() => {
@@ -1976,7 +1978,7 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
 
     panelContainer = document.createElement('div');
     panelContainer.classList.add('baph-condition-container');
-    panelContainer.dataset.actorId = actor.id;
+    panelContainer.dataset.actorUuid = actor.uuid;
     panelContainer.appendChild(_buildConditionPanel(actor));
 
     const btnRect = btn.getBoundingClientRect();

@@ -170,7 +170,8 @@ class BaphometWeatherConfig extends foundry.applications.api.ApplicationV2 {
 
     const toggleBtn = document.createElement('button');
     toggleBtn.type = 'button';
-    toggleBtn.classList.add('baph-wui-toggle', autoPost ? 'active' : '');
+    toggleBtn.classList.add('baph-wui-toggle');
+    toggleBtn.classList.toggle('active', autoPost);
     toggleBtn.dataset.action = 'toggleAutoPost';
     toggleBtn.textContent = autoPost ? 'ON' : 'OFF';
     toggleBtn.title = autoPost ? 'Auto-posting enabled' : 'Auto-posting disabled';

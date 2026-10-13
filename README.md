@@ -3,16 +3,16 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.45.0 — *Every Roll That Uses It*
+**Current Version:** 2.45.1 — *Odd Jobs*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Clumsy, Enfeebled and Stupefied now cost their penalty on ability checks too.** Clumsy 2 is −2 on Dexterity checks and
-on initiative; Enfeebled 2 is −2 on Strength checks and on CMD, and no longer touches Fortitude saves; Stupefied 2 is −2
-on Intelligence, Wisdom and Charisma checks. Conditions already on your characters are rebuilt quietly the first time the
-GM loads this version. See the [changelog](#changelog) for the full entry.
+**Eight small repairs, no rules changed.** The weather panel opens and toggles with auto-post off; deleting a combat no
+longer jams player task requests, and expired requests are skipped instead of approved; the condition panel on a monster
+token stays on that token; dropped d20s no longer get crit labels; and a task with no DC is refused instead of rolled
+over and over. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -183,6 +183,29 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.45.1 — Odd Jobs
+
+A patch of plumbing fixes from the v2.45.0 QA sweep. Each one restores behaviour the module already claims; no rules
+change.
+
+- **The Weather Config panel works with auto-post off (F-D-02).** It used to fail to open, and its own toggle broke it.
+  The toggle now reads OFF, flips to ON and back, and the panel stays open.
+- **Deleting a combat no longer jams player task requests (F-D-03).** Delete a combat while the GM's approval window was
+  open and every later request was held back until the GM reloaded. The window's slot is now released.
+- **Expired task requests are skipped (F-D-04).** A request older than 70 seconds is no longer shown from the queue or
+  approvable, and spends nothing. The GM gets a short notice; the player is not messaged a second time.
+- **The HUD condition panel on a monster token stays on that token (F-C-01).** From the second click on, it used to
+  write to the world actor, so every token of that monster inherited the condition.
+- **A declined task request shows its skill as plain text (F-D-05).** The *Task Request Declined* whisper no longer
+  lets a player-typed skill name become markup.
+- **Spending zero actions is quiet (F-A-12 / F-B-06).** A player's zero-cost spend no longer shows "The GM could not
+  process this action — it was undone." It does nothing and sends nothing.
+- **A fractional or negative action count is refused (F-A-14).** `spendAction` with 1.5, '2' or a negative count now
+  returns false on every client and spends nothing.
+- **Dropped d20s no longer get crit labels (F-D-10).** A discarded 20 or 1 on a keep-high or keep-low roll is ignored.
+- **A task with no DC cannot be resolved (F-D-06).** Resolving it spends no action and rolls nothing; the GM is told to
+  set a DC first.
 
 ### v2.45.0 — Every Roll That Uses It
 
