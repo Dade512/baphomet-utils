@@ -3,16 +3,17 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.45.1 — *Odd Jobs*
+**Current Version:** 2.45.2 — *Errata*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Eight small repairs, no rules changed.** The weather panel opens and toggles with auto-post off; deleting a combat no
-longer jams player task requests, and expired requests are skipped instead of approved; the condition panel on a monster
-token stays on that token; dropped d20s no longer get crit labels; and a task with no DC is refused instead of rolled
-over and over. See the [changelog](#changelog) for the full entry.
+**Rules corrections and card text.** Blinded is Off-Guard only (it no longer costs a further −4 AC); Clumsy, Enfeebled
+and Stupefied go to 6; a critical threat that is never confirmed no longer swallows the next attack's Multiple Attack
+Penalty; Climb, Swim and Fly no longer cost a second action; the GM hears about an action taken with none left; and the
+condition cards state the 2026-10-11 canon and say what the tracker leaves to the GM. See the [changelog](#changelog)
+for the full entry.
 
 ---
 
@@ -183,6 +184,41 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.45.2 — Errata
+
+Eleven items from the v2.45.0 QA sweep, plus TD-71 (e): one wrong number at the table, Blinded brought to canon, and
+card text. Nothing structural.
+
+- **A crit threat that is never confirmed no longer swallows the next attack's MAP (F-B-02).** A maneuver's natural 20,
+  a ×1 weapon, or any threat with the pf1 "confirm critical hits" setting off used to arm the confirmation, so the
+  creature's next attack, even an attack of opportunity on another turn, was taken as the confirmation at the old MAP
+  and not counted. Only a threat pf1 will actually confirm arms it now.
+- **Blinded is Off-Guard only (canon, 2026-10-11).** The Ledger Blinded buff no longer writes −4 AC; with Off-Guard it
+  cost −6, and now costs −2 AC and CMD. Existing Blinded buffs are rebuilt at the first GM load. The card says what the
+  GM applies by hand (miss chance, terrain, Perception).
+- **Clumsy, Enfeebled and Stupefied go to 6 (A6).** Asked for more than 6, the tracker applies 6 and whispers the GM to
+  apply the rest by hand. Frightened and Sickened still stop at 4.
+- **Fleeing takes the longest panicked source (F-C-11, TD-71 (e)).** Panicked buffs of different lengths give the
+  longest, and a Panicked condition toggle with a duration sets Fleeing's length too.
+- **Fatigued never downgrades Exhausted (F-C-04).** A Ledger Fatigued on an Exhausted creature is refused with a
+  notice and writes nothing, so Exhausted stays on.
+- **Card and label text (F-C-13).** "1 action" and "lose 3 actions … the other 4 carry over" read correctly; the
+  Confused, Deafened and Stunned texts and the Stunned registry label are corrected; a resolved Panicked card names
+  Panicked once; and an unmarked Frightened's kept-removal log gives the right reason.
+- **The condition cards state canon (new-ruling cards).** Blinded, Nauseated, Fatigued, Frightened and Fleeing say what
+  the table rules, and tag every rule the tracker does not yet enforce "(not yet enforced — the GM applies it)" or
+  "table-adjudicated, not enforced". Off-Guard's card is unchanged. Nauseated's dead −20 attack change is gone; no
+  numbers move.
+- **An action taken with none left tells the GM (F-A-18).** On a creature's turn at 0 actions, an attack, spell,
+  consumable or auto-spent skill charges nothing, shows a warning on the acting screen, and whispers the GM a card to
+  rule on, including voiding the result. The roll is never blocked.
+- **Climb, Swim and Fly stop auto-charging (F-A-19).** They are no longer in the default Skill Auto-Spend Allowlist, and
+  the first GM load removes them from the world's list once. Acrobatics, Stealth and Ride still charge 1.
+- **Skill warnings show on screen, with Craft added (F-A-17).** Craft joins Diplomacy, Disguise, Linguistics and
+  Profession as "cannot be used in combat"; the warning and the Disable Device notice now show on screen and appear
+  even with skill auto-spend off.
+- **Documentation.** This entry, the version header and the blurb above.
 
 ### v2.45.1 — Odd Jobs
 

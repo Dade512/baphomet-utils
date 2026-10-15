@@ -3045,6 +3045,9 @@ const SKILL_ACTION_COSTS = {
   kpl: 1,  // Knowledge Planes
   kre: 1,  // Knowledge Religion
   // FIX-2 (GOAL_v2.37.7, D-2) — nine flat keys, all cost 1.
+  // v2.45.2 FIX-8 (F-A-19): clm / swm / fly are no longer in the skillAutoAllowlist default (a Climb
+  // after a Move was charging a second action). They keep their cost here, so a GM who adds a
+  // token back to the list gets it charged at 1, as before.
   clm: 1,  // Climb
   swm: 1,  // Swim
   fly: 1,  // Fly
@@ -3069,6 +3072,7 @@ const SKILL_ACTION_COSTS = {
 // live handler below warns once per actor+skill (client-local, in-memory —
 // the RULE-2 dedupe pattern), charges nothing, and never blocks the roll.
 const _COMBAT_FORBIDDEN_SKILLS = {
+  crf: 'Craft',   // v2.45.2 FIX-9 (F-A-17)
   dip: 'Diplomacy',
   dis: 'Disguise',
   lin: 'Linguistics',
@@ -3433,19 +3437,42 @@ function _isSkillSpendDuped(actor, skillKey, chatMessage) {
   return false;
 }
 
+// v2.45.2 FIX-7 (F-A-18, canon H:42): a creature with no actions left that uses something anyway.
+// Runs on the acting client: a toast there, plus one GM-whispered card (no buttons, never
+// "resolved"). Nothing is charged and the roll is never blocked; the GM rules, including voiding
+// the result. Module-private: no new public API.
+function _baphOutOfActions(actor, label) {
+  try {
+    ui.notifications?.warn?.(`${actor.name}: no actions left for ${label} — not charged. The GM rules.`);
+    const safeActorName = foundry.utils.escapeHTML(actor.name);
+    const safeLabel = foundry.utils.escapeHTML(String(label));
+    ChatMessage.create({
+      content:
+        `<p><strong>Out of actions:</strong> ${safeActorName} used ${safeLabel} with no actions left `
+        + `— not charged. The GM rules, including voiding the result.</p>`,
+      speaker: ChatMessage.getSpeaker({ actor }),
+      whisper: ChatMessage.getWhisperRecipients('GM'),
+      flags: { 'baphomet-utils': { outOfActions: true } }
+    }).catch((err) => {
+      console.warn(
+        `baphomet-utils | out-of-actions card failed to post for "${actor.name}" — `
+        + `handled here, not thrown. Nothing was charged and the roll was never blocked.`, err
+      );
+    });
+  } catch (e) {
+    console.warn('baphomet-utils | out-of-actions notice failed:', e);
+  }
+}
+
 /**
  * Live pf1ActorRollSkill handler.
  * Spends action pips for the active combatant when all gates pass.
  * Every decision path emits a _debugLog line.
+ * v2.45.2 FIX-9 (F-A-17): the Disable Device toast and the "cannot be used in combat" warning
+ * run BEFORE the autoSkillSpend gate, so they show with auto-spend off (nothing is spent then).
  */
 Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
-  // Gate 1: setting enabled
-  if (!game.settings.get(AT_MODULE_ID, 'autoSkillSpend')) {
-    _debugLog(`skill auto-spend: setting disabled — no spend for ${skillKey}`);
-    return;
-  }
-
-  // Gate 2: active combat
+  // Gate 1: active combat
   if (!game.combat?.active) {
     _debugLog(`skill auto-spend: no active combat — no spend for ${skillKey}`);
     return;
@@ -3500,17 +3527,23 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
   // FIX-2 (GOAL_v2.37.7, D-2): "cannot be used in combat" skills — not
   // allowlisted, not costed. Warn once per actor+skill (client-local,
   // in-memory dedupe), charge nothing, never block the roll.
+  // v2.45.2 FIX-9: the warning is on screen (ui.notifications), still once per actor+skill per
+  // client load, and runs before the autoSkillSpend gate below.
   if (Object.prototype.hasOwnProperty.call(_COMBAT_FORBIDDEN_SKILLS, baseSkillKey)) {
     const forbidWarnKey = `${actor.id}:${baseSkillKey}`;
     if (!_combatForbiddenSkillWarned.has(forbidWarnKey)) {
       _combatForbiddenSkillWarned.add(forbidWarnKey);
-      console.warn(
-        `baphomet-utils | skill auto-spend: actor "${actor.name}" rolled `
-        + `${_COMBAT_FORBIDDEN_SKILLS[baseSkillKey]} — this skill cannot be `
-        + `used in combat (PF1.5 table rule). Not charged; roll is not blocked.`
+      ui.notifications?.warn?.(
+        `${actor.name}: ${_COMBAT_FORBIDDEN_SKILLS[baseSkillKey]} cannot be used in combat (PF1.5 table rule) — not charged.`
       );
     }
     _debugLog(`skill auto-spend: "${baseSkillKey}" cannot be used in combat — no spend, warned`);
+    return;
+  }
+
+  // Gate 2: setting enabled (v2.45.2 FIX-9: moved after the two warnings above)
+  if (!game.settings.get(AT_MODULE_ID, 'autoSkillSpend')) {
+    _debugLog(`skill auto-spend: setting disabled — no spend for ${skillKey}`);
     return;
   }
 
@@ -3556,6 +3589,9 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
     // _spendActionForCombatant already logged the reason (insufficient actions
     // or API not ready).
     _debugLog(`skill auto-spend: failed — spend blocked or insufficient actions for ${actor.name} [${skillKey}], needed ${cost}`);
+    // v2.45.2 FIX-7 (F-A-18): a refused skill spend tells the acting client and the GM.
+    const _skillCfgName = globalThis.pf1?.config?.skills?.[baseSkillKey];
+    _baphOutOfActions(actor, (typeof _skillCfgName === 'string' && _skillCfgName) ? _skillCfgName : baseSkillKey);
     return;
   }
 
@@ -4338,7 +4374,14 @@ Hooks.on('pf1AttackRoll', (action, roll) => {
     if (!actor) return;
     const armed = _mapArmCrit.get(actor.uuid);
     _mapArmCrit.delete(actor.uuid);
-    if (armed && roll?.isCrit === true) {
+    // v2.45.2 FIX-1 (F-B-02): promote the stash only when pf1 will actually roll a confirmation
+    // (pf1 chat-attack.mjs: not a combat maneuver, critMult > 1, world setting pf1.critConfirm on).
+    // An unconfirmed threat (a maneuver's natural 20, a x1 weapon, critConfirm off) never arms it,
+    // so the creature's next attack is taken on its own MAP instead of being read as a confirmation.
+    if (armed && roll?.isCrit === true
+        && action?.isCombatManeuver !== true
+        && (Number(action?.ability?.critMult ?? 1) || 1) > 1
+        && game.settings.get('pf1', 'critConfirm') === true) {
       _mapPendingConfirm.set(actor.uuid, { penalty: armed.penalty });
     }
   } catch (e) {
@@ -4653,7 +4696,8 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         _debugLog(`auto-spend: spent ${cost} action(s) for "${actor.name}" [${item.type}: ${item.name}]`);
       } else {
         _debugLog(`auto-spend: insufficient actions (${cost} needed) for "${actor.name}" [${item.name}]`);
-        ui.notifications?.warn?.(`${actor.name}: not enough actions for ${item.name} (needs ${cost}).`);
+        // v2.45.2 FIX-7 (F-A-18): toast plus one flagged GM whisper; nothing charged, roll not blocked.
+        _baphOutOfActions(actor, item.name);
       }
       // NOTE: swing-counter / MAP tracking deferred (GOAL_v2.22.0 Out of Scope).
     } else {
