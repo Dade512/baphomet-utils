@@ -383,11 +383,11 @@ Hooks.once('init', () => {
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'skillAutoAllowlist', {
     name: 'Skill Auto-Spend Allowlist',
-    hint: 'Comma-separated PF1 skill keys for automatic action spending. Confirmed keys: acr, blf, int, ste, hea, umd, slt, kar, kdu, ken, kge, khi, klo, kna, kno, kpl, kre, clm, swm, fly, esc, rid, han, sen, spl, sur, prf, lor, art. Any keys added manually must be verified against the pf1ActorRollSkill hook payload.',
+    hint: 'Comma-separated PF1 skill keys for automatic action spending. Confirmed keys: acr, blf, int, ste, hea, umd, slt, kar, kdu, ken, kge, khi, klo, kna, kno, kpl, kre, esc, rid, han, sen, spl, sur, prf, lor, art. Any keys added manually must be verified against the pf1ActorRollSkill hook payload.',
     scope: 'world',
     config: true,
     type: String,
-    default: 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre,clm,swm,fly,esc,rid,han,sen,spl,sur,prf,lor,art'
+    default: 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kna,kno,kpl,kre,esc,rid,han,sen,spl,sur,prf,lor,art'
   });
 
   /* ----------------------------------------------------------
@@ -418,6 +418,13 @@ Hooks.once('init', () => {
   });
 
   game.settings.register(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377', {
+    scope: 'world',
+    config: false,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2452', {
     scope: 'world',
     config: false,
     type: Boolean,
@@ -675,23 +682,54 @@ const _V2377_ALLOWLIST = 'acr,blf,int,ste,hea,umd,slt,kar,kdu,ken,kge,khi,klo,kn
 Hooks.once('ready', async () => {
   if (!game.user.isGM) return;
 
-  if (game.settings.get(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377')) return;
+  // v2.45.2 FIX-8: the v2.37.7 step no longer returns out of the callback, so the v2.45.2 step below
+  // always runs after it has finished (migrated, flag already set, or customised list left alone).
+  if (!game.settings.get(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377')) {
+    const current = game.settings.get(SETTINGS_MODULE_ID, 'skillAutoAllowlist');
 
-  const current = game.settings.get(SETTINGS_MODULE_ID, 'skillAutoAllowlist');
+    if (current === _V2150_ALLOWLIST) {
+      await game.settings.set(SETTINGS_MODULE_ID, 'skillAutoAllowlist', _V2377_ALLOWLIST);
+      console.log(
+        `%c ${SETTINGS_MODULE_ID} | v2.37.7 migration: skillAutoAllowlist expanded with twelve confirmed skills (clm, swm, fly, esc, rid, han, sen, spl, sur, prf, lor, art) `,
+        'background: #6e2a22; color: #e8dfd0; font-weight: bold; padding: 2px 6px;'
+      );
+    } else {
+      console.log(
+        `${SETTINGS_MODULE_ID} | v2.37.7 migration: skillAutoAllowlist already customized or up-to-date — no change ("${current}")`
+      );
+    }
 
-  if (current === _V2150_ALLOWLIST) {
-    await game.settings.set(SETTINGS_MODULE_ID, 'skillAutoAllowlist', _V2377_ALLOWLIST);
-    console.log(
-      `%c ${SETTINGS_MODULE_ID} | v2.37.7 migration: skillAutoAllowlist expanded with twelve confirmed skills (clm, swm, fly, esc, rid, han, sen, spl, sur, prf, lor, art) `,
-      'background: #6e2a22; color: #e8dfd0; font-weight: bold; padding: 2px 6px;'
+    await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377', true);
+  }
+
+  /* --------------------------------------------------------
+     v2.45.2 MIGRATION — Climb, Swim and Fly stop auto-charging
+     (GOAL_v2.45.2 FIX-8, F-A-19, ruling 4, Q4)
+
+     Once, on the first GM ready after updating: removes clm, swm and fly from whatever
+     allowlist the world has (default or customised), keeping the order of the rest, and
+     writes the list back only if something was dropped. Logs what it removed, and sets
+     skillAllowlistMigrated2452 either way.
+     -------------------------------------------------------- */
+  if (game.settings.get(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2452')) return;
+
+  const list = game.settings.get(SETTINGS_MODULE_ID, 'skillAutoAllowlist') ?? '';
+  const tokens = String(list).split(',').map(s => s.trim());
+  const dropped = tokens.filter(k => k === 'clm' || k === 'swm' || k === 'fly');
+
+  if (dropped.length) {
+    const kept = tokens.filter(k => !(k === 'clm' || k === 'swm' || k === 'fly'));
+    await game.settings.set(SETTINGS_MODULE_ID, 'skillAutoAllowlist', kept.join(','));
+    console.info(
+      `${SETTINGS_MODULE_ID} | v2.45.2 migration: skillAutoAllowlist no longer auto-charges — removed ${dropped.join(', ')}`
     );
   } else {
-    console.log(
-      `${SETTINGS_MODULE_ID} | v2.37.7 migration: skillAutoAllowlist already customized or up-to-date — no change ("${current}")`
+    console.info(
+      `${SETTINGS_MODULE_ID} | v2.45.2 migration: skillAutoAllowlist held none of clm, swm, fly — no change`
     );
   }
 
-  await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2377', true);
+  await game.settings.set(SETTINGS_MODULE_ID, 'skillAllowlistMigrated2452', true);
 });
 
 /* ----------------------------------------------------------

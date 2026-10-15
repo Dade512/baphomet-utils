@@ -256,7 +256,7 @@ const CONDITIONS = {
     icon: 'icons/svg/terror.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to attack rolls, saving throws, skill checks, and ability checks (initiative included). Decreases by 1 at end of your turn.',
+    description: '–X penalty to attack rolls, saving throws, skill checks, and ability checks (initiative included). Decreases by 1 at end of your turn. A value gained during your own turn first decreases at the end of your next turn, and a Frightened from a source with its own duration ends when that source ends (not yet enforced — the GM applies it).',
     autoDecrement: true,
     buildChanges(tier) {
       const v = String(-tier);
@@ -295,7 +295,7 @@ const CONDITIONS = {
   stupefied: {
     name: 'Stupefied',
     icon: 'icons/svg/daze.svg',
-    maxTier: 4,
+    maxTier: 6, // v2.45.2 (A6): the tracker cap is 6; above it the value is clamped and the GM is whispered
     type: 'tiered',
     description: '–X penalty to spell DCs, Will saves, Int-, Wis- and Cha-based skill checks, and Int-, Wis- and Cha-based ability checks. An attack roll that uses a mental ability takes –X from the GM.',
     autoDecrement: false,
@@ -321,7 +321,7 @@ const CONDITIONS = {
   clumsy: {
     name: 'Clumsy',
     icon: 'icons/svg/falling.svg',
-    maxTier: 4,
+    maxTier: 6, // v2.45.2 (A6)
     type: 'tiered',
     description: '–X penalty to AC (and CMD), Reflex saves, ranged and thrown attack rolls, Dex-based skill checks, and Dex ability checks (initiative included). A finesse melee attack, and damage that uses Dexterity, take –X from the GM. Stacks with Off-Guard.',
     autoDecrement: false,
@@ -345,7 +345,7 @@ const CONDITIONS = {
   enfeebled: {
     name: 'Enfeebled',
     icon: 'icons/svg/downgrade.svg',
-    maxTier: 4,
+    maxTier: 6, // v2.45.2 (A6)
     type: 'tiered',
     description: '–X penalty to melee attack rolls, combat maneuver checks, CMD, melee and thrown weapon damage, Str-based skill checks, and Str ability checks; carrying capacity as if Strength were X lower. The –X also reaches a finesse melee attack; whether it should is the GM\'s call. A composite bow\'s Strength damage takes –X from the GM.',
     autoDecrement: false,
@@ -379,7 +379,7 @@ const CONDITIONS = {
     maxTier: 12,
     uncapped: true,
     type: 'tiered',
-    description: 'You lose X actions on your next turn. If Stunned exceeds 3, excess carries over to subsequent turns. While Stunned is above 0 you are also Off-Guard and cannot take reactions.',
+    description: 'You lose X actions on your next turn. While Stunned is above 0 you are also Off-Guard and cannot take reactions.',
     // v2.34.0: `autoDecrement: true` still marks this as an auto-decrementing condition for
     // the token HUD's "↓" indicator, but `_handleAutoDecrement` skips 'stunned' in its
     // generic per-tier -1 loop — the real decrement is the bespoke, multi-action
@@ -430,7 +430,7 @@ const CONDITIONS = {
     icon: 'icons/svg/door-exit.svg',
     maxTier: 10,
     type: 'tiered',
-    description: 'On your turn you must spend your actions moving away from the source of your fear by the most direct safe route. You cannot willingly move toward it or take offensive actions against it (you may defend yourself if cornered). You provoke attacks of opportunity normally — Fleeing is not the Withdraw action. Decreases by 1 at end of your turn.',
+    description: 'On your turn you must spend your actions moving away from the source of your fear by the most direct safe route. You cannot willingly move toward it or take offensive actions against it (you may defend yourself if cornered). You provoke attacks of opportunity normally — Fleeing is not the Withdraw action. Decreases by 1 at end of your turn. A value gained during your own turn first decreases at the end of your next turn, and Fleeing ends when its source ends (not yet enforced — the GM applies it).',
     autoDecrement: true,
     buildChanges(_tier) {
       return [];
@@ -444,7 +444,7 @@ const CONDITIONS = {
     icon: 'icons/svg/unconscious.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'PF1 Fatigued: –2 to Strength and Dexterity (pf1\'s own Fatigued status applies them; this condition adds none of its own). Cannot run or charge. Anything that would fatigue you again makes you exhausted. Ends after 8 hours of complete rest.',
+    description: 'PF1 Fatigued: –2 to Strength and Dexterity (pf1\'s own Fatigued status applies them; this condition adds none of its own). Cannot run or charge. Fatigue on fatigue: anything that would normally fatigue you again makes you Exhausted unless the source says otherwise — the GM decides per source (table-adjudicated, not enforced). On an Exhausted creature a Ledger Fatigued adds nothing and is not applied. Ends after 8 hours of complete rest.',
     autoDecrement: false,
     buildChanges() {
       // v2.43.0 FIX-3 (R-2): pf1's own `fatigued` status carries -2 Str / -2 Dex and is the only
@@ -480,33 +480,12 @@ const CONDITIONS = {
     icon: 'icons/svg/blind.svg',
     maxTier: 1,
     type: 'toggle',
-    // v2.37.3 FIX-1: three unenforced claims removed — 'Loses DEX bonus to AC' (canon v1.6
-    // replaced this with Off-Guard), 'total concealment (50% miss chance)' (appears in neither
-    // authority), and the attack-penalty implication that backed the now-deleted 'allAttack'
-    // change below. FIX-6/RULED-4 also drops the flat Perception-penalty claim — canon grants a
-    // sight-based auto-fail, not a flat -4. Sentence order below is deliberate: the auto-fail
-    // clause precedes the '-4' AC figure so no dead numeric substring reads as a Perception
-    // penalty claim.
-    description: 'Cannot see. Automatically fails sight-based Perception checks (table-adjudicated, not enforced). –4 penalty to AC (plus Off-Guard, net –6 AC total). Half speed and attackers\' +2 to hit are table-adjudicated, not enforced.',
+    // v2.45.2 (canon 2026-10-11): Blinded writes no changes; its only enforced effect is Off-Guard,
+    // derived by _syncOffGuard; the −4 AC (v1.5 rule) is retired; the rebuild drops it from existing buffs.
+    description: 'Cannot see. Off-Guard (–2 AC and CMD, precision target), applied while Blinded lasts. Your attacks have a 50% miss chance — every creature has total concealment against you — so you must pinpoint a target\'s square to attack it and cannot make attacks of opportunity against it. All terrain is difficult terrain for you, so you cannot take a 5-foot step. Sight-based checks automatically fail; other Perception checks take –4. Blind-Fight rerolls the miss chance once in melee and ignores the difficult terrain. All of this but Off-Guard is table-adjudicated, not enforced. Overrides Dazzled (not yet enforced — the GM applies it).',
     autoDecrement: false,
     buildChanges() {
-      return [
-        // v2.37.3 FIX-1 / RULED-1: '-2 allAttack' DELETED here, not repointed. Probe 1/2
-        // (GOAL_v2.37.3_CONDITION_CANON.md, live against Foundry 13.351 / pf1 11.11) confirmed
-        // 'allAttack' resolves to ZERO pf1 ItemChange data paths on both character and npc actors
-        // — this change has NEVER applied, on any actor, ever. Per the STANDING PRINCIPLE, a dead
-        // key is not silently repointed to a live one: doing so would activate a -2 attack
-        // penalty that has never once applied at the table. OPEN CANON QUESTION, docketed and
-        // NOT resolved here (see "Follow-up docket items" in GOAL_v2.37.3_CONDITION_CANON.md):
-        // whether Blinded should carry an enforced attack penalty at all. Do not re-derive this
-        // change from the card's old description text and re-introduce it.
-        { formula: '-4', operator: 'add', target: 'ac', modifier: 'penalty', priority: 0 },
-        // v2.37.3 FIX-6 / RULED-4: '-4 skills.per' DELETED here, not repointed to 'skill.per'.
-        // Canon (master :656, :815) grants a SENSE-SPECIFIC auto-fail on sight-based Perception,
-        // not a flat -4 — a flat -4 would also wrongly penalise this creature's hearing-based
-        // Perception. 'skills.per' was independently dead (probe 2: 0 data paths), so this moves
-        // no numbers. The auto-fail itself is table-adjudicated; no ItemChange expresses it.
-      ];
+      return [];
     }
   },
 
@@ -521,7 +500,7 @@ const CONDITIONS = {
     // v2.43.0 made the card every caster's, so it now reads "(every caster)".
     // Sentence order is deliberate: the auto-fail clause precedes the '-4' initiative figure so
     // no dead numeric substring reads as a Perception penalty claim.
-    description: 'Cannot hear. Automatically fails hearing-based Perception checks (table-adjudicated, not enforced). pf1\'s own Deaf status applies the –4 penalty to initiative (this buff adds none of its own). 20% spell failure chance on spells with verbal components (every caster).',
+    description: 'Cannot hear. Automatically fails hearing-based Perception checks (table-adjudicated, not enforced). pf1\'s own Deaf status applies the –4 penalty to initiative (this buff adds none of its own). 20% spell failure chance on spells with verbal components, every caster (table-adjudicated, not enforced).',
     autoDecrement: false,
     buildChanges() {
       // v2.41.0 FIX-4 (D-2, P-5): the module's `-4 init` is RETIRED — pf1's own `deaf` status
@@ -544,12 +523,12 @@ const CONDITIONS = {
     icon: 'icons/svg/acid.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'You lose 1 action at the start of your turn (2 actions remain, as Slowed 1). None of your remaining actions may be used to attack or to cast a spell; you may move, reposition, withdraw, drink a potion, or take other non-offensive actions.',
+    description: 'You lose 1 action at the start of your turn (2 actions remain, as Slowed 1). None of your remaining actions may be used to attack or to cast a spell; you may move, reposition, withdraw, drink a potion, or take other non-offensive actions (table-adjudicated, not enforced). You also cannot use your Reaction (not yet enforced — the GM applies it).',
     autoDecrement: false,
     buildChanges() {
-      return [
-        { formula: '-20', operator: 'add', target: 'allAttack', modifier: 'penalty', priority: 0 },
-      ];
+      // v2.45.2 (Q8): the `-20 allAttack` change is deleted; v2.37.3's probe found `allAttack` resolves to
+      // no pf1 path, so it never applied; no numbers move and the rebuild drops it from existing buffs.
+      return [];
     }
   },
 
@@ -558,7 +537,7 @@ const CONDITIONS = {
     icon: 'icons/svg/daze.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'Acts randomly each round: 01–25 act normally, 26–50 babble incoherently, 51–75 deal 1d8+STR to self, 76–100 attack nearest creature. Cannot make attacks of opportunity.',
+    description: 'Acts randomly each round: 01–25 act normally, 26–50 babble incoherently, 51–75 deal 1d8+STR to self, 76–100 attack nearest creature. Cannot make attacks of opportunity against a creature it is not already attacking (table-adjudicated, not enforced).',
     autoDecrement: false,
     buildChanges() {
       return [];
@@ -959,6 +938,9 @@ const _LEDGER_PF1_STATUS = Object.freeze({ paralyzed: 'paralyzed', deafened: 'de
 async function _ledgerSetsPf1Status(actor, condKey) {
   const status = _LEDGER_PF1_STATUS[condKey];
   if (!status) return;
+  // v2.45.2 FIX-5 (F-C-04, P14): pf1 turns Fatigued-on-Exhausted into a downgrade (Exhausted removed). A Ledger
+  // Fatigued never writes pf1's status over an Exhausted creature: no pf1 write and no setPf1Status flag.
+  if (condKey === 'fatigued' && actor.statuses?.has('exhausted')) return;
   if (actor.statuses?.has(status)) return;
   await actor.setCondition(status, true);
   const buff = _findExistingBuff(actor, condKey);
@@ -1000,10 +982,43 @@ async function _syncStunLock(actor) {
    makes that second prepare happen. Strictly increasing so two stamps in one millisecond still diff.
    ---------------------------------------------------------- */
 
+// v2.45.2 FIX-6 (F-C-13): the ONE card-text helper — _conditionCardHtml, the create branch and
+// _postConditionChat all use it. A toggle condition's text is the catalog description verbatim. A tiered
+// one substitutes –X and X as before, writes "1 action" (singular) where the text says "X actions" at
+// tier 1, and gives Stunned above 3 its split (3 now, the rest carried at 3 per turn).
+function _conditionCardText(cond, tier) {
+  if (cond.type !== 'tiered') return cond.description;
+  let text = cond.description;
+  if (cond === CONDITIONS.stunned && tier > 3) {
+    const rest = tier - 3;
+    text = text.replace('You lose X actions on your next turn.',
+      `You lose 3 actions on your next turn; the other ${rest} ${rest === 1 ? 'carries' : 'carry'} over to the turns after, 3 per turn.`);
+  }
+  return text
+    .replace(/\bX actions\b/g, tier === 1 ? '1 action' : `${tier} actions`)
+    .replace(/–X/g, `–${tier}`)
+    .replace(/\bX\b/g, String(tier));
+}
+
 function _conditionCardHtml(cond, tier) {
   return cond.type === 'tiered'
-    ? `<p><strong>${cond.name} ${tier}:</strong> ${cond.description.replace(/–X/g, `–${tier}`).replace(/\bX\b/g, String(tier))}</p>`
-    : `<p><strong>${cond.name}:</strong> ${cond.description}</p>`;
+    ? `<p><strong>${cond.name} ${tier}:</strong> ${_conditionCardText(cond, tier)}</p>`
+    : `<p><strong>${cond.name}:</strong> ${_conditionCardText(cond, tier)}</p>`;
+}
+
+// v2.45.2 FIX-3 (A6): the three conditions whose tracker cap is 6. Asked for more, applyCondition clamps
+// and whispers the GM once (flag conditionCapped). Frightened and Sickened clamp at 4 silently.
+const _CAP_WHISPER_KEYS = Object.freeze(['clumsy', 'enfeebled', 'stupefied']);
+
+async function _postConditionCapWhisper(actor, cond, asked) {
+  try {
+    await _baphGmWhisper(
+      `<p><strong>${foundry.utils.escapeHTML(actor.name)}</strong>: ${cond.name} ${asked} was asked; the tracker caps at ${cond.maxTier}, so ${cond.name} ${cond.maxTier} was applied. Apply the rest by hand.</p>`,
+      'conditionCapped'
+    );
+  } catch (err) {
+    console.warn(`${MODULE_ID} | cap whisper failed for ${actor?.name ?? 'unknown actor'}`, err);
+  }
 }
 
 async function _stampChangesAt(buff) {
@@ -1015,6 +1030,7 @@ async function applyCondition(actor, condKey, tier) {
   if (!actor || !CONDITIONS[condKey]) return;
 
   const cond = CONDITIONS[condKey];
+  const asked = Math.floor(Number(tier));
   // v2.44.0 FIX-1 (R-2): an `uncapped` condition (Stunned) takes any whole number >= 1 as written —
   // `maxTier` is only its panel's button range. Every other condition keeps the clamp.
   tier = cond.uncapped
@@ -1022,6 +1038,17 @@ async function applyCondition(actor, condKey, tier) {
     : Math.clamp(tier, 0, cond.maxTier);
 
   if (tier === 0) return removeCondition(actor, condKey);
+
+  // v2.45.2 FIX-3: asked for more than the cap on one of the three capped conditions — clamped above, the GM is
+  // whispered once after the apply (none for a tier at or below the cap, none for any other condition).
+  const capWhisper = _CAP_WHISPER_KEYS.includes(condKey) && Number.isFinite(asked) && asked > cond.maxTier;
+
+  // v2.45.2 FIX-5 (F-C-04, Q6): a Ledger Fatigued on an Exhausted creature adds nothing — pf1 would turn it into a
+  // downgrade. Before any buff write: a notice, no buff, no chat line, no pf1 write. Tier 0 (removal) is above.
+  if (condKey === 'fatigued' && actor.statuses?.has('exhausted')) {
+    ui.notifications?.info?.(`${actor.name} is already Exhausted — Fatigued adds nothing.`);
+    return;
+  }
 
   // v2.37.3 FIX-5: Off-Guard is fully helper-managed. This branch does NOT create/update the
   // buff Item — it only sets the force-on override flag and delegates to `_syncOffGuard`, the
@@ -1055,9 +1082,7 @@ async function applyCondition(actor, condKey, tier) {
   } else {
     const changes = cond.buildChanges(tier);
 
-    const descHtml = cond.type === 'tiered'
-      ? `<p><strong>${cond.name} ${tier}:</strong> ${cond.description.replace(/–X/g, `–${tier}`).replace(/\bX\b/g, String(tier))}</p>`
-      : `<p><strong>${cond.name}:</strong> ${cond.description}</p>`;
+    const descHtml = _conditionCardHtml(cond, tier); // v2.45.2 FIX-6: one card-text helper
 
     const [created] = await actor.createEmbeddedDocuments('Item', [{
       img: cond.icon,
@@ -1110,6 +1135,7 @@ async function applyCondition(actor, condKey, tier) {
   }
 
   _postConditionChat(actor, cond, tier, 'apply');
+  if (capWhisper) await _postConditionCapWhisper(actor, cond, asked);
 
   // v2.37.3 FIX-5: 'blinded'/'stunned'/'paralyzed' are the three Off-Guard SOURCE conditions —
   // resync the derived buff after any external (re)application of one of them. Placed after the
@@ -1203,7 +1229,7 @@ function _postConditionChat(actor, cond, tier, action) {
       ${safeActorName} — ${label}
     </div>
     ${!isRemove ? `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); color: var(--baph-text-secondary, #8a919d); font-size: 12px; margin-top: 2px;">
-      ${cond.description.replace(/–X/g, `–${tier}`).replace(/\bX\b/g, String(tier))}
+      ${_conditionCardText(cond, tier)}
     </div>` : ''}`,
     speaker: ChatMessage.getSpeaker({ actor })
   });
@@ -1381,7 +1407,7 @@ const _BAPH_NEUTRALIZED_LABELS = Object.freeze({
   frightened: 'Frightened → Frightened 2 (Ledger)',
   panicked: 'Panicked → Frightened 3 + Fleeing (Ledger)',
   sickened: 'Sickened → Sickened 2 (Ledger)',
-  stunned: 'Stunned → Stunned 1 (Ledger)',
+  stunned: 'Stunned → Stunned 3 per round (Ledger)',
   blind: 'Blind → Blinded (Ledger)',
 });
 
@@ -2517,19 +2543,37 @@ function _translatorStunnedTier(actor) {
 }
 
 // FIX-5 (R-2, P-f): the tier of a row's `also` write. Fleeing matches the default (3), except when the
-// status's source is an ACTIVE pf1 buff with a finite duration: then it is
-// Math.ceil(remaining / CONFIG.time.roundTime), clamped to 1-10 (the clamp is a tracker limit, P-f).
-// `remaining` is in seconds — read from the buff's own seconds-type ActiveEffect (`duration.remaining`)
-// only (v2.44.0 FIX-2: a pf1 dice duration is re-rolled by reading it from the item, so the item is never
-// asked). An expired (remaining <= 0) or durationless effect gives the default.
+// status has a source with a finite duration: then it is the LONGEST of them, Math.ceil(remaining /
+// CONFIG.time.roundTime), clamped to 1-10 (the clamp is a tracker limit, P-f). v2.45.2 FIX-4 (F-C-11,
+// TD-71 (e)): every source counts, the way _translatorStunnedTier reads them — each ACTIVE pf1 buff whose
+// `system.conditions` lists the status, and each non-disabled ActiveEffect on the actor itself carrying the
+// status with `flags.pf1.autoDelete` true (pf1's condition toggle). `remaining` is in seconds, read from
+// the source's own seconds-type ActiveEffect only (v2.44.0 FIX-2: a pf1 dice duration is re-rolled by
+// reading it from the item, so the item is never asked). An expired or durationless source has no
+// duration; with none that does, or a round time that is not positive, the default applies.
 function _translatorAlsoTier(actor, status, also) {
-  const buff = actor.items.find(i =>
-    i.type === 'buff' && i.system?.active && Array.from(i.system?.conditions ?? []).includes(status)
-  );
-  const seconds = buff ? _translatorBuffSeconds(buff) : null;
   const round = Number(CONFIG.time?.roundTime);
-  if (seconds === null || !(round > 0)) return also.tier;
-  return Math.clamp(Math.ceil(seconds / round), 1, 10);
+  if (!(round > 0)) return also.tier;
+  let best = null;
+  const take = seconds => {
+    if (seconds === null) return;
+    const rounds = Math.ceil(seconds / round);
+    best = best === null ? rounds : Math.max(best, rounds);
+  };
+
+  for (const buff of Array.from(actor.items ?? [])) {
+    if (buff.type !== 'buff' || !buff.system?.active) continue;
+    if (!Array.from(buff.system?.conditions ?? []).includes(status)) continue;
+    take(_translatorBuffSeconds(buff));
+  }
+
+  for (const effect of Array.from(actor.effects ?? [])) {
+    if (effect.disabled || !effect.statuses?.has?.(status)) continue;
+    if (effect.getFlag('pf1', 'autoDelete') !== true) continue;
+    take(_translatorEffectSeconds(effect));
+  }
+
+  return best === null ? also.tier : Math.clamp(best, 1, 10);
 }
 
 // One effect's remaining seconds: a non-disabled seconds-type ActiveEffect whose `duration.remaining`
@@ -2669,15 +2713,20 @@ async function _translatorTranslate(actor, rec, had, now) {
       const buff = _findExistingBuff(actor, key);
       if (!buff) continue; // nothing left to decide for this key
 
+      // v2.45.2 FIX-6 (F-C-13 (g)): an unmarked buff logs not-translated first; a marked buff of a
+      // self-decrementing key keeps self-decrementing. What is kept or released is unchanged.
+      const mark = buff.getFlag(MODULE_ID, 'translatedFrom') ?? null;
+      if (!mark) {
+        rec.kept.push({ status, key, reason: 'not-translated' });
+        continue;
+      }
       if (_TRANSLATOR_SELF_DECREMENTING.includes(key)) {
         rec.kept.push({ status, key, reason: 'self-decrementing' });
         continue;
       }
 
-      const mark = buff.getFlag(MODULE_ID, 'translatedFrom') ?? null;
       let reason = null;
-      if (!mark) reason = 'not-translated';
-      else if ((buff.getFlag(MODULE_ID, 'tier') ?? 0) !== mark.tier) reason = 'tier-changed';
+      if ((buff.getFlag(MODULE_ID, 'tier') ?? 0) !== mark.tier) reason = 'tier-changed';
       else if (Object.entries(_TRANSLATION_TABLE).some(([id, row]) => row.key === key && stillOn.has(id))) reason = 'other-source';
 
       if (reason) {
@@ -2908,7 +2957,7 @@ async function _translatorApplyItems(actor, items) {
   const plan = _translatorPlan(actor, [...new Set(ids)]);
   const applied = [];
   for (const write of plan.writes) applied.push(await _translatorWrite(actor, write));
-  return { applied, skipped: plan.skipped, gone };
+  return { applied, skipped: plan.skipped, gone: [...new Set(gone)] }; // v2.45.2 FIX-6: each pf1 condition named once
 }
 
 async function _resolveTranslation(messageId, choice) {
