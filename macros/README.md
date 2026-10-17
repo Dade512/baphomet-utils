@@ -30,17 +30,24 @@ one-off tool, not a runtime-dependency macro, and stays out of scope for this re
   greater 3 swings per turn, via `game.baphometActions.reserveOffHandSwing`) has room — one
   off-hand bonus swing, applying the correct per-hand two-weapon penalty via
   `globalThis.baphometTWF`. MAP is applied automatically by the module (no macro-side work).
+  From v2.46.0 the intent carries `actorUuid` and each use rolls **one attack**.
 - `vital-strike.js` — **Vital Strike** (token-driven, feat-gated `/vital strike/i`). Sets
-  `globalThis.baphometVitalStrike = { actorId }` so `action-tracker.js` charges **2 actions**
+  `globalThis.baphometVitalStrike = { actorUuid }` so `action-tracker.js` charges **2 actions**
   and a `pf1PreDamageRoll` handler doubles the weapon's base damage dice (Strength, the PF1.5
-  ½-level flat bonus, and precision/sneak-attack damage are excluded).
+  ½-level flat bonus, and precision/sneak-attack damage are excluded). The use rolls **one
+  attack** at any base attack bonus (v2.46.0).
 - `charge.js` — **Charge** (token-driven, no feat gate — universal). Sets
-  `globalThis.baphometCharge = { actorId }` so `action-tracker.js` charges **2 actions** and a
-  `pf1PreAttackRoll` handler adds **+2 to the attack roll**; on a confirmed swing only, applies
-  a **−2 AC** buff Item that auto-expires at the start of the actor's next turn.
+  `globalThis.baphometCharge = { actorUuid }` so `action-tracker.js` charges **2 actions** and
+  sets pf1's own `charge` option, so the attack reads **`2[Charge]`** (v2.46.0; it replaces the
+  old `secondaryPenalty` +2) and rolls **one attack** at any base attack bonus; on a confirmed
+  swing only, applies a **−2 AC** buff Item that auto-expires at the start of the actor's next
+  turn.
 - `cleave.js` — **Cleave** (token-driven, post-kill, feat-gated `/cleave/i`). Sets
-  `globalThis.baphometCleave = { actorId }` so `action-tracker.js` **skips** the action spend
-  (0 actions, 0 swings, no MAP advance). "Dropped a foe" + adjacency are player-declared.
+  `globalThis.baphometCleave = { actorUuid }` so `action-tracker.js` **skips** the action spend
+  (0 actions, 0 swings, no MAP advance). From v2.46.0 it rolls **one attack**, carries the
+  dropping Strike's MAP, Power Attack and Charge +2, and is refused a second time in a round
+  (before any roll) unless the actor has a `/great\s*cleave/i` feat. "Dropped a foe" + adjacency
+  are player-declared.
 - `haste-bonus-action.js` — **GM-only** toggle. Calls
   `game.baphometActions.toggleBonusAction(combatant.id)` to grant/revoke the 4th "bonus action"
   pip (Haste) on the selected token's combatant. Independent of the "Auto-Grant Haste Bonus
@@ -100,6 +107,18 @@ name and the two weapon item IDs near the top, and create a separate in-world ma
    console.log(repo.trim() === world.trim() ? 'TWF macro: IN SYNC' : 'TWF macro: DRIFT — world ≠ repo');
    ```
 
+### v2.46.0 sync note — re-paste all four
+
+`vital-strike.js`, `charge.js`, `cleave.js` and `twf-tier-aware.js` changed in v2.46.0 (`SYNC_STAMP`
+`2026-10-15`): the intent names its actor by uuid (`{ actorUuid }`), the Cleave macro refuses a second
+Cleave in a round, and the module — not the macro — forces each declared use down to one attack. After
+updating the module, **re-paste each of the four world macros in place** (open the existing macro and
+replace its command; keep its id and owner), then run the drift check above for each. A world macro that
+is not re-pasted still gets its single attack and its cost from the module (the old `{ actorId }` intent
+is still honoured), but twin monsters are not told apart for it, and the old Cleave macro cannot refuse a
+second Cleave (the module warns once in the console). `twf-tier-aware.js` stays per-character: re-paste
+each copy and re-apply its actor name and weapon IDs.
+
 **Canonical repo source ≠ world-copy-drift elimination.** This folder (and its packaging into
 the release ZIP as of v2.32.0) guarantees there is exactly one authoritative repo source and
 that a fresh install has that source available. It does **not** mean the world copy and the
@@ -108,6 +127,10 @@ edit. A future deployment/sync mechanism is out of scope for this milestone.
 
 ## History
 
+- **v2.46.0** — `vital-strike.js`, `charge.js`, `cleave.js` and `twf-tier-aware.js`: intents carry
+  `actorUuid`; the module forces one attack per declared use; Charge uses pf1's own `2[Charge]`;
+  the Cleave macro refuses a second Cleave per round without Great Cleave. All four `SYNC_STAMP`s
+  set to `2026-10-15`; re-paste the world macros (see the v2.46.0 sync note above).
 - **v2.37.8** — Three new declare-macros added: `ready.js`, `total-defense.js`, `withdraw.js`
   (`GOAL_v2.37.8_DECLARE_AND_WITHDRAW` FIX-1/FIX-2/FIX-3). Ready and Total Defense spend
   through the public `game.baphometActions.spendAction`; Withdraw spends through the new
