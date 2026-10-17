@@ -3,17 +3,16 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.45.2 — *Errata*
+**Current Version:** 2.46.0 — *One Swing*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Rules corrections and card text.** Blinded is Off-Guard only (it no longer costs a further −4 AC); Clumsy, Enfeebled
-and Stupefied go to 6; a critical threat that is never confirmed no longer swallows the next attack's Multiple Attack
-Penalty; Climb, Swim and Fly no longer cost a second action; the GM hears about an action taken with none left; and the
-condition cards state the 2026-10-11 canon and say what the tracker leaves to the GM. See the [changelog](#changelog)
-for the full entry.
+**One attack each.** Vital Strike, Charge, Cleave and the Two-Weapon Fighting macro now make one attack apiece at any
+base attack bonus, as the rules price them. A Charge reads `+2[Charge]`; a Cleave takes the Multiple Attack Penalty,
+Power Attack and Charge bonus of the Strike that dropped the foe, and is once per round unless you have Great Cleave.
+The world macros need re-pasting. See the [changelog](#changelog) for the full entry.
 
 ---
 
@@ -184,6 +183,39 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.46.0 — One Swing
+
+Seven items from the v2.45.0 QA sweep and the Cleave canon of 2026-10-11, as clarified 2026-10-15. The big one: from
+base attack bonus 6, one Vital Strike used to make two doubled-dice attacks and one Two-Weapon Fighting press four
+attacks for one action. **Re-paste the four world macros** (Vital Strike, Charge, Cleave, Two-Weapon Fighting) from
+`macros/` after updating, in place, keeping each macro's id and owner; `macros/README.md` has the steps and the drift
+check.
+
+- **Vital Strike, Charge, Cleave and the Two-Weapon Fighting macro make one attack each (F-B-01).** The macros call
+  `item.use({ skipDialog: true })`, which rolls the whole attack list, base-attack-bonus iteratives included. The module
+  now forces a declared use down to a single attack at any base attack bonus; an undeclared use is untouched. A world
+  macro that has not been re-pasted still gets its single attack and its cost.
+- **A Cleave takes the dropping Strike's bonus (Cleave canon).** It carries that Strike's Multiple Attack Penalty, Power
+  Attack and a Charge's +2, and never counts as a swing; a Cleave before any attack this turn carries nothing. Bonuses
+  that depend on the target (flanking, favored enemy, bane, a prone target) are not carried: the Cleave macro skips the
+  dialog, so the player and GM recheck them against the new foe.
+- **A Cleave is once per round (Cleave canon).** From the start of the cleaver's turn to the start of its next, off-turn
+  Cleaves included; another creature's turn does not reopen it. The Cleave macro refuses a second before it rolls unless
+  the cleaver has Great Cleave. `game.baphometActions.cleaveState(actorUuid)` reads the count. The count is per client and
+  forgotten on a reload. A world Cleave macro not yet re-pasted cannot refuse; the module warns once in the console.
+- **A Charge reads `2[Charge]` (F-A-24).** The Charge's +2 is pf1's own Charge term and no longer rides in the
+  `[Secondary Attack]` field. The −2 AC buff is unchanged.
+- **Twin monsters no longer share one twin's declaration (F-A-20).** The Vital Strike, Charge, Cleave and Two-Weapon
+  Fighting intents name their actor by uuid, so an unlinked twin's Strike is an ordinary Strike while the other twin
+  declares. The Two-Weapon Fighting macro finds its combatant by uuid too.
+- **The skip-dialog GM card also reports a per-call skip (F-B-15).** A character's multi-attack Strike made with
+  `item.use({ skipDialog: true })` posts the card whether or not the client setting is on.
+- **The world macros carry current headers (F-B-14).** All four are re-pasted from `macros/` with a new sync stamp and
+  no stale paths.
+- **pf1 deprecation warning (pf1 deprecation).** The action-cost read of a spell's action no longer reads the deprecated
+  `ItemAction.data`; the cost is unchanged.
+- **Documentation.** This entry, the version header and the blurb above, and `macros/README.md`.
 
 ### v2.45.2 — Errata
 

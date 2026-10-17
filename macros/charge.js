@@ -2,18 +2,19 @@
  * baphomet-utils — PF1.5 CHARGE declare macro (token-driven)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/charge.js
- *   SYNC_STAMP: 2026-09-28
+ *   SYNC_STAMP: 2026-10-15
  *   The in-world Foundry macro "Charge" must be kept byte-identical to this file.
  *   After editing either copy, sync the other and bump SYNC_STAMP. Drift check:
  *   see README.md here.
  *
- * WHAT IT DOES (PF1.5 / GOAL_v2.28.0 + GOAL_v2.31.0): declares a Charge so the
+ * WHAT IT DOES (PF1.5 / GOAL_v2.28.0 + GOAL_v2.31.0 + GOAL_v2.46.0): declares a Charge so the
  *   action tracker charges its correct cost of 2 ACTIONS (not 1). pf1 11.11 has
  *   no combat-Charge concept to auto-detect (live probe 2026-06-26: the only
  *   "charge" fields are item-resource charges), so this macro sets an
- *   actor-scoped intent object (globalThis.baphometCharge = { actorId }) that
- *   action-tracker.js `_deriveActionUseCost` reads for the action cost AND a
- *   `pf1PreAttackRoll` handler reads to add +2 to the attack roll (GOAL_v2.31.0).
+ *   actor-scoped intent object (globalThis.baphometCharge = { actorUuid }) that
+ *   action-tracker.js `_deriveActionUseCost` reads for the action cost AND that the module's
+ *   `pf1CreateActionUse` hook reads to set pf1's own `charge` option for this one use, so the
+ *   attack gets the +2 (GOAL_v2.46.0).
  *   After a confirmed swing (see step 4), this macro also applies a −2 AC
  *   PF1 buff Item. GOAL_v2.39.1 FIX-4 (TD-54): it lasts through the enemies'
  *   turns and lifts at the start of THIS actor's own next turn — a `round`/
@@ -25,6 +26,16 @@
  *   the comment here used to claim. MAP advances via
  *   the existing v2.30.0 `pf1PreAttackRoll` handler — no change needed here. The
  *   intent is cleared by OBJECT IDENTITY in finally.
+ *
+ * v2.46.0 — pf1's OWN +2, AND ONE ATTACK: pf1's own `2[Charge]` replaces the old
+ *   `secondaryPenalty` +2 (the module handler that wrote it, and rendered it as
+ *   `2[Secondary Attack]`, is gone). The module's pf1CreateActionUse hook sets pf1's `charge`
+ *   use option for this one use, so the attack reads `2[Charge]` once, and forces the use down
+ *   to a single attack whatever the attacker's BAB (canon: Charge = Move + one Strike, 1 swing
+ *   for MAP). pf1 adds only the +2; the −2 AC buff below stays this macro's, unchanged. The
+ *   intent names the actor by uuid ({ actorUuid }). After updating the module, re-paste this file
+ *   into the world macro in place (keep its id and owner) and run the drift check in
+ *   macros/README.md.
  *
  * TOKEN-DRIVEN: operates on the one selected token, so a single button serves
  *   every character. A Charge is a melee Strike preceded by movement — move the
@@ -75,13 +86,14 @@
   }
 
   // 4) declare intent (actor-scoped, per-invocation) -> roll -> clear by identity
-  const intent = { actorId: actor.id };
+  const intent = { actorUuid: actor.uuid };
   globalThis.baphometCharge = intent;
   let r;
   try {
-    // action tracker charges 2 actions; the pf1PreAttackRoll handler (action-tracker.js,
-    // GOAL_v2.31.0) adds the +2 to-hit while this intent is set. r is an ActionUse on a
-    // real swing, undefined if pf1 cancels the roll (Seam 1, RUNTIME_PROBE_RESULTS_v2.31.0.md).
+    // action tracker charges 2 actions; the module's pf1CreateActionUse hook (action-tracker.js,
+    // GOAL_v2.46.0) sets pf1's own `charge` option while this intent is set, so pf1 adds the
+    // 2[Charge] term and the use rolls one attack. r is an ActionUse on a real swing, undefined
+    // if pf1 cancels the roll (Seam 1, RUNTIME_PROBE_RESULTS_v2.31.0.md).
     r = await weapon.use({ skipDialog: true });
   } finally {
     if (globalThis.baphometCharge === intent) globalThis.baphometCharge = null;

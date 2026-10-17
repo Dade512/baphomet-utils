@@ -2,7 +2,7 @@
  * baphomet-utils — PF1.5 Two-Weapon Fighting STRIKE macro (tier-aware)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/twf-tier-aware.js
- *   SYNC_STAMP: 2026-07-07
+ *   SYNC_STAMP: 2026-10-15
  *   The in-world Foundry macro "Two-Weapon Fighting" must be kept byte-identical
  *   to this file. After editing either copy, sync the other and bump SYNC_STAMP.
  *   (The earlier -4/-4 drift happened because the macro lived ONLY in world data,
@@ -32,6 +32,15 @@
  *   Penalty to each weapon Strike this turn (3rd swing -5, 4th+ cumulative -5),
  *   stacking with the two-weapon penalty above. The GM no longer applies MAP by hand
  *   (requires the "MAP / Swing Tracking" setting ON, default ON).
+ *
+ * v2.46.0 — ONE ATTACK PER USE, AND THE INTENT NAMES ITS ACTOR: each use below (the main
+ *   hand and the off hand) is ONE attack. This macro still calls use({ skipDialog: true });
+ *   while globalThis.baphometTWF.active is true the module's pf1CreateActionUse hook forces
+ *   each use down to a single attack, whatever the attacker's BAB, so a press makes one
+ *   main-hand and at most one off-hand attack for one action. The intent carries
+ *   `actorUuid`, so the penalty and the free off-hand ride apply to this character only, and
+ *   the combatant is found by uuid. After updating the module, re-paste this file into the
+ *   world macro in place (keep its id and owner) and run the drift check in macros/README.md.
  *
  * PER-CHARACTER: the actor name + weapon item IDs below are hardcoded (by design,
  *   so it's obvious what to fill in). To add another dual-wielder, copy this file,
@@ -77,10 +86,10 @@
   else                          { mainPen = "0";          offPen = "0"; } // greater
 
   // Resolve the actor's combatant for the per-turn off-hand budget (Model A, v2.30.0).
-  const combatant = game.combat?.combatants?.find(c => c.actor?.id === actor.id) ?? null;
+  const combatant = game.combat?.combatants?.find(c => c.actor?.uuid === actor.uuid) ?? null;
   const api = game.baphometActions;
 
-  globalThis.baphometTWF = { active: true, offhand: false, mainPenalty: mainPen, offPenalty: offPen };
+  globalThis.baphometTWF = { active: true, offhand: false, mainPenalty: mainPen, offPenalty: offPen, actorUuid: actor.uuid };
   try {
     await mainHand.use({ skipDialog: true });               // main-hand Strike (1 action; 1 swing)
 

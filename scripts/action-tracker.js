@@ -782,6 +782,82 @@ function _currentActiveCombatantId(combat) {
 const _mapArmCrit = new Map();        // actorUuid -> { penalty }
 const _mapPendingConfirm = new Map(); // actorUuid -> { penalty }
 
+// GOAL_v2.46.0 "One Swing" (FIX-3, FIX-4, FIX-5): the declare-intent match, the Cleave record and the
+// Cleave window. All three maps are per client and in memory, keyed by actor.uuid, like the two above.
+
+// FIX-3: does a declare intent (globalThis.baphomet{VitalStrike,Charge,Cleave,TWF}) belong to this actor?
+// One helper, used by every reader. (1) An intent carrying a string `actorUuid` matches exactly the actor
+// whose uuid equals it (its `actorId`, if any, is then ignored). (2) Otherwise an intent carrying `actorId`
+// matches an actor whose `id` equals it - the shape a world macro not yet re-pasted still sets (unlinked
+// twins are not told apart until it is, as before). (3) Otherwise ONLY the TWF intent (`isTwf`, no actor at
+// all - today's shape) matches any actor, and only while `active === true`; a Vital Strike, Charge or
+// Cleave intent with neither field matches nothing.
+function _baphIntentMatches(intent, actor, isTwf = false) {
+  if (!intent || typeof intent !== 'object' || !actor) return false;
+  if (typeof intent.actorUuid === 'string') return intent.actorUuid === actor.uuid;
+  if (intent.actorId) return intent.actorId === actor.id;
+  return isTwf === true && intent.active === true;
+}
+
+// FIX-4: the MAP the MAP hook actually added to the roll just made, per actor uuid. The MAP hook sets it
+// to 0 on every roll as soon as the actor is known and overwrites it only with a penalty it adds; the
+// pf1PreActionUse record step reads it (a missing value reads as 0) and clears it.
+const _baphMapAdded = new Map();     // actorUuid -> number (0 or negative)
+// FIX-4: the cleaver's most recent attack use - { combatId, mapPenalty, powerAttack, charge }. Cleared at
+// that actor's own turn start (_maybeResetForNewTurn). A record from another combat reads as none.
+const _baphCleaveRecord = new Map(); // actorUuid -> record
+// FIX-5: Cleave uses this window - { combatId, used }. Cleared ONLY at that actor's own turn start; a
+// count from another combat reads as 0. A reload forgets it, like MAP (accepted).
+const _baphCleaveWindow = new Map(); // actorUuid -> { combatId, used }
+
+function _baphCleaveRecordFor(actor) {
+  const rec = actor?.uuid ? _baphCleaveRecord.get(actor.uuid) : null;
+  if (!rec || rec.combatId !== (game.combat?.id ?? null)) return null;
+  return rec;
+}
+
+// FIX-4 record step (pf1PreActionUse, every attack use in an active combat). pf1 rolls the attacks
+// before it calls pf1PreActionUse, so the MAP value read here is this use's last counted roll.
+function _baphRecordAttackUse(actionUse, actor) {
+  try {
+    const uuid = actor?.uuid;
+    if (!uuid) return;
+    const added = Number(_baphMapAdded.get(uuid)) || 0;
+    _baphMapAdded.delete(uuid);
+    _baphCleaveRecord.set(uuid, {
+      combatId: game.combat?.id ?? null,
+      mapPenalty: added < 0 ? added : 0,
+      powerAttack: !!actionUse?.formData?.['power-attack'],
+      charge: actionUse?.shared?.charge === true
+    });
+  } catch (e) {
+    _debugLog('Cleave record error: ' + (e?.message ?? e));
+  }
+}
+
+function _baphHasGreatCleave(actor) {
+  return !!actor?.items?.contents?.some((i) => i.type === 'feat' && /great\s*cleave/i.test(i.name ?? ''));
+}
+
+// FIX-5 count step (pf1PreActionUse): +1 for every Cleave use in an active combat. The module stays
+// observe-only: a second Cleave that still arrives (a world macro not yet re-pasted) rolls as today and
+// is warned about once, in the console, unless the actor has Great Cleave.
+function _baphCountCleaveUse(actor) {
+  try {
+    const uuid = actor?.uuid;
+    const combatId = game.combat?.id ?? null;
+    if (!uuid || !combatId) return;
+    const cur = _baphCleaveWindow.get(uuid);
+    const before = (cur && cur.combatId === combatId) ? (Number(cur.used) || 0) : 0;
+    _baphCleaveWindow.set(uuid, { combatId, used: before + 1 });
+    if (before >= 1 && !_baphHasGreatCleave(actor)) {
+      console.warn(`${actor.name}: a second Cleave this round with no Great Cleave — not refused (re-paste the Cleave macro); the GM rules.`);
+    }
+  } catch (e) {
+    _debugLog('Cleave count error: ' + (e?.message ?? e));
+  }
+}
+
 // Resolve the floating Action Spend Panel / task-widget corner from the
 // 'moveButtonPosition' client setting, defaulting to 'bottom-right' (and on any
 // settings read error). Consolidates the position read used across the renderers.
@@ -1419,6 +1495,9 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   state.offSeq = (Number(state.offSeq) || 0) + 1; // bump so this reset write supersedes prior values
   const _resetActorUuid = combatant?.actor?.uuid;
   if (_resetActorUuid) { _mapArmCrit.delete(_resetActorUuid); _mapPendingConfirm.delete(_resetActorUuid); }
+  // GOAL_v2.46.0 FIX-4/FIX-5: the same actor's own turn start clears its Cleave record and window.
+  // Another creature's turn start never reaches these (this is the current combatant's actor only).
+  if (_resetActorUuid) { _baphCleaveRecord.delete(_resetActorUuid); _baphCleaveWindow.delete(_resetActorUuid); }
 
   if (combatant?.actor) {
     _applyConditionLocks(combatantId, combatant.actor);
@@ -1982,6 +2061,13 @@ Hooks.once('ready', () => {
     // GOAL_v2.39.0 FIX-1: read-only membership test, including the unlinked-token/base-actor
     // inheritance clause (D1). Writes nothing.
     isRoutineMember: (itemUuid) => _isRoutineMemberStore(itemUuid),
+    // GOAL_v2.46.0 FIX-5: read-only. How many Cleaves this actor has made in its current window in the
+    // active combat (0 when there is no count for that actor in this combat). Synchronous; per client.
+    cleaveState: (actorUuid) => {
+      const cur = _baphCleaveWindow.get(actorUuid);
+      const combatId = game.combat?.id ?? null;
+      return { used: (cur && combatId && cur.combatId === combatId) ? (Number(cur.used) || 0) : 0 };
+    },
     reset: (combatantId) => {
       _resetState(combatantId);
       _refreshPipRow(combatantId);
@@ -3720,17 +3806,20 @@ function _deriveActionUseCost(actionUse) {
     // 2026-06-26), so the player declares intent via a token-driven macro that sets an
     // actor-scoped intent object (globalThis.baphomet{VitalStrike,Charge} = { actorId }).
     // Read it only for THIS actor; the macro clears it by object identity.
+    // v2.46.0 FIX-3: the intent names its actor by uuid ({ actorUuid }; a legacy { actorId } still
+    // matches) - _baphIntentMatches decides, so an unlinked twin's Strike is not the other twin's.
     const actor = actionUse?.actor ?? item?.actor;
-    const aid = actor?.id;
-    if (aid && (globalThis.baphometVitalStrike?.actorId === aid
-             || globalThis.baphometCharge?.actorId === aid)) {
+    if (actor && (_baphIntentMatches(globalThis.baphometVitalStrike, actor)
+               || _baphIntentMatches(globalThis.baphometCharge, actor))) {
       return 2;
     }
     return 1; // attacks/weapons default: 1 Strike = 1 action
   }
 
   const act = actionUse?.action;
-  const actData = act?.data ?? act?.system ?? act ?? {};
+  // v2.46.0 FIX-7: read the action directly. pf1 11.11's ItemAction `data` getter returns `this` (and
+  // logs a deprecation warning on every read), so this is behaviour-identical without the warning.
+  const actData = act ?? {};
   const activation = actData?.activation ?? act?.activation;
 
   // FIX-2 (GOAL_v2.37.4, D-3): with pf1.unchainedActionEconomy ON, pf1
@@ -3898,30 +3987,64 @@ function _isReactionCostSpell(actionUse) {
 Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
   const twf = globalThis.baphometTWF;
   if (!twf?.active) return;                                  // only during a TWF Strike
+  // v2.46.0 FIX-3: only the actor the TWF intent names (or, for the old actorless shape, any actor).
+  const twfActor = attackData?.actor ?? attackData?.item?.actor ?? attackData?.parent?.actor;
+  if (!_baphIntentMatches(twf, twfActor, true)) return;
   const pen = twf.offhand ? twf.offPenalty : twf.mainPenalty;
   if (!pen || pen === "0") return;
   const base = Number(rollConfig.secondaryPenalty) || 0;     // add, don't clobber (baseline "0")
   rollConfig.secondaryPenalty = String(base + Number(pen));
 });
 
-// PF1.5 Charge +2 to-hit (GOAL_v2.31.0). Dormant unless the Charge declare macro has set
-// globalThis.baphometCharge = { actorId } (macros/charge.js). Gated to the
-// declaring actor only (mirrors the VS/MAP actor-scope pattern in _deriveActionUseCost).
-// Injection field RUNTIME-CONFIRMED live 2026-07-07 (tab focused, module 2.31.0 loaded):
-// pf1PreAttackRoll's rollConfig exposes only { proficient, secondaryPenalty } — there is NO
-// `parts` array on any arg, so rollConfig.parts.push() is a dead write (verified: produced no
-// +2). The correct surface is rollConfig.secondaryPenalty — the same signed-number-string field
-// MAP/TWF use (P-2/GATE-1). A POSITIVE value ADDS to the attack roll (probe: +2 → "1d20 + … +
-// 2[Secondary Attack]", total +2; +1000 → total +1000). Add (don't clobber) so Charge stacks
-// with MAP/TWF, which also write this field. Renders as "[Secondary Attack]" in the attack card
-// (pf1's label for this field) — cosmetic only; the +2 is mechanically applied to the swing.
-Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
-  const charge = globalThis.baphometCharge;
-  if (!charge?.actorId) return;
-  const actor = attackData?.actor ?? attackData?.item?.actor ?? attackData?.parent?.actor;
-  if (!actor || actor.id !== charge.actorId) return;
-  const base = Number(rollConfig.secondaryPenalty) || 0; // add, don't clobber (MAP/TWF share this field)
-  rollConfig.secondaryPenalty = String(base + 2);        // Charge +2 to-hit (renders as "Secondary Attack")
+// GOAL_v2.46.0 FIX-1 (F-B-01, Q1 A): a declared Vital Strike, Charge, Cleave or TWF swing is ONE attack.
+// ItemPF.use() builds shared.fullAttack = true, and ActionUse.process() slices shared.attacks to the first
+// only when formData.fullAttack is false (pf1 11.11 action-use.mjs:1633) - formData does not exist yet
+// when pf1CreateActionUse fires (:1599 vs :1615), so this hook cannot preset it. It wraps THAT ONE
+// INSTANCE's alterRollData (an own property of this ActionUse - never a prototype patch) to set
+// fd.fullAttack = false before pf1's own alterRollData reads it (:175, :211). Never returns false and
+// never cancels the use. A Charge also sets pf1's own `charge` option (`useOptions.charge`, read at :173):
+// the attack then gets pf1's `2[Charge]` term (:206-209), which replaces the old module +2 handler
+// (v2.46.0 FIX-2, removed). A Cleave's wrapper also carries the dropping Strike's Power Attack and Charge
+// (FIX-4): `??=` keeps an answer the player gave in a dialog and takes the record for a skipped one.
+// Runs on every client (a player's macro rolls on the player's client). Two layers of error handling:
+// this hook body is in a try/catch (an error is logged and the use goes on unwrapped), and the wrapper,
+// which runs later inside pf1's process() where this try/catch no longer reaches, edits in a try/catch
+// of its own and ALWAYS calls the original alterRollData - after a failed edit too.
+Hooks.on('pf1CreateActionUse', (actionUse) => {
+  try {
+    const actor = actionUse?.actor ?? actionUse?.item?.actor;
+    if (!actor) return;
+    const twf = globalThis.baphometTWF;
+    const isCharge = _baphIntentMatches(globalThis.baphometCharge, actor);
+    const isCleave = _baphIntentMatches(globalThis.baphometCleave, actor);
+    const declared = isCharge || isCleave
+      || _baphIntentMatches(globalThis.baphometVitalStrike, actor)
+      || (twf?.active === true && _baphIntentMatches(twf, actor, true));
+    if (!declared) return; // an undeclared use is untouched
+    const original = actionUse.alterRollData;
+    if (typeof original !== 'function') return;
+    if (isCharge && actionUse.shared?.useOptions) actionUse.shared.useOptions.charge = true;
+    actionUse.alterRollData = function (...args) {
+      try {
+        const fd = args[0];
+        if (fd && typeof fd === 'object') {
+          fd.fullAttack = false;
+          if (isCleave) {
+            const rec = _baphCleaveRecordFor(actor);
+            if (rec) {
+              fd['power-attack'] ??= rec.powerAttack;
+              fd.charge ??= rec.charge;
+            }
+          }
+        }
+      } catch (e) {
+        _debugLog('pf1CreateActionUse wrapper error: ' + (e?.message ?? e));
+      }
+      return original.apply(this, args);
+    };
+  } catch (e) {
+    _debugLog('pf1CreateActionUse error: ' + (e?.message ?? e));
+  }
 });
 
 /* ============================================================
@@ -3983,9 +4106,9 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
 Hooks.on('pf1PreDamageRoll', (action, rollData, parts, extraParts) => {
   try {
     const vs = globalThis.baphometVitalStrike;
-    if (!vs?.actorId) return;
+    if (!vs) return;
     const actor = action?.actor ?? action?.item?.actor ?? action?.parent?.actor;
-    if (!actor || actor.id !== vs.actorId) return;
+    if (!actor || !_baphIntentMatches(vs, actor)) return; // v2.46.0 FIX-3: uuid first, legacy actorId second
 
     const actionParts = Array.isArray(action?.damage?.parts) ? action.damage.parts : [];
 
@@ -4060,7 +4183,7 @@ Hooks.on('pf1PreDamageRoll', (action, rollData, parts, extraParts) => {
 // (FIX-2). Unarmed, spells, and off-turn/AoO attacks still FAIL OPEN (no MAP) here.
 function _isEligibleSwing(actor, item, activeCombatant) {
   if (!actor || !item || !activeCombatant) return false;             // off-turn / AoO → no active match
-  if (globalThis.baphometCleave?.actorId === actor.id) return false; // Cleave = 0 swings / full BAB
+  if (_baphIntentMatches(globalThis.baphometCleave, actor)) return false; // Cleave = 0 swings / full BAB (v2.46.0 FIX-3: by uuid)
   const t = item.type;
   if (t === 'weapon') return true;
   if (t === 'attack' && item.system?.subType === 'weapon') return true;
@@ -4284,6 +4407,13 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
     const actor = attackData?.actor;
     if (!actor) return;
 
+    // GOAL_v2.46.0 FIX-4: on EVERY roll, as soon as the actor is known and before the guard and every
+    // early return below, this actor's "MAP added to this roll" value starts at 0 (so no early return
+    // can leave a stale value for the record step). A crit confirmation adds its threat's stashed
+    // penalty, so it starts at that same penalty - read here without deleting it; the guard owns that.
+    const _recPending = _mapPendingConfirm.get(actor.uuid);
+    _baphMapAdded.set(actor.uuid, (_recPending && _recPending.penalty < 0) ? _recPending.penalty : 0);
+
     // Crit-confirmation guard: a confirmation pre reuses the threat swing's MAP and does NOT
     // advance the counter (canon: same swing's MAP). Armed at the threat's pf1AttackRoll below.
     const pending = _mapPendingConfirm.get(actor.uuid);
@@ -4303,7 +4433,19 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
     // does for a weapon: no swing counted, no MAP, whatever the item's type. Without this, an
     // npc natural attack declared as a Cleave follow-up would reach the routine branch below
     // (which never consults _isEligibleSwing) and wrongly advance swingsTaken / take MAP.
-    if (globalThis.baphometCleave?.actorId === actor.id) return;
+    // GOAL_v2.46.0 FIX-4 (canon H:160, Q2): the Cleave is still no swing and never advances the count, but
+    // it carries the dropping Strike's MAP - the cleaver's most recent attack use this window (the record
+    // pf1PreActionUse keeps) - and arms the crit stash with it so a confirmation reuses it. FIX-3: the
+    // intent is matched to this actor by uuid (legacy actorId second).
+    if (_baphIntentMatches(globalThis.baphometCleave, actor)) {
+      const carried = _baphCleaveRecordFor(actor)?.mapPenalty ?? 0;
+      if (carried < 0) {
+        rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + carried);
+        _baphMapAdded.set(actor.uuid, carried);
+      }
+      _mapArmCrit.set(actor.uuid, { penalty: carried < 0 ? carried : 0 });
+      return; // not a swing: swingsTaken is never advanced
+    }
 
     // GOAL_v2.38.0 FIX-1 ("What the Routine Counts", canon :132-133): a monster's natural-attack
     // routine occupies swings but takes no MAP; the Strike that follows it does. Placed here,
@@ -4342,6 +4484,7 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
           }
           routineState.swingsTaken = (Number(routineState.swingsTaken) || 0) + 1;
           _mapArmCrit.set(actor.uuid, { penalty: routinePenalty });
+          _baphMapAdded.set(actor.uuid, routinePenalty < 0 ? routinePenalty : 0); // GOAL_v2.46.0 FIX-4
           return;
         }
       }
@@ -4359,6 +4502,7 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
     }
     state.swingsTaken = (Number(state.swingsTaken) || 0) + 1; // advance: this swing is now counted
     _mapArmCrit.set(actor.uuid, { penalty });                 // candidate; promoted at atk iff crit threat
+    _baphMapAdded.set(actor.uuid, penalty < 0 ? penalty : 0); // GOAL_v2.46.0 FIX-4: the MAP this roll took
   } catch (e) {
     _debugLog('MAP pf1PreAttackRoll error: ' + e.message);
   }
@@ -4426,6 +4570,14 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     const isConsumable = item.type === 'consumable';
     if (!isSpell && !isAttack && !isConsumable) return; // only attacks, spells and consumables
 
+    // GOAL_v2.46.0 FIX-4 / FIX-5: for every attack use in an active combat - before the routine close
+    // block and every spend gate below - record this use's MAP, Power Attack and Charge for the actor's
+    // Cleave (FIX-4), and count a Cleave use against its once-per-round window (FIX-5). Observe-only.
+    if (isAttack) {
+      _baphRecordAttackUse(actionUse, actor);
+      if (_baphIntentMatches(globalThis.baphometCleave, actor)) _baphCountCleaveUse(actor);
+    }
+
     // GOAL_v2.38.1/v2.39.0 ("What the Routine Costs" / "What the Routine Holds",
     // FIX-1/FIX-2/FIX-3): per-use routine classification, carried down to the cost/spend
     // decision and the repeat/routine-closed cards below (both run after the
@@ -4459,7 +4611,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // is in it, not actor.type.
     if (isAttack) {
       const routineCombatant = _getActiveCombatantForActor(actor);
-      const isCleaveUse = globalThis.baphometCleave?.actorId === actor.id;
+      const isCleaveUse = _baphIntentMatches(globalThis.baphometCleave, actor); // v2.46.0 FIX-3
       if (routineCombatant && !isCleaveUse) {
         let routineState = _getState(routineCombatant.id);
         if (!routineState) { _initState(routineCombatant.id); routineState = _getState(routineCombatant.id); }
@@ -4469,9 +4621,9 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
           // A declared Vital Strike or Charge keeps its own cost (_deriveActionUseCost) and is
           // not a routine charge. HI-1: it still marks its item done, as v2.38.0 did, but never
           // marks the routine paid and never becomes a per-roll repeat charge or repeat card.
-          const aid = actor.id;
-          const hasDeclaredCostOverride = !!(aid && (globalThis.baphometVitalStrike?.actorId === aid
-                                          || globalThis.baphometCharge?.actorId === aid));
+          // v2.46.0 FIX-3: matched by uuid (legacy actorId second), not by actor.id alone.
+          const hasDeclaredCostOverride = _baphIntentMatches(globalThis.baphometVitalStrike, actor)
+                                          || _baphIntentMatches(globalThis.baphometCharge, actor);
           // GOAL_v2.39.0 FIX-2: membership (FIX-1's store, or an npc's qualifying natural) is
           // the single source of truth for every path below — decided once by
           // _isRoutineMemberItem and nothing else.
@@ -4567,8 +4719,10 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // left for the GM to adjudicate by hand. Every other use (an unmarked PC natural, a weapon,
     // an off-turn attack, or a declared Vital Strike/Charge on a member — HI-1 sets none of the
     // three) still posts exactly as before.
+    // GOAL_v2.46.0 FIX-6 (F-B-15, Q4): a per-call item.use({ skipDialog: true }) reports too - the
+    // client setting is no longer the only trigger (actionUse.shared.skipDialog is true for either).
     if (isAttack && actor?.type === 'character'
-        && game.settings.get('pf1', 'skipActionDialogs')
+        && (game.settings.get('pf1', 'skipActionDialogs') || actionUse?.shared?.skipDialog === true)
         && !_routineUse && !_routineRepeat && !_routineAfterClose) {
       const swingCount = actionUse?.shared?.attacks?.length ?? 0;
       if (swingCount > 1) {
@@ -4604,7 +4758,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // around the off-hand use(), so this swing still rolls but spends nothing.
     // Mirrors the _baphResolveTaskRollActive suppression pattern.
     // OBSERVE-ONLY: returns early, never returns false.
-    if (isAttack && globalThis.baphometTWF?.offhand) {
+    if (isAttack && globalThis.baphometTWF?.offhand && _baphIntentMatches(globalThis.baphometTWF, actor, true)) { // v2.46.0 FIX-3
       _debugLog(`auto-spend: TWF off-hand swing for "${actor.name}" — rides on main-hand Strike, no action spent`);
       return;
     }
@@ -4627,7 +4781,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // spends no action. Placed AFTER the auto-spend gate (so it is inert when auto-spend is
     // OFF) and BEFORE dedupe (so a skipped Cleave never enters the dedupe set).
     // OBSERVE-ONLY: returns early, never returns false.
-    if (isAttack && globalThis.baphometCleave?.actorId === actor.id) {
+    if (isAttack && _baphIntentMatches(globalThis.baphometCleave, actor)) { // v2.46.0 FIX-3
       _debugLog(`auto-spend: Cleave free Strike for "${actor.name}" — 0 actions, no action spent`);
       return;
     }

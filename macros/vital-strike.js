@@ -2,22 +2,30 @@
  * baphomet-utils — PF1.5 VITAL STRIKE declare macro (token-driven)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/vital-strike.js
- *   SYNC_STAMP: 2026-07-07
+ *   SYNC_STAMP: 2026-10-15
  *   The in-world Foundry macro "Vital Strike" must be kept byte-identical to this
  *   file. After editing either copy, sync the other and bump SYNC_STAMP. Drift
  *   check: see README.md here.
  *
- * WHAT IT DOES (PF1.5 / GOAL_v2.28.0 + GOAL_v2.31.0): declares a Vital Strike so
+ * WHAT IT DOES (PF1.5 / GOAL_v2.28.0 + GOAL_v2.31.0 + GOAL_v2.46.0): declares a Vital Strike so
  *   the action tracker charges its correct cost of 2 ACTIONS (not 1). pf1 11.11
  *   exposes no Vital Strike marker to auto-detect (live probe 2026-06-26), so this
  *   macro sets an actor-scoped intent object (globalThis.baphometVitalStrike =
- *   { actorId }) that action-tracker.js `_deriveActionUseCost` reads for the action
+ *   { actorUuid }) that action-tracker.js `_deriveActionUseCost` reads for the action
  *   cost AND a `pf1PreDamageRoll` handler reads to double the weapon's base damage
  *   dice (GOAL_v2.31.0 — runtime-confirmed in
  *   docs/ai-council/RUNTIME_PROBE_RESULTS_v2.31.0.md). MAP still advances via the
  *   existing v2.30.0 `pf1PreAttackRoll` handler — no change needed here. The intent
  *   is cleared by OBJECT IDENTITY in finally, so a cancelled picker, a thrown
  *   use(), or a same-actor double-click never leaves it dangling.
+ *
+ * v2.46.0 — ONE ATTACK PER USE: a Vital Strike is ONE attack (canon: 2 actions, 1 swing,
+ *   multiplied weapon dice). This macro still calls weapon.use({ skipDialog: true }); the
+ *   module's pf1CreateActionUse hook (action-tracker.js) sees this intent and forces that one
+ *   use down to a single attack, whatever the attacker's BAB, so no BAB iterative rolls. The
+ *   intent names the actor by uuid ({ actorUuid }), so an unlinked twin's Strike is never taken
+ *   for this one. After updating the module, re-paste this file into the world macro in place
+ *   (keep its id and owner) and run the drift check in macros/README.md.
  *
  * TOKEN-DRIVEN: operates on the one selected token, so a single button serves
  *   every character. Vital Strike is a single weapon attack; weapon eligibility
@@ -68,7 +76,7 @@
   }
 
   // 4) declare intent (actor-scoped, per-invocation) -> roll -> clear by identity
-  const intent = { actorId: actor.id };
+  const intent = { actorUuid: actor.uuid };
   globalThis.baphometVitalStrike = intent;
   try {
     // action tracker charges 2 actions; the pf1PreDamageRoll handler (action-tracker.js,
