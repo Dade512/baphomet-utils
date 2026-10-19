@@ -2,6 +2,19 @@
    ECHOES OF BAPHOMET — PF1.5 CONDITION OVERLAY v2.9
    Applies PF2e-style conditions as PF1e system Buffs.
 
+   v2.46.1 Changes (GOAL_v2.46.1_TURN_ENGINE — "Once Per Round", TD-95):
+   - [FIX-2/FIX-5] The end of a turn runs on the active GM, from the turn engine in action-tracker.js
+     (`combatTurnChange`, which fires on every client for every real turn change), not from this
+     file's `combatTurn` / `combatRound` / `pf1PostTurnChange` listeners (they fired only on the client
+     that pressed Next Turn; `pf1PostTurnChange` does not exist in pf1 11.11). Removed with them:
+     `_handleAutoDecrement`, its dedupe Set and `_getBreadcrumbCombatant`. `_baphEndOfTurnRun` pays
+     what `_handleAutoDecrement` paid and returns the changes it applied for the turn ledger.
+   - [FIX-6] `_baphRewindRestore` / `_baphRewindWhisper`: Previous Turn restores each recorded change
+     whose live value is unchanged and whispers the GM what it did and did not put back.
+   - [FIX-4] The Off-Guard turn-start mark moved into the engine's turn start
+     (`_baphOffGuardMarkTurn`); the `updateCombat` listener and `combatStart` scheduling are gone.
+   - [FIX-9] `applyCondition`'s Stunned stamp reads the engine combat (`game.combats.active`).
+
    v2.45.0 Changes (GOAL_v2.45.0_ABILITY_CHECKS — "Every Roll That Uses It", TD-83):
    - [FIX-1] Canon (rewritten 2026-10-06): a PF1 ability penalty reaches every roll that uses the
      ability, so Clumsy, Enfeebled and Stupefied now reach ability checks. Clumsy writes ac / ref /
@@ -824,22 +837,19 @@ async function _syncOffGuardNow(actor) {
                starts, in a started, flagged combat. It lives on the combatant, so it ends with the
                combat, and a Delay (an initiative write) cannot clear it.
 
-   HOW THE TURN START IS DETECTED: by a read of `combat.combatant` in a LATER MACROTASK
-   (`setTimeout(…, 0)`, the translator's scheduling pattern) after `combatStart` and after an
-   `updateCombat` whose changes carry `turn` or `round` — never at hook-fire time (three hook-time
-   reads of the turn are disproven, see the PROACTIVE BREADCRUMB comment below). It does NOT use
-   the render-based `globalThis.baphometActiveCombatant` stamp.
-
-   `combatStart` fires BEFORE `startCombat()` saves { round: 1, turn: 0 } (verified in the served
-   Foundry 13 client), so at `combatStart` the combat may still read `started === false`. Both paths
-   therefore run the SAME handler, which re-reads `combat.started`, the P-k flag and `combat.combatant`
-   at the time it runs and marks only when all three hold; the `combatStart` path awaits the flag
-   first. ORDER: the handler awaits the mark's write and only THEN schedules the translator checks
-   for the combat's combatants — writing the mark triggers no re-check by itself (the Combatant
-   hook below ignores everything but an initiative change), so a check scheduled before the mark
-   landed would leave a stale Off-Guard behind. Checks are scheduled ONLY after the mark is
-   confirmed: a not-yet-started or unflagged combat, a missing combatant, a non-GM client or a
-   failed write schedules nothing.
+   HOW THE TURN START IS DETECTED (v2.46.1, GOAL_v2.46.1_TURN_ENGINE FIX-4): it is not detected here any
+   more. The turn engine in action-tracker.js starts each creature's turn once per round on the active GM's
+   client (from `combatTurnChange`) and, inside that start, awaits `_baphOffGuardMarkTurn(combat,
+   combatantId)` below — for the TASK's creature, never a read of `combat.combatant` (the engine's chain
+   may lag the live combat). The retired `updateCombat` -> macrotask path and the `combatStart` scheduling
+   are gone; `combatStart` keeps only the combat's `offGuardInitiative` flag write, which the first turn
+   start awaits (at `combatStart` the combat may still read `started === false`, so the mark re-reads
+   `combat.started` and the P-k flag when it runs). ORDER: the mark's write is awaited and only THEN are the
+   translator checks scheduled for the combat's combatants — writing the mark triggers no re-check by itself
+   (the Combatant hook below ignores everything but an initiative change), so a check scheduled before the
+   mark landed would leave a stale Off-Guard behind. Checks are scheduled ONLY after the mark is confirmed:
+   a not-yet-started or unflagged combat, a missing combatant, a non-GM client or a failed write schedules
+   nothing.
 
    Hook references: docs/reference/foundry-v13/99_Combined_Foundry_v13_PF1_[KnowledgeFiles.md] —
    `combatStart(combat, updateData)` (:2337), `updateCombatant(combatant, changes, options, userId)`
@@ -855,16 +865,23 @@ function _offGuardScheduleCombat(combat) {
   }
 }
 
-// One turn-start pass for a combat: mark (active GM only, all conditions re-read now), then
-// schedule the checks ONLY once the current combatant's mark is confirmed (FIX-3 Ordering). If any
-// condition fails, or the mark's write throws, nothing is scheduled. Safe to run from either path
-// and more than once; a combatant already marked has its mark landed, so scheduling is correct.
-async function _offGuardTurnStartRun(combat) {
+// The combat-start flag write in flight, per combat: the first turn start awaits it (FIX-4).
+const _baphOffGuardFlagPending = new Map();
+
+// The turn-start pass for ONE creature, called by the turn engine's turn start (action-tracker.js, FIX-4) on
+// the active GM, for the TASK's combatant — never a read of `combat.combatant` (the engine's chain may lag
+// the live combat): mark (active GM only, all conditions re-read now), then schedule the checks ONLY once the
+// combatant's mark is confirmed (FIX-3 Ordering). If any condition fails, or the mark's write throws, nothing
+// is scheduled. Safe to run more than once; a combatant already marked has its mark landed, so scheduling is
+// correct.
+async function _baphOffGuardMarkTurn(combat, combatantId) {
   try {
     if (!_isActiveGMClient()) return;
+    const pending = _baphOffGuardFlagPending.get(combat?.id);
+    if (pending) await pending;
     if (combat?.started !== true) return;
     if (combat.getFlag(MODULE_ID, 'offGuardInitiative') !== true) return;
-    const current = combat.combatant;
+    const current = combat.combatants?.get(combatantId);
     if (!current) return;
     if (current.getFlag(MODULE_ID, 'offGuardTurnStarted') !== true) {
       await current.setFlag(MODULE_ID, 'offGuardTurnStarted', true);
@@ -877,27 +894,22 @@ async function _offGuardTurnStartRun(combat) {
   _offGuardScheduleCombat(combat);
 }
 
-function _offGuardTurnStartLater(combat) {
-  setTimeout(() => { _offGuardTurnStartRun(combat); }, 0);
-}
-
 async function _offGuardOnCombatStart(combat) {
-  try {
-    if (_isActiveGMClient() && combat.getFlag(MODULE_ID, 'offGuardInitiative') !== true) {
-      await combat.setFlag(MODULE_ID, 'offGuardInitiative', true);
+  const write = (async () => {
+    try {
+      if (_isActiveGMClient() && combat.getFlag(MODULE_ID, 'offGuardInitiative') !== true) {
+        await combat.setFlag(MODULE_ID, 'offGuardInitiative', true);
+      }
+    } catch (err) {
+      console.error(`${MODULE_ID} | Off-Guard combat flag failed`, err);
     }
-  } catch (err) {
-    console.error(`${MODULE_ID} | Off-Guard combat flag failed`, err);
-  }
-  _offGuardTurnStartLater(combat);
+  })();
+  _baphOffGuardFlagPending.set(combat.id, write);
+  await write;
+  if (_baphOffGuardFlagPending.get(combat.id) === write) _baphOffGuardFlagPending.delete(combat.id);
 }
 
 Hooks.on('combatStart', (combat) => { _offGuardOnCombatStart(combat); });
-
-Hooks.on('updateCombat', (combat, changes) => {
-  if (!foundry.utils.hasProperty(changes, 'turn') && !foundry.utils.hasProperty(changes, 'round')) return;
-  _offGuardTurnStartLater(combat);
-});
 
 Hooks.on('createCombatant', (combatant) => {
   try { _translatorSchedule(combatant.actor); } catch (err) { /* combatant without a usable actor */ }
@@ -1117,19 +1129,19 @@ async function applyCondition(actor, condKey, tier) {
   // never the internal decrement, which writes stunnedCountdown/removes the buff directly and
   // never calls back into applyCondition; see `_decrementStunnedCountdown`'s comment block).
   // (Re)initializes the countdown to the freshly-applied tier and stamps when this happened,
-  // via a live (safe, non-hook-fire-time) read of game.combat. The stamp is compared against
+  // via a live (safe, non-hook-fire-time) read of the engine combat (game.combats.active). The stamp is compared against
   // the proactive breadcrumb at decrement time to implement the round-4 mid-turn-application
   // skip (SS5:224). stunnedCountdown is genuinely distinct from this buff's own `tier` flag
   // above, which stays at the originally-applied value (display/history only).
   if (condKey === 'stunned') {
     await actor.setFlag(MODULE_ID, 'stunnedCountdown', tier);
     await actor.setFlag(MODULE_ID, 'stunnedAppliedAt', {
-      combatId: game.combat?.id ?? null,
-      round:    game.combat?.round ?? null,
-      turn:     game.combat?.turn ?? null,
+      combatId: _baphEngineCombat()?.id ?? null,
+      round:    _baphEngineCombat()?.round ?? null,
+      turn:     _baphEngineCombat()?.turn ?? null,
       // v2.44.1 FIX-B (TD-84): who was current when the stun was applied. `turn` is an array index
       // that a mid-turn initiative change moves; the combatant and the round name the turn.
-      combatantId: game.combat?.combatant?.id ?? null,
+      combatantId: _baphEngineCombat()?.combatant?.id ?? null,
     });
     await _syncStunLock(actor); // v2.44.0 FIX-3: the countdown was just written — lock the Reaction pips
   }
@@ -2054,38 +2066,15 @@ function _isActiveGMClient() {
 }
 
 /* ----------------------------------------------------------
-   PROACTIVE BREADCRUMB READ — v2.34.0
+   THE DEPARTING STATE — v2.46.1 (GOAL_v2.46.1_TURN_ENGINE, FIX-5)
 
-   Two prior fix attempts derived "who is the prior (departing) combatant"
-   REACTIVELY at combatTurn/combatRound/pf1PostTurnChange hook-fire time —
-   first from `combat.current.turn`/`updateData.turn`, then from
-   `combat.combatant` — and both were disproven by live two-seat
-   re-verification in a 2-combatant alternating encounter: Foundry
-   combat-state propagation is not guaranteed settled at the exact moment
-   these hooks fire in this environment.
-
-   Replaced with a read of `globalThis.baphometActiveCombatant`, a value
-   STAMPED proactively by action-tracker.js's render-based turn-start
-   detection (`_stampActiveCombatantBreadcrumb`, called from
-   `_maybeResetForNewTurn` — see that file's header comment for the full
-   rationale). That stamp point is already proven safe (it's the same
-   `.active`-CSS-class / renderCombatTracker signal the v1.6 rewrite in
-   that file trusts), and — critically — it fires only when the NEW
-   combatant's turn starts, which happens AFTER these turn-transition
-   hooks fire for the OLD (departing) combatant. So at the moment any of
-   the three hooks below fire, the breadcrumb still holds the departing
-   combatant, not the arriving one.
-
-   Fail-safe (EXACTLY_ONE_OR_FAIL_OPEN precedent, this repo): returns null
-   — no decrement performed — if the breadcrumb is missing or belongs to
-   a different combat, rather than guessing.
+   Three earlier fixes derived "who is the departing combatant" at combatTurn / combatRound hook-fire
+   time (first `combat.current.turn`, then `combat.combatant`, then a breadcrumb the combat tracker's
+   render stamped), and the render path could not see a turn a player ended at all. The turn engine
+   (action-tracker.js) now hands `_baphEndOfTurnRun` the departing state itself — { combatId, round, turn,
+   combatantId }, from its own promise chain or the turn ledger — so nothing here reads the breadcrumb or
+   the live combat to find out whose turn is ending.
    ---------------------------------------------------------- */
-
-function _getBreadcrumbCombatant(combat) {
-  const breadcrumb = globalThis.baphometActiveCombatant;
-  if (!breadcrumb || !combat || breadcrumb.combatId !== combat.id) return null;
-  return breadcrumb;
-}
 
 /* ----------------------------------------------------------
    STUNNED COUNTDOWN LIFECYCLE — v2.34.0
@@ -2113,7 +2102,7 @@ function _getBreadcrumbCombatant(combat) {
                                   (re)initialized (GM UI apply/tier-adjust,
                                   macro API call — see `applyCondition`
                                   above). Captured via a live read of
-                                  `game.combat` at the moment of
+                                  the engine combat at the moment of
                                   application (a GM UI click, or a macro
                                   call) — safe because that read isn't
                                   tied to the volatile turn-transition
@@ -2121,7 +2110,7 @@ function _getBreadcrumbCombatant(combat) {
                                   hook-fire-time reads described above.
 
    `_decrementStunnedCountdown` (called once per turn-transition for the
-   DEPARTING combatant, from `_handleAutoDecrement`) pays down
+   DEPARTING combatant, from `_baphEndOfTurnRun`) pays down
    min(countdown, 3) — never more than one turn's 3-action pool — and
    removes the buff + both flags when the remainder reaches 0.
 
@@ -2130,13 +2119,14 @@ function _getBreadcrumbCombatant(combat) {
    turn-start pip lock in action-tracker.js already ran before the
    countdown existed, so no actions were actually lost that turn — paying
    down debt at that same turn's end would charge a loss that was never
-   locked. Guarded by comparing `stunnedAppliedAt` against the PROACTIVE
-   BREADCRUMB (`_getBreadcrumbCombatant`, above): if they name the SAME
-   {combatId, round, turn}, the countdown was (re)initialized during the
-   very turn that is now ending, so the pay-down is skipped for this one
-   transition. Because the breadcrumb's round/turn always reflects
-   whichever turn is currently ending, this self-resolves on the
-   combatant's NEXT turn without any explicit clearing.
+   locked. Guarded by comparing `stunnedAppliedAt` against the DEPARTING
+   STATE the turn engine hands `_baphEndOfTurnRun` ({ combatId, round, turn,
+   combatantId } of the turn now ending, from its own chain or the turn
+   ledger): if they name the SAME turn, the countdown was (re)initialized
+   during the very turn that is now ending, so the pay-down is skipped for
+   this one transition. The departing state is always the turn that is
+   ending, so this self-resolves on the combatant's NEXT turn without any
+   explicit clearing.
 
    v2.44.1 FIX-B (TD-84): `turn` is an array index, and a mid-turn
    initiative change moves it while the same combatant stays current. A
@@ -2155,75 +2145,65 @@ function _getBreadcrumbCombatant(combat) {
    `applyCondition`, and this trap does not apply to this implementation.
    ---------------------------------------------------------- */
 
-async function _decrementStunnedCountdown(actor, breadcrumb) {
-  if (!actor) return;
+async function _decrementStunnedCountdown(actor, departing) {
+  if (!actor) return null;
 
   const countdown = Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0;
-  if (countdown <= 0) return;
+  if (countdown <= 0) return null;
 
   const appliedAt = actor.getFlag(MODULE_ID, 'stunnedAppliedAt') ?? null;
   const _stampNamesCombatant = typeof appliedAt?.combatantId === 'string' && appliedAt.combatantId !== '';
   const sameTurn = !!(
-    appliedAt && breadcrumb &&
-    appliedAt.combatId === breadcrumb.combatId &&
-    appliedAt.round === breadcrumb.round &&
+    appliedAt && departing &&
+    appliedAt.combatId === departing.combatId &&
+    appliedAt.round === departing.round &&
     (_stampNamesCombatant
-      ? appliedAt.combatantId === breadcrumb.combatantId
-      : appliedAt.turn === breadcrumb.turn)
+      ? appliedAt.combatantId === departing.combatantId
+      : appliedAt.turn === departing.turn)
   );
 
   if (sameTurn) {
     console.debug(`${MODULE_ID} | Stunned countdown: skip pay-down for ${actor.name} — countdown was (re)applied during the turn that just ended (round-4 mid-turn-skip guard)`);
-    return;
+    return null;
   }
 
   const paidDown = Math.min(countdown, 3);
   const remaining = countdown - paidDown;
   console.debug(`${MODULE_ID} | Stunned countdown: ${actor.name} ${countdown} -> ${remaining} (paid down ${paidDown})`);
+  // v2.46.1 FIX-5: what the ledger keeps so a rewind can restore it exactly — the countdown and the stamp as they were.
+  const from = { countdown, appliedAt: appliedAt ? JSON.parse(JSON.stringify(appliedAt)) : null };
 
   if (remaining <= 0) {
     await removeCondition(actor, 'stunned'); // clears the buff + both lifecycle flags
-  } else {
-    await actor.setFlag(MODULE_ID, 'stunnedCountdown', remaining);
-    await _syncStunLock(actor); // v2.44.0 FIX-3: after the partial pay-down write (the lock stays while > 0)
+    return { kind: 'stunned', from, to: { countdown: 0 }, removed: true };
   }
+  await actor.setFlag(MODULE_ID, 'stunnedCountdown', remaining);
+  await _syncStunLock(actor); // v2.44.0 FIX-3: after the partial pay-down write (the lock stays while > 0)
+  return { kind: 'stunned', from, to: { countdown: remaining }, removed: false };
 }
 
 /* ----------------------------------------------------------
-   AUTO-DECREMENT — v2.5 REWRITE, v2.34.0 TRUST-4 + STUNNED COUNTDOWN
+   THE END OF A TURN AND ITS REWIND — v2.46.1 (GOAL_v2.46.1_TURN_ENGINE, FIX-5 / FIX-6; replaces the
+   v2.5 `_handleAutoDecrement` with its dedupe Set and the `combatTurn` / `combatRound` /
+   `pf1PostTurnChange` listeners — `combatTurn` / `combatRound` fire only on the client that pressed
+   Next Turn, so a turn a PLAYER ended paid nothing, and `pf1PostTurnChange` does not exist in pf1 11.11)
+
+   `_baphEndOfTurnRun` is called by the turn engine's task (action-tracker.js) on the active GM, once per
+   departing creature per turn: the turn ledger's `ended` entry is the once-per-turn record, so there is no
+   dedupe Set here. It returns the changes it applied; the ledger keeps them so Previous Turn can undo them.
+   `_baphRewindRestore` restores each recorded change whose live value still equals what the end left, and
+   `_baphRewindWhisper` tells the GM what it did and did not put back.
    ---------------------------------------------------------- */
 
-const _decrementProcessed = new Set();
-
-async function _handleAutoDecrement(combat, priorCombatantId, source, breadcrumb) {
-  if (!_isActiveGMClient()) return;
-  if (!priorCombatantId) {
-    console.debug(`${MODULE_ID} | Auto-decrement (${source}): no prior combatant ID (breadcrumb missing/stale), skipping`);
-    return;
+async function _baphEndOfTurnRun(combat, combatant, departing) {
+  const actor = combatant?.actor;
+  const applied = [];
+  if (!actor) {
+    console.debug(`${MODULE_ID} | End of turn: combatant ${combatant?.id ?? 'unknown'} has no actor`);
+    return applied;
   }
+  console.debug(`${MODULE_ID} | End of turn: processing ${actor.name}`);
 
-  const dedupeKey = `${combat.id}-${combat.round}-${combat.turn}-${priorCombatantId}`;
-  if (_decrementProcessed.has(dedupeKey)) {
-    console.debug(`${MODULE_ID} | Auto-decrement (${source}): already processed ${dedupeKey}, skipping duplicate`);
-    return;
-  }
-  _decrementProcessed.add(dedupeKey);
-
-  if (_decrementProcessed.size > 50) {
-    const entries = [..._decrementProcessed];
-    entries.slice(0, entries.length - 20).forEach(k => _decrementProcessed.delete(k));
-  }
-
-  const combatant = combat.combatants.get(priorCombatantId);
-  if (!combatant?.actor) {
-    console.debug(`${MODULE_ID} | Auto-decrement (${source}): combatant ${priorCombatantId} has no actor`);
-    return;
-  }
-
-  const actor = combatant.actor;
-  console.debug(`${MODULE_ID} | Auto-decrement (${source}): processing end-of-turn for ${actor.name}`);
-
-  let decremented = false;
   for (const [key, cond] of Object.entries(CONDITIONS)) {
     if (!cond.autoDecrement) continue;
     if (key === 'stunned') continue; // v2.34.0: bespoke multi-action countdown, handled below — not a simple -1
@@ -2233,13 +2213,15 @@ async function _handleAutoDecrement(combat, priorCombatantId, source, breadcrumb
 
     const currentTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
     if (currentTier > 0) {
-      console.debug(`${MODULE_ID} | Auto-decrement: ${actor.name} ${cond.name} ${currentTier} → ${currentTier - 1}`);
+      console.debug(`${MODULE_ID} | End of turn: ${actor.name} ${cond.name} ${currentTier} → ${currentTier - 1}`);
       await adjustCondition(actor, key, -1);
-      decremented = true;
+      const to = _findExistingBuff(actor, key)?.getFlag(MODULE_ID, 'tier') ?? 0; // 0 when the pay-down removed it
+      applied.push({ kind: key, from: currentTier, to });
     }
   }
 
-  await _decrementStunnedCountdown(actor, breadcrumb);
+  const stunned = await _decrementStunnedCountdown(actor, departing);
+  if (stunned) applied.push(stunned);
 
   // v2.37.3 FIX-5: explicit call site named by the goal. `_decrementStunnedCountdown` already
   // routes through `removeCondition('stunned')` (which itself re-syncs) when the countdown hits
@@ -2249,31 +2231,68 @@ async function _handleAutoDecrement(combat, priorCombatantId, source, breadcrumb
   // partial pay-down) performs zero document writes, per `_syncOffGuard`'s idempotency contract.
   await _syncOffGuard(actor);
 
-  if (!decremented) {
-    console.debug(`${MODULE_ID} | Auto-decrement (${source}): ${actor.name} has no auto-decrement conditions active`);
+  if (!applied.length) {
+    console.debug(`${MODULE_ID} | End of turn: ${actor.name} has no auto-decrement conditions active`);
   }
+  return applied;
 }
 
-Hooks.on('pf1PostTurnChange', (combat, prior, current) => {
-  console.debug(`${MODULE_ID} | Hook fired: pf1PostTurnChange`, { prior, current });
+// FIX-6: for each recorded change, restore `from` only if the live value still equals `to`; otherwise leave
+// it and say so. Returns one line per change. `label` (a creature's name) prefixes lines about a creature
+// other than the one the whisper is spoken as (a wrap's forfeits).
+async function _baphRewindRestore(actor, applied, label = null) {
+  const lines = [];
+  const prefix = label ? `${label}: ` : '';
+  for (const change of Array.isArray(applied) ? applied : []) {
+    if (!change || typeof change !== 'object') continue;
+    if (change.kind === 'stunned') {
+      const live = Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0;
+      const was = Number(change.to?.countdown) || 0;
+      const from = Number(change.from?.countdown) || 0;
+      if (live !== was) {
+        lines.push(`${prefix}Stunned left at ${live} — changed since the turn ended`);
+        continue;
+      }
+      // Re-create Stunned only if the pay-down removed it; then the countdown and the stamp exactly as they were
+      // (a re-stamped stunnedAppliedAt would make the same-turn guard skip the next pay-down; a stamp left
+      // behind where there was none would do the same).
+      if (change.removed) await applyCondition(actor, 'stunned', from);
+      await actor.setFlag(MODULE_ID, 'stunnedCountdown', from);
+      const stamp = change.from?.appliedAt ?? null;
+      await actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
+      if (stamp && typeof stamp === 'object') await actor.setFlag(MODULE_ID, 'stunnedAppliedAt', stamp);
+      await _syncStunLock(actor);
+      lines.push(`${prefix}Stunned restored to ${from}`);
+    } else {
+      const cond = CONDITIONS[change.kind];
+      if (!cond) continue;
+      const live = _findExistingBuff(actor, change.kind)?.getFlag(MODULE_ID, 'tier') ?? 0;
+      if (live !== (Number(change.to) || 0)) {
+        lines.push(`${prefix}${cond.name} left at ${live} — changed since the turn ended`);
+        continue;
+      }
+      await applyCondition(actor, change.kind, Number(change.from));
+      lines.push(`${prefix}${cond.name} restored to ${change.from}`);
+    }
+  }
+  return lines;
+}
 
-  const breadcrumb = _getBreadcrumbCombatant(combat);
-  _handleAutoDecrement(combat, breadcrumb?.combatantId ?? null, 'pf1PostTurnChange', breadcrumb);
-});
-
-Hooks.on('combatTurn', (combat, updateData, updateOptions) => {
-  console.debug(`${MODULE_ID} | Hook fired: combatTurn`, { turn: combat.current?.turn, round: combat.current?.round });
-
-  const breadcrumb = _getBreadcrumbCombatant(combat);
-  _handleAutoDecrement(combat, breadcrumb?.combatantId ?? null, 'combatTurn', breadcrumb);
-});
-
-Hooks.on('combatRound', (combat, updateData, updateOptions) => {
-  console.debug(`${MODULE_ID} | Hook fired: combatRound`, { turn: combat.current?.turn, round: combat.current?.round });
-
-  const breadcrumb = _getBreadcrumbCombatant(combat);
-  _handleAutoDecrement(combat, breadcrumb?.combatantId ?? null, 'combatRound', breadcrumb);
-});
+// One GM whisper per rewind that found a recorded change, spoken as the rewound-to creature.
+async function _baphRewindWhisper(combatant, lines) {
+  if (!Array.isArray(lines) || !lines.length) return;
+  const actor = combatant?.actor ?? null;
+  const esc = foundry.utils.escapeHTML;
+  const name = esc(actor?.name ?? combatant?.name ?? 'Unknown');
+  await ChatMessage.create({
+    content: `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;">`
+      + `<p><strong>Rewind — ${name}</strong></p>`
+      + `<ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul></div>`,
+    whisper: _translatorGMIds(),
+    speaker: ChatMessage.getSpeaker({ actor }),
+    flags: { [MODULE_ID]: { rewindWhisper: true } },
+  });
+}
 
 /* ----------------------------------------------------------
    ORPHANED STUNNED FLAG CLEANUP — v2.34.0 round-2 FIX-1

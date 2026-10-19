@@ -64,6 +64,11 @@ one-off tool, not a runtime-dependency macro, and stays out of scope for this re
   Declares Withdraw and zeroes **all remaining actions**, including a live Haste bonus pip,
   via `game.baphometActions.endTurnActions`. Refuses outright, with no spend, on a creature
   carrying an active Fleeing marker buff.
+- `delay.js` — **Delay** (token-driven, no feat gate — universal, `GOAL_v2.46.1`). Declares Delay: asks the module
+  (`game.baphometActions.declareDelay`, relayed through the GM from a player) to mark the creature as delaying, then
+  passes the turn. Refuses, with no request and no turn change, a creature that is not in the active combat, is not the
+  current combatant, or already Delayed this round. Nothing refreshes when the creature acts later in the round; its
+  Frightened and Fleeing countdowns run once, when the delayed turn ends (or at the wrap, if it never acts).
 
 The three token-driven declare-macros (`vital-strike.js`, `charge.js`, `cleave.js`), the
 GM-only `haste-bonus-action.js`, and the three `GOAL_v2.37.8` declare-macros (`ready.js`,
@@ -90,6 +95,7 @@ Foundry does not auto-create world Macro documents from a module's shipped files
 | `ready.js` | Ready |
 | `total-defense.js` | Total Defense |
 | `withdraw.js` | Withdraw |
+| `delay.js` | Delay |
 
 **TWF is per-character**: copy `twf-tier-aware.js`'s contents per dual-wielder, edit the actor
 name and the two weapon item IDs near the top, and create a separate in-world macro for each.
@@ -106,6 +112,12 @@ name and the two weapon item IDs near the top, and create a separate in-world ma
    const world = game.macros.getName('Two-Weapon Fighting')?.command ?? '';
    console.log(repo.trim() === world.trim() ? 'TWF macro: IN SYNC' : 'TWF macro: DRIFT — world ≠ repo');
    ```
+
+### v2.46.1 sync note — paste one new macro
+
+`delay.js` is new in v2.46.1 (`SYNC_STAMP` `2026-10-18`). After updating the module, **create one new world macro named
+"Delay"** (Type: Script) and paste the complete file into it; no other macro changed, so nothing is re-pasted. Run the
+drift check above with `delay.js` and `Delay`. Set the macro so the players who need it can execute it.
 
 ### v2.46.0 sync note — re-paste all four
 
@@ -127,6 +139,9 @@ edit. A future deployment/sync mechanism is out of scope for this milestone.
 
 ## History
 
+- **v2.46.1** — New `delay.js` (`GOAL_v2.46.1_TURN_ENGINE` FIX-7): Delay, token-driven, no feat gate. Marks the
+  creature as delaying through `game.baphometActions.declareDelay` and passes the turn. `SYNC_STAMP` `2026-10-18`.
+  Paste a new world macro "Delay"; no other macro changed.
 - **v2.46.0** — `vital-strike.js`, `charge.js`, `cleave.js` and `twf-tier-aware.js`: intents carry
   `actorUuid`; the module forces one attack per declared use; Charge uses pf1's own `2[Charge]`;
   the Cleave macro refuses a second Cleave per round without Great Cleave. All four `SYNC_STAMP`s

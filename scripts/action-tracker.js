@@ -1,5 +1,5 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.30
+   ECHOES OF BAPHOMET — PF1.5 ACTION TRACKER v1.31
    Visual 3-action + reaction economy tracker for Combat Tracker.
 
    DISPLAY:  ◆ ◆ ◆   ◇  ◈ ◈ …   (3 actions, 1 reaction, + Combat Reflexes
@@ -15,6 +15,33 @@
              Paralyzed/Nauseated from baphomet-utils condition buffs/flags
              to auto-lock pips. Staggered is not a live tracked condition
              (folds into Slowed 1 — see v1.26 Changes / MECH-3).
+
+   v1.31 Changes (GOAL_v2.46.1_TURN_ENGINE — "Once Per Round", TD-95):
+   Turns are no longer detected by each client's combat-tracker render, and end-of-turn
+   countdowns no longer run from the `combatTurn` / `combatRound` hooks (which fire only on the
+   client that pressed the button). One trigger, one worker, one record — see "THE TURN ENGINE"
+   below `_applyConditionLocks`:
+   - [FIX-1] The Combat flag `turnLedger` records every turn start and end the engine performs,
+     the Delay marks and the current creature; `game.baphometActions.turnLedger(combatId)` reads a
+     deep copy on every client.
+   - [FIX-2] `combatTurnChange` — which fires on every client for every real turn or round change,
+     a player-ended one and a rewind included — is the one trigger. Only the active GM's client acts
+     on it, through one promise chain per combat; every other client follows the ledger. Retired and
+     removed: the `.active` branch of the tracker render, `_advanceTurnSeq`, `_turnSeqTrack`,
+     `_maybeResetForNewTurn`.
+   - [FIX-3] A Combatant update carries its writer's local turn index and the server stores it, so a
+     stale writer can move the turn back (the Next-Turn-twice flicker). The active GM repairs it.
+   - [FIX-4] The turn start runs once per creature per round on the GM, its Combatant writes awaited
+     before the ledger records it. **Trap 4 (v2.37.0) is LIFTED by name**: `_advanceTurnSeq`, the
+     `advanced`/dedupe guard, `_turnSeqTrack` and `_maybeResetForNewTurn` are gone; `_resetForSeq`
+     stays as bookkeeping; `_currentActiveCombatantId` is unchanged and reads the breadcrumb the GM's
+     task and the followers now stamp.
+   - [FIX-7] `game.baphometActions.declareDelay(combatantId)` and the relay kind `'delay'`.
+   - [FIX-8] A GM who joins seeds, starts or adopts the active combat's current turn.
+   - [FIX-9] The engine works on `game.combats.active`, never the combat this client views
+     (`game.combat`); the user interface keeps `game.combat`.
+   The entries below describe earlier versions. Where they name `_maybeResetForNewTurn`,
+   `_advanceTurnSeq` or the render-based `.active` detection, v1.31 retired them.
 
    v1.30 Changes (GOAL_v2.37.8_DECLARE_AND_WITHDRAW — "Declare and Withdraw",
    FIX-3):
@@ -104,11 +131,11 @@
      synchronous — the relay round trip and any revert happen after the
      call already returned. A caller reading the return value still only
      ever learns "applied locally," never "persisted."
-   - [Trap 4] `_advanceTurnSeq`, the `advanced`/dedupe guard inside
-     `_maybeResetForNewTurn`, `_turnSeqTrack`, `_resetForSeq`, and the
-     off-hand `(round, activeId)` staleness key (`_currentActiveCombatantId`)
-     are byte-unchanged — only the flag-write calls at the tail of
-     `_maybeResetForNewTurn` were touched.
+   - [Trap 4 — LIFTED by v2.46.1, by name] This v2.37.0 note said `_advanceTurnSeq`, the `advanced`/dedupe
+     guard inside `_maybeResetForNewTurn`, `_turnSeqTrack`, `_resetForSeq` and the off-hand
+     `(round, activeId)` staleness key were byte-unchanged. v2.46.1 (the turn engine) removed the first
+     three and moved the turn-start body; `_resetForSeq` stays as bookkeeping and the off-hand
+     `(round, activeId)` key (`_currentActiveCombatantId`) is unchanged.
    - [FIX-4, round-02 — OVERSEER FIX BRIEF Defect A] `_togglePip` now
      rejects, before any mutation, any `toggleIndex` that is not an integer
      in range for the array `toggleType` selects (`0 <= toggleIndex <
@@ -676,11 +703,9 @@ const AT_MODULE_ID = 'baphomet-utils';
    STATE MANAGEMENT
    In-memory only. Resets on page reload. No DB writes.
 
-   v1.6: pipState entries gained a `_resetForRound` field.
-   It tracks the round number we last auto-reset this combatant
-   for. If `_resetForRound !== combat.round` AND this combatant
-   is the current active, the renderCombatTracker hook resets
-   them and updates the marker. Idempotent across renders.
+   v1.6 (retired): pipState entries carried a `_resetForRound` field and the
+   renderCombatTracker hook reset the `.active` combatant. That render-based
+   detection is gone (v2.46.1): the turn engine starts turns on the active GM.
 
    v1.27 round-01 (DISPROVEN LIVE, retired): added `_resetForTurn`,
    tracking `combat.turn` at the moment of the last turn-start reset
@@ -691,11 +716,10 @@ const AT_MODULE_ID = 'baphomet-utils';
    re-fires the entire reset body. See the v1.27 changelog block above.
 
    v1.27 round-02 (shipped): `_resetForRound` AND `_resetForTurn` are BOTH
-   retired, replaced by a single `_resetForSeq` field — the sequence value
-   (from the client-local `_advanceTurnSeq` tracker, see below) at which
-   this combatant's own last turn-start reset fired. The guard in
-   _maybeResetForNewTurn no longer compares against any Foundry-supplied
-   round/turn value at all; see GOAL_v2.35.0_REACTION_RETIME.
+   retired, replaced by a single `_resetForSeq` field — the sequence value at
+   which this combatant's own last turn-start reset fired. Since v2.46.1 that
+   value is the turn ledger's `seq` for the start (bookkeeping only: the guard
+   is the ledger's `started` entry, not this field); see THE TURN ENGINE.
    ---------------------------------------------------------- */
 
 // Map<combatantId, {
@@ -714,14 +738,8 @@ const pipState = new Map();
 // Stored as: { actions: [bool,bool,bool], reaction: [bool], reflexPip: [bool], resetForSeq: number|null }
 const PIP_FLAG_KEY = 'pipState';
 
-// v1.27 round-02 (GOAL_v2.35.0_REACTION_RETIME) — module-owned, CLIENT-LOCAL
-// turn-sequence tracker backing the _maybeResetForNewTurn dedupe guard. See
-// _advanceTurnSeq for the full rationale. Map<combatId, { seq: number,
-// activeId: string, round: number }>. In-memory only, per client, cleared on
-// deleteCombat — never persisted, never compared cross-client (that is the
-// deliberate choice that sidesteps the durable-shared-flag question; see the
-// v1.27 changelog block and _advanceTurnSeq).
-const _turnSeqTrack = new Map();
+// v1.27 round-02's client-local turn-sequence tracker (_turnSeqTrack) is retired in v2.46.1: the turn
+// ledger (a Combat flag the active GM writes; see THE TURN ENGINE) is the record of which turns started.
 
 // v2.30.0 MAP / TWF off-hand budget.
 // OFF_BUDGET_FLAG_KEY: an ISOLATED, versioned combatant flag for the TWF off-hand
@@ -812,7 +830,7 @@ const _baphCleaveWindow = new Map(); // actorUuid -> { combatId, used }
 
 function _baphCleaveRecordFor(actor) {
   const rec = actor?.uuid ? _baphCleaveRecord.get(actor.uuid) : null;
-  if (!rec || rec.combatId !== (game.combat?.id ?? null)) return null;
+  if (!rec || rec.combatId !== (_baphEngineCombat()?.id ?? null)) return null;
   return rec;
 }
 
@@ -825,7 +843,7 @@ function _baphRecordAttackUse(actionUse, actor) {
     const added = Number(_baphMapAdded.get(uuid)) || 0;
     _baphMapAdded.delete(uuid);
     _baphCleaveRecord.set(uuid, {
-      combatId: game.combat?.id ?? null,
+      combatId: _baphEngineCombat()?.id ?? null,
       mapPenalty: added < 0 ? added : 0,
       powerAttack: !!actionUse?.formData?.['power-attack'],
       charge: actionUse?.shared?.charge === true
@@ -845,7 +863,7 @@ function _baphHasGreatCleave(actor) {
 function _baphCountCleaveUse(actor) {
   try {
     const uuid = actor?.uuid;
-    const combatId = game.combat?.id ?? null;
+    const combatId = _baphEngineCombat()?.id ?? null;
     if (!uuid || !combatId) return;
     const cur = _baphCleaveWindow.get(uuid);
     const before = (cur && cur.combatId === combatId) ? (Number(cur.used) || 0) : 0;
@@ -871,10 +889,12 @@ function _isSavedConditionLock(v) {
   return Number.isInteger(v) && v >= 0 && v <= 3;
 }
 
-function _initState(combatantId) {
+function _initState(combatantId, combatArg) {
   // Hydrate from the shared combatant flag if it exists (cross-client reload support).
   // getFlag is synchronous — reads from the document's in-memory data.
-  const combatant = game.combat?.combatants?.get(combatantId);
+  // v2.46.1 FIX-9: the combat is the one handed in (a combatant's own), else the engine combat.
+  const combat = (combatArg && typeof combatArg === 'object') ? combatArg : _baphEngineCombat();
+  const combatant = combat?.combatants?.get(combatantId);
   const actor = combatant?.actor;
   const saved = combatant?.getFlag('baphomet-utils', PIP_FLAG_KEY) ?? null;
 
@@ -906,11 +926,11 @@ function _initState(combatantId) {
   // `activeId` key) falls back to the old (round, turn) comparison so it is not
   // treated as stale-therefore-unspent.
   const ob = combatant?.getFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY) ?? null;
-  const _obRound = game.combat?.round ?? 0;
+  const _obRound = combat?.round ?? 0;
   const _obIsCurrent = !!ob && ob.round === _obRound && (
     Object.prototype.hasOwnProperty.call(ob, 'activeId')
-      ? ob.activeId === _currentActiveCombatantId(game.combat)
-      : ob.turn === (game.combat?.turn ?? 0) // legacy pre-round-03 flag shape
+      ? ob.activeId === _currentActiveCombatantId(combat)
+      : ob.turn === (combat?.turn ?? 0) // legacy pre-round-03 flag shape
   );
   const offHandUsed = _obIsCurrent ? (Number(ob.used) || 0) : 0;
   const offSeq      = Number(ob?.seq) || 0;
@@ -975,7 +995,7 @@ function _resetState(combatantId) {
   state.actions = [true, true, true];
   state.reaction = [true];
   // v1.23: recompute Combat Reflexes pips from current Dex mod.
-  const reflexCount = _combatReflexCount(game.combat?.combatants?.get(combatantId)?.actor);
+  const reflexCount = _combatReflexCount(_baphEngineCombat()?.combatants?.get(combatantId)?.actor);
   state.combatReflex = reflexCount > 0;
   state.reflexPip = Array(reflexCount).fill(true);
   state.conditionLocked = 0;
@@ -996,7 +1016,7 @@ function _resetState(combatantId) {
   // a manual reset() replaces the pip arrays wholesale, and any pending relay
   // revert captured BEFORE this call must never clobber it (Trap 3).
   state.pipSeq = (Number(state.pipSeq) || 0) + 1;
-  const _rsActor = game.combat?.combatants?.get(combatantId)?.actor;
+  const _rsActor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
   if (_rsActor) { _mapArmCrit.delete(_rsActor.uuid); _mapPendingConfirm.delete(_rsActor.uuid); }
   // _resetForSeq is metadata, not pip state — DO NOT touch it here.
   // It's owned by the render-based reset logic (_maybeResetForNewTurn).
@@ -1007,17 +1027,20 @@ function _resetState(combatantId) {
  * All connected clients receive an updateCombatant hook event and re-hydrate
  * their local pipState cache, providing cross-client pip synchronization.
  *
- * Fire-and-forget (no await) — keeps all spend paths synchronous.
- * Errors are logged to console but never throw.
+ * Every spend path ignores the return value, which keeps them synchronous
+ * (errors are logged to console and never throw). v2.46.1: the write's
+ * promise is RETURNED so the turn engine's turn start can await it; the
+ * combat is the one handed in (a combatant's own), else the engine combat.
  */
-function _writePipFlag(combatantId) {
+function _writePipFlag(combatantId, combatArg) {
   const state = _getState(combatantId);
   if (!state) return;
-  const combatant = game.combat?.combatants?.get(combatantId);
+  const combat = (combatArg && typeof combatArg === 'object') ? combatArg : _baphEngineCombat();
+  const combatant = combat?.combatants?.get(combatantId);
   if (!combatant) return;
   if (!combatant.isOwner) return;
 
-  combatant.setFlag('baphomet-utils', PIP_FLAG_KEY, {
+  return combatant.setFlag('baphomet-utils', PIP_FLAG_KEY, {
     actions:      [...state.actions],
     reaction:     [...state.reaction],
     reflexPip:    [...state.reflexPip],
@@ -1025,7 +1048,7 @@ function _writePipFlag(combatantId) {
     bonusManual:  !!state.bonusManual,
     bonusAuto:    !!state.bonusAuto,
     bonusPip:     Array.isArray(state.bonusPip) ? [...state.bonusPip] : [],
-    resetForSeq:  state._resetForSeq, // v1.27 round-02 — see _maybeResetForNewTurn / _advanceTurnSeq
+    resetForSeq:  state._resetForSeq, // v1.27 round-02 — bookkeeping since v2.46.1 (the turn ledger's seq)
   }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
 }
 
@@ -1033,21 +1056,24 @@ function _writePipFlag(combatantId) {
  * v2.30.0: Persist the TWF off-hand budget to its OWN isolated, versioned flag
  * (OFF_BUDGET_FLAG_KEY) — deliberately separate from the whole-blob pipState flag so
  * an unrelated pip/Haste/reset write can never carry-and-clobber it (GATE-1 probe fact 7).
- * Owner-gated, fire-and-forget (mirrors _writePipFlag). The bumped `seq` lets the
+ * Owner-gated (mirrors _writePipFlag). The bumped `seq` lets the
  * dedicated updateCombatant hydrator reject a stale self-echo.
+ * v2.46.1: returns the write's promise (the turn start awaits it); `atRound` is the turn
+ * engine task's own round (the chain may lag the live combat), else the combat's.
  */
-function _writeOffBudget(combatantId) {
+function _writeOffBudget(combatantId, combatArg, atRound) {
   const state = _getState(combatantId);
   if (!state) return;
-  const combatant = game.combat?.combatants?.get(combatantId);
+  const combat = (combatArg && typeof combatArg === 'object') ? combatArg : _baphEngineCombat();
+  const combatant = combat?.combatants?.get(combatantId);
   if (!combatant || !combatant.isOwner) return;
   // v2.35.0 round-03 (FD-01): stamp activeId, not turn — see OFF_BUDGET_FLAG_KEY's comment
   // and `_currentActiveCombatantId`.
-  combatant.setFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY, {
+  return combatant.setFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY, {
     used:     Number(state.offHandUsed) || 0,
     seq:      Number(state.offSeq) || 0,
-    round:    game.combat?.round ?? 0,
-    activeId: _currentActiveCombatantId(game.combat),
+    round:    atRound ?? combat?.round ?? 0,
+    activeId: _currentActiveCombatantId(combat),
   }).catch(err => console.error(`baphomet-utils | _writeOffBudget error: ${err}`));
 }
 
@@ -1244,7 +1270,7 @@ function _baphSyncStunLock(actor) {
 
 async function _baphSyncStunLockNow(actor) {
   const result = { combatants: 0, locked: 0, restored: 0 };
-  const combat = game.combat;
+  const combat = _baphEngineCombat();
   if (!combat) return result;
 
   const countdown = _baphStunnedCountdownOf(actor);
@@ -1314,172 +1340,234 @@ function _applyConditionLocks(combatantId, actor) {
 }
 
 /* ----------------------------------------------------------
-   RENDER-BASED TURN-START RESET — v1.6, guard redesigned v1.27 round-02
+   THE TURN ENGINE — v2.46.1 (GOAL_v2.46.1_TURN_ENGINE, "Once Per Round", TD-95)
 
-   Called from inside the renderCombatTracker hook for the
-   combatant whose row has the `.active` CSS class. Foundry
-   sets `.active` on the current combatant's <li> AFTER all
-   combat state has been updated, so it's the most reliable
-   signal of "who is the active combatant right now."
+   One trigger, one worker, one record.
 
-   The dedupe no longer compares against combat.round or combat.turn at
-   all (see the v1.27 round-01/round-02 changelog blocks near the top of
-   this file for why: combat.turn is a re-sortable array index, not an
-   identity, and Delay / mid-round insertion above the active combatant
-   were both confirmed live to move it without a genuine new turn
-   beginning). Instead the guard asks the client-local `_advanceTurnSeq`
-   tracker "did a genuine new turn actually start for this combatant,"
-   which is `true` only on an active-identity change or a round advance.
-   Still safely idempotent — call it on every render of the active
-   combatant; it only does work on a genuine turn-start transition.
+   THE TRIGGER. `combatTurnChange(combat, previous, current)` fires on EVERY client for every real
+   turn or round change (a player-ended one included, a rewind included); a pure initiative re-order
+   fires nothing. Only the ACTIVE GM's client does turn work on it: it pushes the event onto ONE promise
+   chain per combat (`_baphEngineQueue`), so two quick turn changes are handled once each, in order.
+   Every other client does no turn work on the hook; it FOLLOWS the ledger (below).
+
+   THE RECORD. One Combat flag, `flags['baphomet-utils'].turnLedger` (shape: GOAL FIX-1), written only
+   by the active GM, only from that combat's chain, every write awaited. It records each turn start and
+   each turn end the engine performed (with the changes the end applied, so a rewind can undo them), the
+   Delay marks, and the current creature. `game.baphometActions.turnLedger(combatId)` reads a deep copy.
+   Foundry's update merges nested objects, so a key left out of a write is never deleted: an entry is
+   removed by writing `null` over it (a tombstone), and `_baphLedgerRead` — the only reader — strips
+   every `null`-valued key from the plain-object levels (arrays are copied whole, so a stored `null`
+   inside `applied` survives). Local reference: `Document#setFlag` / `getFlag` / `unsetFlag` in
+   docs/reference/foundry-v13/99_Combined_Foundry_v13_PF1_[KnowledgeFiles.md] (Flags, :1745-1760;
+   "Confirmed Actor Method Status", :835) and docs/reference/foundry-v13/foundry-and-pf1.md:361.
+
+   THE TURN START (FIX-4) runs on the active GM inside the task: today's in-memory reset body, then the
+   Combatant writes AWAITED (pip flag, off-hand budget, stun-lock record, Off-Guard mark), and only then
+   the ledger records `started`. It acts on the task's combatant and round, never on the live
+   `combat.combatant` / `combat.round` (the chain may lag the live combat). Each creature starts once per
+   round: a Delay's re-entry, a re-order and a rewind start nothing. Followers (every other client) run
+   the same in-memory body when the ledger records a start newer than any they have seen; their first
+   sight of a combat's ledger adopts it.
+
+   THE END OF TURN (FIX-5) is `_baphEndOfTurnRun` in condition-overlay.js, called from the task for the
+   departing creature; the changes it returns are what the ledger's `ended` entry keeps. A rewind
+   (FIX-6, `_baphRewindRestore`) restores them where the live value is unchanged, then clears the entry.
+
+   THE REPAIR (FIX-3). Every Combatant update carries its writer's LOCAL turn index, and the server
+   stores it, so a stale writer can move the turn back (L5). On the active GM, one macrotask after any
+   Combatant write, the engine compares the current creature with the one it remembered from the last
+   Combat update that moved the turn and, when they differ and the remembered creature is still in the
+   turn order, puts the turn back with `turnEvents: false` and one console.warn.
+
+   This replaces the render-based detection (`_advanceTurnSeq`, `_turnSeqTrack`,
+   `_maybeResetForNewTurn`) and condition-overlay.js's `combatTurn` / `combatRound` /
+   `pf1PostTurnChange` listeners. Trap 4 (v2.37.0) is lifted by name.
+
+   Which combat: the engine combat is `game.combats.active` (`_baphEngineCombat`), never the combat this
+   client happens to be viewing (`game.combat`); the user interface keeps `game.combat`.
    ---------------------------------------------------------- */
 
-/**
- * v2.34.0: PROACTIVE BREADCRUMB — cross-script "who is the active combatant
- * right now" signal, read by condition-overlay.js's turn-transition decrement
- * logic (Stunned countdown + the TRUST-4 activeGM gate's dedupe context).
- *
- * Two prior fix attempts derived the departing combatant REACTIVELY at
- * combatTurn hook-fire time (first `combat.current.turn`, then
- * `combat.combatant`), and both were disproven by live two-seat
- * re-verification in a 2-combatant alternating encounter — Foundry
- * combat-state propagation is not guaranteed settled at that exact moment
- * in this environment. Instead of a fourth reactive read, this STAMPS the
- * active combatant at the one point already proven safe: the render-based
- * turn-start detection below (`_maybeResetForNewTurn`, called from inside
- * `renderCombatTracker`, which Foundry guarantees fires only after combat
- * state is fully committed — the whole premise of the v1.6 rewrite this
- * function is part of). condition-overlay.js reads this instead of
- * re-deriving anything from combat.turns/combat.combatant/combat.current.turn
- * at its own hook-fire time.
- *
- * Bridged via `globalThis` (the same pattern already used by
- * `globalThis.baphometTWF` / `globalThis.baphometAoO` elsewhere in this
- * file) because `module.json` loads these as classic (non-module)
- * `<script>` tags sharing one global scope — action-tracker.js is listed
- * BEFORE condition-overlay.js, so the global is already declared by the
- * time the other file reads it.
- *
- * @param {Combat} combat
- * @param {string} combatantId
- */
-function _stampActiveCombatantBreadcrumb(combat, combatantId) {
+const AT_TURN_LEDGER_KEY = 'turnLedger';
+
+// FIX-9 (Q5): the combat the engine works on — the active combat, not the viewed one.
+function _baphEngineCombat() {
+  return game.combats?.active ?? null;
+}
+
+function _baphEngineIsActiveGM() {
+  return !!(game.user?.isGM && game.user === game.users?.activeGM);
+}
+
+// { round, turn, combatantId } from the combat's own current state, read now.
+function _baphEngineStateOf(combat) {
+  const c = combat?.current;
+  const id = (c && c.combatantId !== undefined) ? c.combatantId : (combat?.combatant?.id ?? null);
+  return { round: Number(c?.round ?? combat?.round) || 0, turn: c?.turn ?? combat?.turn ?? null, combatantId: id ?? null };
+}
+
+/* --- the ledger ------------------------------------------------------ */
+
+// Plain-object levels lose their null-valued keys (tombstones); arrays are copied whole.
+function _baphLedgerStrip(value) {
+  if (Array.isArray(value)) return JSON.parse(JSON.stringify(value));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (v === null || v === undefined) continue;
+      out[k] = _baphLedgerStrip(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+// A deep copy of the combat's ledger, or null when it has none. The only reader of the flag.
+function _baphLedgerRead(combat) {
+  const raw = combat?.getFlag?.(AT_MODULE_ID, AT_TURN_LEDGER_KEY);
+  if (!raw || typeof raw !== 'object') return null;
+  const led = _baphLedgerStrip(raw);
+  led.seq = Number(led.seq) || 0;
+  led.current = (led.current && typeof led.current === 'object') ? led.current : null;
+  if (!led.rounds || typeof led.rounds !== 'object' || Array.isArray(led.rounds)) led.rounds = {};
+  for (const key of Object.keys(led.rounds)) {
+    const rd = led.rounds[key];
+    if (!rd || typeof rd !== 'object') { delete led.rounds[key]; continue; }
+    for (const part of ['started', 'ended', 'delaying']) {
+      if (!rd[part] || typeof rd[part] !== 'object') rd[part] = {};
+    }
+  }
+  return led;
+}
+
+// A working copy (`led`, what the ledger will read as) and the sparse write (`patch`, with null tombstones).
+function _baphLedgerWork(combat) {
+  return { led: _baphLedgerRead(combat) ?? { seq: 0, current: null, rounds: {} }, patch: {} };
+}
+
+function _baphLedgerSetIn(obj, parts, value) {
+  let o = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!o[parts[i]] || typeof o[parts[i]] !== 'object') o[parts[i]] = {};
+    o = o[parts[i]];
+  }
+  o[parts[parts.length - 1]] = value;
+}
+
+function _baphLedgerPut(w, parts, value) {
+  _baphLedgerSetIn(w.led, parts, value);
+  _baphLedgerSetIn(w.patch, parts, value);
+}
+
+// Remove an entry: gone from the working copy now, a null tombstone in the write, absent from every read.
+function _baphLedgerDrop(w, parts) {
+  let o = w.led;
+  for (let i = 0; i < parts.length - 1; i++) {
+    o = o?.[parts[i]];
+    if (!o || typeof o !== 'object') return;
+  }
+  const last = parts[parts.length - 1];
+  if (!Object.prototype.hasOwnProperty.call(o, last)) return;
+  delete o[last];
+  _baphLedgerSetIn(w.patch, parts, null);
+}
+
+function _baphLedgerNextSeq(w) {
+  w.led.seq = (Number(w.led.seq) || 0) + 1;
+  return w.led.seq;
+}
+
+const _baphLedgerPath = (round, part, combatantId) => ['rounds', String(round), part, combatantId];
+
+// The ONE awaited ledger write of a task. `cur` (optional) becomes the ledger's `current`; rounds older
+// than the round before it are dropped (rounds above it — a rewind stepped back from them — stay).
+async function _baphLedgerCommit(combat, w, cur) {
+  if (cur) {
+    const keepFrom = Number(cur.round) - 1;
+    for (const key of Object.keys(w.led.rounds)) {
+      if (Number(key) < keepFrom) _baphLedgerDrop(w, ['rounds', key]);
+    }
+    const c = { round: Number(cur.round), turn: cur.turn ?? null, combatantId: cur.combatantId };
+    w.led.current = c;
+    w.patch.current = { ...c };
+  }
+  w.patch.seq = w.led.seq;
+  await combat.setFlag(AT_MODULE_ID, AT_TURN_LEDGER_KEY, w.patch);
+}
+
+// Every `started` entry, lowest seq first.
+function _baphLedgerStartedList(led) {
+  const out = [];
+  for (const [r, rd] of Object.entries(led?.rounds ?? {})) {
+    for (const [combatantId, ent] of Object.entries(rd?.started ?? {})) {
+      const s = Number(ent?.seq);
+      if (Number.isFinite(s)) out.push({ round: Number(r), combatantId, seq: s });
+    }
+  }
+  return out.sort((a, b) => a.seq - b.seq);
+}
+
+/* --- one promise chain per combat ------------------------------------ */
+
+// combatId -> { tail: Promise, last: { round, turn, combatantId } | null }
+//   `last` is the previous task's `current` — the departing state of the next task (T1: never the hook's
+//   `previous` where this or the ledger has the answer).
+const _baphEngineChains = new Map();
+
+function _baphEngineChainFor(combatId) {
+  let chain = _baphEngineChains.get(combatId);
+  if (!chain) {
+    chain = { tail: Promise.resolve(), last: null };
+    _baphEngineChains.set(combatId, chain);
+  }
+  return chain;
+}
+
+// Runs `task(chain)` after everything queued before it for this combat. A task's error is logged and
+// never breaks the chain; the returned promise carries the task's own result (or its error).
+function _baphEngineQueue(combat, task) {
+  const chain = _baphEngineChainFor(combat.id);
+  const run = chain.tail.then(() => task(chain));
+  chain.tail = run.catch((err) => {
+    console.error(`${AT_MODULE_ID} | turn engine task failed`, err);
+    return null;
+  });
+  return run;
+}
+
+function _baphEngineForget(combatId) {
+  _baphEngineChains.delete(combatId);
+  _baphEngineRemembered.delete(combatId);
+  _baphEngineSeenSeq.delete(combatId);
+  _baphEngineRepairing.delete(combatId);
+}
+
+/* --- the turn start --------------------------------------------------- */
+
+// Moves the breadcrumb ("who is the active combatant", read by _currentActiveCombatantId). The engine's
+// task and the followers stamp it; `at` is the task's { round, turn }, not the live combat's.
+function _stampActiveCombatantBreadcrumb(combat, combatantId, at) {
   globalThis.baphometActiveCombatant = {
     combatId:    combat?.id ?? null,
     combatantId: combatantId ?? null,
-    round:       combat?.round ?? null,
-    turn:        combat?.turn ?? null,
+    round:       at?.round ?? combat?.round ?? null,
+    turn:        at?.turn ?? combat?.turn ?? null,
   };
 }
 
-/**
- * v1.27 round-02 (GOAL_v2.35.0_REACTION_RETIME) — module-owned, CLIENT-LOCAL
- * turn-sequence advance, backing the _maybeResetForNewTurn dedupe guard.
- *
- * Replaces the round-01 (round, `combat.turn`-index) pair guard, which the
- * live two-seat probe
- * (`docs/ai-council/GOAL_v2.35.0_REACTION_RETIME/20260724-163226/LIVE_PROBE_RESULT.md`)
- * confirmed spuriously re-fires the ENTIRE turn-start reset body when Delay
- * or a mid-round insertion above the active combatant re-sorts the turn
- * order and moves `combat.turn` out from under a combatant whose active
- * IDENTITY never actually changed. `combat.turn` is an index into a
- * re-sortable array, not an identity — this never keys on it.
- *
- * The sequence for a given combat (`_turnSeqTrack`, keyed by combat.id)
- * advances only when EITHER:
- *   1. the `.active` combatant's IDENTITY differs from the one last
- *      observed by THIS client, or
- *   2. `combat.round` has advanced since THIS client last observed it.
- * Condition 2 is required, not redundant: a single-combatant combat (solo
- * boss, one-creature scene) never changes active identity, so an
- * identity-only key would advance exactly once and that combatant would
- * never refresh again for the rest of the fight (required case 7).
- *
- * CLIENT-LOCALITY TRAP (the reason this is a tracker, not a document flag):
- * a module-owned counter held only in client memory starts EMPTY on every
- * fresh client. Rather than treat "no local record for this combat yet" as
- * "advance" (which would refresh already-spent pips on a mid-turn
- * reload/reconnect — regressing required case 6), the first observation of
- * a combat ADOPTS the current active combatant as already-current WITHOUT
- * signaling an advance. This is the same shape as the retired v1.25
- * `_maybeResetReactionsForNewRound` null-branch (see that changelog entry
- * above). `_initState` already hydrated this combatant's correct
- * spent/available pip VALUES from the persisted combatant flag before this
- * ever runs — only the dedupe bookkeeping is being (re)established here,
- * not the pips themselves. This is also why the persisted `_resetForSeq`
- * field is schema-parity bookkeeping only: this function never compares a
- * remote client's persisted sequence number against its own, which is what
- * avoids needing a durable, permission-sensitive, cross-client-shared
- * document write for this guard at all.
- *
- * `combatStart` seeds `_turnSeqTrack` for a brand-new combat directly (see
- * that hook) so the very first render doesn't redundantly re-fire on top
- * of the fresh full pool `_initState` + `_applyConditionLocks` already gave
- * the first combatant.
- *
- * @param {Combat} combat
- * @param {string} combatantId - the combatant Foundry marked `.active`
- * @returns {{ advanced: boolean, seq: number }}
- */
-function _advanceTurnSeq(combat, combatantId) {
-  const combatId = combat.id;
-  const round = combat.round ?? 0;
-  let track = _turnSeqTrack.get(combatId);
-
-  if (!track) {
-    // First observation of this combat by THIS client — adopt, don't fire.
-    track = { seq: 0, activeId: combatantId, round };
-    _turnSeqTrack.set(combatId, track);
-    return { advanced: false, seq: track.seq };
-  }
-
-  const identityChanged = track.activeId !== combatantId;
-  const roundAdvanced = track.round !== round;
-  if (!identityChanged && !roundAdvanced) {
-    return { advanced: false, seq: track.seq }; // no genuine new turn-start; already caught up
-  }
-
-  track.seq += 1;
-  track.activeId = combatantId;
-  track.round = round;
-  return { advanced: true, seq: track.seq };
-}
-
-function _maybeResetForNewTurn(combat, combatantId, combatant) {
-  if (!combat || !combatantId) return;
-
+// Today's in-memory turn-start body (v1.24 to v2.46.0, unchanged): everything the retired
+// `_maybeResetForNewTurn` set between `state._resetForSeq = seq` and its GM-only write block.
+function _baphEngineApplyBody(combat, combatantId, combatant, seq) {
   const state = _getState(combatantId);
-  if (!state) return;
+  if (!state) return null;
 
-  const { advanced, seq } = _advanceTurnSeq(combat, combatantId);
-
-  // v2.44.1 FIX-A (TD-81): a turn this client ADOPTS (after a GM reload, or a GM joining
-  // mid-combat) still has its proactive breadcrumb stamped, and an already-caught-up render
-  // refreshes a stale `turn` index after a reorder. The end-of-turn decrements read that
-  // breadcrumb; with none they skip the whole turn. Only the stamp lives above the early
-  // return; everything else a turn start sets up stays below it.
-  if (combatantId === combat.combatant?.id) {
-    _stampActiveCombatantBreadcrumb(combat, combatantId);
-  }
-
-  if (!advanced) return; // adopted, or already reset for this turn instance — no genuine new turn-start
-
-  // Mark first to prevent any chance of re-entry (defensive).
   state._resetForSeq = seq;
-
-  // v2.34.0: stamp the proactive breadcrumb — see the comment block above
-  // _stampActiveCombatantBreadcrumb for the full rationale. Safe here
-  // specifically because this runs inside renderCombatTracker (post-commit),
-  // not inside a volatile turn-transition hook.
-  _stampActiveCombatantBreadcrumb(combat, combatantId);
 
   // v1.24: reset the action pips for the new turn.
   state.actions = [true, true, true];
   state.conditionLocked = 0;
   // v1.27 (GOAL_v2.35.0_REACTION_RETIME): reaction + Combat Reflexes (AoO)
   // pips are a per-TURN resource (CONFLICT-1 ruling) — refresh them here
-  // too, at the same turn-start detection point as the action pips, instead
-  // of on the retired shared round-start boundary.
+  // too, at the same turn-start point as the action pips.
   _resetReactionReflexPips(combatantId, combatant);
   // v2.29.0: refill the Haste bonus availability for the new turn (grant persists; incap derived).
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
@@ -1496,49 +1584,435 @@ function _maybeResetForNewTurn(combat, combatantId, combatant) {
   const _resetActorUuid = combatant?.actor?.uuid;
   if (_resetActorUuid) { _mapArmCrit.delete(_resetActorUuid); _mapPendingConfirm.delete(_resetActorUuid); }
   // GOAL_v2.46.0 FIX-4/FIX-5: the same actor's own turn start clears its Cleave record and window.
-  // Another creature's turn start never reaches these (this is the current combatant's actor only).
+  // Another creature's turn start never reaches these (this is the starting creature's actor only).
   if (_resetActorUuid) { _baphCleaveRecord.delete(_resetActorUuid); _baphCleaveWindow.delete(_resetActorUuid); }
 
   if (combatant?.actor) {
     _applyConditionLocks(combatantId, combatant.actor);
   }
 
-  // Persist reset state so remote clients hydrate the fresh full pips.
-  // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06, Trap 4's "the flag write
-  // itself"): this whole function already fires identically and independently
-  // on EVERY connected client — turn/round state is not player-specific, so
-  // the GM's own client detects the same turn-start and performs this same
-  // write on its own authority. A non-GM client attempting it too would just
-  // be FD-06's doomed direct write a second time for no benefit; no relay is
-  // needed here (contrast the player-driven spend paths below, which ARE
-  // player-specific and do relay). The turn-sequence guard above this block
-  // (_advanceTurnSeq / the `advanced` check / _resetForSeq) is untouched.
-  if (game.user.isGM) {
-    _writePipFlag(combatantId);
-    _writeOffBudget(combatantId); // v2.30.0: persist the reset off-hand budget (isolated flag)
-    // v2.44.0 FIX-3 (Q3): while the creature is Stunned the turn start refilled the pips and then locked
-    // them again (`_resetReactionReflexPips`); the stun's record becomes what the refill just made
-    // available, so lifting the stun later gives back exactly that. The write joins the stun-lock
-    // chain, so a later `syncStunLock` runs only after it settles; the countdown is re-read inside
-    // the queued task and the record is written only if the stun is still on.
-    if (combatant && _baphStunnedCountdownOf(combatant.actor) > 0) {
-      const reflexAtTurnStart = state.reflexPip.map(() => true);
-      const run = _baphStunLockChain.then(async () => {
-        if (!(_baphStunnedCountdownOf(combatant.actor) > 0)) return;
-        await combatant.setFlag(AT_MODULE_ID, AT_STUN_LOCK_FLAG_KEY, {
-          reaction: true,
-          reflexPip: reflexAtTurnStart,
+  _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${combat?.round ?? 0}, seq ${seq})`);
+  return state;
+}
+
+// FIX-4, on the active GM, inside a task: `at` is the task's { round, turn }. Awaits every Combatant
+// write; the caller records `started` in the ledger only after this resolves.
+async function _baphEngineTurnStart(combat, combatantId, at, seq) {
+  const combatant = combat.combatants?.get(combatantId);
+  if (combatant?.actor) {
+    if (!_getState(combatantId)) _initState(combatantId, combat);
+    const state = _getState(combatantId);
+    if (state) {
+      _baphEngineApplyBody(combat, combatantId, combatant, seq);
+      _stampActiveCombatantBreadcrumb(combat, combatantId, at);
+      _refreshPipRow(combatantId);
+
+      // The GM's writes, awaited (they were fire-and-forget on the retired render path).
+      await _writePipFlag(combatantId, combat);
+      await _writeOffBudget(combatantId, combat, at?.round);
+      // v2.44.0 FIX-3 (Q3): while the creature is Stunned the turn start refilled the pips and then locked
+      // them again (`_resetReactionReflexPips`); the stun's record becomes what the refill just made
+      // available, so lifting the stun later gives back exactly that. The write joins the stun-lock
+      // chain, so a later `syncStunLock` runs only after it settles; the countdown is re-read inside
+      // the queued task and the record is written only if the stun is still on.
+      if (_baphStunnedCountdownOf(combatant.actor) > 0) {
+        const reflexAtTurnStart = state.reflexPip.map(() => true);
+        const run = _baphStunLockChain.then(async () => {
+          if (!(_baphStunnedCountdownOf(combatant.actor) > 0)) return;
+          await combatant.setFlag(AT_MODULE_ID, AT_STUN_LOCK_FLAG_KEY, {
+            reaction: true,
+            reflexPip: reflexAtTurnStart,
+          });
         });
-      });
-      _baphStunLockChain = run.catch(err => {
-        console.error(`${AT_MODULE_ID} | stunLock write error: ${err}`);
-        return null;
-      });
+        _baphStunLockChain = run.catch(err => {
+          console.error(`${AT_MODULE_ID} | stunLock write error: ${err}`);
+          return null;
+        });
+        await _baphStunLockChain;
+      }
     }
   }
-
-  _debugLog(`Reset pips for ${combatant?.name ?? combatantId} (round ${combat.round ?? 0}, seq ${seq})`);
+  // The Off-Guard mark (moved here from condition-overlay.js's retired updateCombat path): for THIS
+  // combatant, then the translator checks. Resolved when called (condition-overlay.js loads after this file).
+  if (typeof _baphOffGuardMarkTurn === 'function') await _baphOffGuardMarkTurn(combat, combatantId);
 }
+
+/* --- the end of a turn, a rewind, the task ------------------------------ */
+
+// Runs the departing creature's end of turn (FIX-5) and records it (`ended`, with what it applied).
+async function _baphEngineEndTurn(combat, w, departing, forfeit) {
+  const combatant = combat.combatants?.get(departing.combatantId);
+  const seq = _baphLedgerNextSeq(w);
+  let applied = [];
+  try {
+    if (combatant?.actor && typeof _baphEndOfTurnRun === 'function') {
+      applied = (await _baphEndOfTurnRun(combat, combatant, departing)) ?? [];
+    }
+  } catch (err) {
+    console.error(`${AT_MODULE_ID} | end of turn failed for ${combatant?.name ?? departing.combatantId}`, err);
+  }
+  const entry = { seq, applied };
+  if (forfeit) entry.forfeit = true;
+  _baphLedgerPut(w, _baphLedgerPath(departing.round, 'ended', departing.combatantId), entry);
+  _baphLedgerDrop(w, _baphLedgerPath(departing.round, 'delaying', departing.combatantId));
+}
+
+// FIX-6: a rewind restores what the departed turn's end applied (where unchanged), clears the entry, and
+// reverses a wrap's forfeits. It starts nothing.
+async function _baphEngineRewind(combat, w, cur, depRound) {
+  const curRound = Number(cur.round);
+  const rd = w.led.rounds[String(curRound)];
+  const targets = [];
+  const own = rd?.ended?.[cur.combatantId];
+  if (own && own.forfeit !== true) targets.push({ id: cur.combatantId, entry: own, forfeit: false });
+  if (curRound < depRound) {
+    for (const [id, entry] of Object.entries(rd?.ended ?? {})) {
+      if (entry?.forfeit === true) targets.push({ id, entry, forfeit: true });
+    }
+  }
+  const lines = [];
+  for (const t of targets) {
+    const combatant = combat.combatants?.get(t.id);
+    if (combatant?.actor && typeof _baphRewindRestore === 'function') {
+      try {
+        lines.push(...await _baphRewindRestore(combatant.actor, t.entry.applied, t.id === cur.combatantId ? null : combatant.name));
+      } catch (err) {
+        console.error(`${AT_MODULE_ID} | rewind restore failed for ${combatant.name}`, err);
+      }
+    }
+    _baphLedgerDrop(w, _baphLedgerPath(curRound, 'ended', t.id));
+    if (t.forfeit) _baphLedgerPut(w, _baphLedgerPath(curRound, 'delaying', t.id), 'waiting');
+  }
+  if (lines.length && typeof _baphRewindWhisper === 'function') {
+    try { await _baphRewindWhisper(combat.combatants?.get(cur.combatantId) ?? null, lines); }
+    catch (err) { console.error(`${AT_MODULE_ID} | rewind whisper failed`, err); }
+  }
+}
+
+// FIX-2: one queued turn change. `cur` is a copy of the hook's `current`; `hookPrev` the hook's `previous`
+// (used only on a GM that has neither a previous task nor a ledger).
+async function _baphEngineTurnTask(combat, chain, cur, hookPrev) {
+  if (!cur?.combatantId || !(Number(cur.round) > 0)) {
+    // Reset to round 0 (or no current creature): the record belongs to a combat that no longer is.
+    chain.last = null;
+    if (combat.getFlag(AT_MODULE_ID, AT_TURN_LEDGER_KEY)) await combat.unsetFlag(AT_MODULE_ID, AT_TURN_LEDGER_KEY);
+    return;
+  }
+  const curRound = Number(cur.round);
+  const curState = { round: curRound, turn: cur.turn ?? null, combatantId: cur.combatantId };
+  try {
+    const w = _baphLedgerWork(combat);
+    // 1. Departing: the previous task's current, else the ledger's, else the hook's previous.
+    const dep = chain.last ?? w.led.current ?? hookPrev ?? null;
+    const depRound = Number(dep?.round) || 0;
+    // 2. Nothing is done when current names the departing combatant and round.
+    if (dep?.combatantId && dep.combatantId === cur.combatantId && depRound === curRound) return;
+
+    // The departing state's own stored turn (never a fresh lookup); with no finite numeric turn, 0.
+    const depTurn = (typeof dep?.turn === 'number' && Number.isFinite(dep.turn)) ? dep.turn : 0;
+    // 3. Direction.
+    const rewind = depRound > 0 && (curRound < depRound || (curRound === depRound && Number(cur.turn) < depTurn));
+
+    if (rewind) {
+      // 5. Rewind (FIX-6): starts nothing.
+      await _baphEngineRewind(combat, w, cur, depRound);
+    } else {
+      // 4. Forward: the departing creature's end of turn, the forfeits at a wrap, the arriving creature's start.
+      const departingId = dep?.combatantId ?? null;
+      if (departingId && depRound > 0) {
+        const rd = w.led.rounds[String(depRound)];
+        const ended = !!rd?.ended?.[departingId];
+        const waiting = rd?.delaying?.[departingId] === 'waiting';
+        if (combat.combatants?.get(departingId) && !ended && !waiting) {
+          await _baphEngineEndTurn(combat, w, { combatId: combat.id, round: depRound, turn: depTurn, combatantId: departingId }, false);
+        }
+      }
+      if (depRound > 0 && curRound > depRound) {
+        // A creature still delaying when the round wraps forfeited its turn (Q2): its end of turn runs now.
+        const delaying = { ...(w.led.rounds[String(depRound)]?.delaying ?? {}) };
+        for (const [id, mark] of Object.entries(delaying)) {
+          if (mark !== 'waiting') continue;
+          if (w.led.rounds[String(depRound)]?.ended?.[id]) { _baphLedgerDrop(w, _baphLedgerPath(depRound, 'delaying', id)); continue; }
+          if (combat.combatants?.get(id)) {
+            const idx = Array.from(combat.turns ?? []).findIndex((t) => t.id === id);
+            await _baphEngineEndTurn(combat, w, { combatId: combat.id, round: depRound, turn: idx >= 0 ? idx : 0, combatantId: id }, true);
+          }
+          _baphLedgerDrop(w, _baphLedgerPath(depRound, 'delaying', id));
+        }
+      }
+      const here = w.led.rounds[String(curRound)];
+      if (here?.started?.[cur.combatantId]) {
+        // Already started this round (a Delay's re-entry, a re-order): nothing refreshes.
+        if (here.delaying?.[cur.combatantId] === 'waiting') {
+          _baphLedgerPut(w, _baphLedgerPath(curRound, 'delaying', cur.combatantId), 'acting');
+        }
+      } else {
+        const seq = _baphLedgerNextSeq(w);
+        try {
+          await _baphEngineTurnStart(combat, cur.combatantId, curState, seq);
+        } catch (err) {
+          console.error(`${AT_MODULE_ID} | turn start failed for ${cur.combatantId}`, err);
+        }
+        _baphLedgerPut(w, _baphLedgerPath(curRound, 'started', cur.combatantId), { seq });
+      }
+    }
+    // 6. One awaited ledger write.
+    await _baphLedgerCommit(combat, w, curState);
+    _stampActiveCombatantBreadcrumb(combat, cur.combatantId, curState);
+  } finally {
+    chain.last = curState;
+  }
+}
+
+/* --- Delay (FIX-7) ------------------------------------------------------ */
+
+// Marks `delaying[combatantId] = 'waiting'` for the engine's current round, through the combat's chain.
+async function _baphEngineDelayMark(combat, combatantId) {
+  if (!_baphEngineIsActiveGM()) return { ok: false, reason: 'no GM is connected' };
+  if (!combat || combat.started !== true) return { ok: false, reason: 'no combat is running' };
+  if (!combat.combatants?.get(combatantId)) return { ok: false, reason: 'not in the active combat' };
+  return _baphEngineQueue(combat, async (chain) => {
+    const w = _baphLedgerWork(combat);
+    const cur = chain.last ?? w.led.current ?? _baphEngineStateOf(combat);
+    if (!cur?.combatantId || cur.combatantId !== combatantId) return { ok: false, reason: 'not their turn' };
+    const round = Number(cur.round);
+    if (w.led.rounds[String(round)]?.delaying?.[combatantId]) return { ok: false, reason: 'already Delayed this round' };
+    _baphLedgerPut(w, _baphLedgerPath(round, 'delaying', combatantId), 'waiting');
+    await _baphLedgerCommit(combat, w, null);
+    return { ok: true };
+  }).catch((err) => {
+    console.error(`${AT_MODULE_ID} | Delay mark failed`, err);
+    return { ok: false, reason: 'the ledger could not be written' };
+  });
+}
+
+// game.baphometActions.declareDelay: on the active GM the mark goes through the chain; anywhere else the
+// request is relayed through the existing pip relay ('delay'), which re-checks sender and ownership.
+async function _baphEngineDeclareDelay(combatantId) {
+  const combat = _baphEngineCombat();
+  if (!combat || combat.started !== true) return { ok: false, reason: 'no combat is running' };
+  if (!combat.combatants?.get(combatantId)) return { ok: false, reason: 'not in the active combat' };
+  if (_baphEngineIsActiveGM()) return _baphEngineDelayMark(combat, combatantId);
+  if (!game.users?.activeGM) return { ok: false, reason: 'no GM is connected' };
+  if (!_baphActionSocket) return { ok: false, reason: 'the GM cannot be reached' };
+  try {
+    const result = await _baphActionSocket.executeAsGM('baphPipSpendRelay', { combatantId, kind: 'delay' });
+    if (result && typeof result === 'object') return { ok: result.ok === true, reason: result.reason };
+    return { ok: false, reason: 'the GM did not answer' };
+  } catch (err) {
+    console.error(`${AT_MODULE_ID} | declareDelay relay failed: ${err}`);
+    return { ok: false, reason: 'the GM could not be reached' };
+  }
+}
+
+/* --- FIX-2 / FIX-3 hooks (active GM only) ------------------------------- */
+
+// combatId -> { round, turn, combatantId }: the creature the engine believes is current, recorded from
+// Combat updates that moved the turn (FIX-3), and the objects those updates made current (FIX-2's
+// stale-event rule: a combatTurnChange whose `current` no Combat update made came from a Combatant write).
+const _baphEngineRemembered = new Map();
+const _baphEngineSeenCurrent = new WeakSet();
+const _baphEngineRepairing = new Map(); // combatId -> the in-flight repair's settled promise
+
+Hooks.on('updateCombat', (combat, changed) => {
+  if (!_baphEngineIsActiveGM()) return;
+  const current = combat?.current;
+  if (current && typeof current === 'object') _baphEngineSeenCurrent.add(current);
+  const has = (k) => !!changed && Object.prototype.hasOwnProperty.call(changed, k);
+  // Only an update that carried round, turn or combatants records the turn: every ledger write and Delay
+  // mark is a flag-only Combat update, and recording on one that arrived between a revert and its repair
+  // would re-record the reverted state and cancel the repair.
+  if (has('round') || has('turn') || has('combatants') || !_baphEngineRemembered.has(combat.id)) {
+    _baphEngineRemembered.set(combat.id, _baphEngineStateOf(combat));
+  }
+});
+
+Hooks.on('combatTurnChange', (combat, previous, current) => {
+  if (!_baphEngineIsActiveGM()) return;
+  if (!combat?.id || !current) return;
+  if (!_baphEngineSeenCurrent.has(current)) {
+    // Not made by a Combat update: a Combatant write moved the turn (F-2) and FIX-3 repairs it — unless the
+    // creature the engine remembered is no longer in the combat (it was deleted and core moved the turn on
+    // purpose): then this event is real, and the remembered state becomes the combat's own.
+    const remembered = _baphEngineRemembered.get(combat.id);
+    const gone = !!remembered?.combatantId && !combat.combatants?.has?.(remembered.combatantId);
+    if (!gone) return;
+    _baphEngineRemembered.set(combat.id, _baphEngineStateOf(combat));
+  }
+  const cur = { round: current.round, turn: current.turn, combatantId: current.combatantId };
+  const prev = previous ? { round: previous.round, turn: previous.turn, combatantId: previous.combatantId } : null;
+  _baphEngineQueue(combat, (chain) => _baphEngineTurnTask(combat, chain, cur, prev)).catch(() => {});
+});
+
+// FIX-3: one macrotask after a Combatant write (T4: updateCombatant fires before the parent applies a
+// revert locally), compare identities — never indices — and put a moved-off creature back.
+function _baphEngineCheckRepair(combat, userId) {
+  try {
+    if (!_baphEngineIsActiveGM()) return;
+    if (!combat || combat.started !== true) return;
+    const remembered = _baphEngineRemembered.get(combat.id);
+    if (!remembered) { _baphEngineRemembered.set(combat.id, _baphEngineStateOf(combat)); return; }
+    if (!remembered.combatantId) return;
+    if ((combat.combatant?.id ?? null) === remembered.combatantId) return;
+    const turns = Array.from(combat.turns ?? []);
+    const index = turns.findIndex((t) => t.id === remembered.combatantId);
+    if (index < 0) {
+      // The remembered creature is gone: adopt.
+      _baphEngineRemembered.set(combat.id, _baphEngineStateOf(combat));
+      return;
+    }
+    if (_baphEngineRepairing.has(combat.id)) {
+      // A repair is in flight: this write's check is not dropped, it runs again once that repair settles.
+      _baphEngineRepairing.get(combat.id).then(() => setTimeout(() => _baphEngineCheckRepair(combat, userId), 0));
+      return;
+    }
+    const staleIndex = combat.turn;
+    const name = turns[index]?.name ?? remembered.combatantId;
+    // turnEvents:false is load-bearing (T3): no second combatTurnChange, none of pf1's turn events re-run,
+    // and current / previous and the turn markers are still corrected on every client.
+    const repair = combat.update({ turn: index }, { diff: false, turnEvents: false })
+      .catch((err) => console.error(`${AT_MODULE_ID} | turn repair failed`, err))
+      .finally(() => { _baphEngineRepairing.delete(combat.id); });
+    _baphEngineRepairing.set(combat.id, repair);
+    console.warn(`${AT_MODULE_ID} | turn repaired: a Combatant write by user ${userId} moved combat ${combat.id} to turn ${staleIndex}; restored turn ${index} (${name})`);
+  } catch (err) {
+    console.error(`${AT_MODULE_ID} | turn repair check failed`, err);
+  }
+}
+
+Hooks.on('updateCombatant', (combatant, changes, options, userId) => {
+  const combat = combatant?.parent;
+  setTimeout(() => _baphEngineCheckRepair(combat, userId), 0);
+});
+Hooks.on('createCombatant', (combatant, options, userId) => {
+  const combat = combatant?.parent;
+  setTimeout(() => _baphEngineCheckRepair(combat, userId), 0);
+});
+Hooks.on('deleteCombatant', (combatant, options, userId) => {
+  const combat = combatant?.parent;
+  setTimeout(() => _baphEngineCheckRepair(combat, userId), 0);
+});
+
+/* --- the followers (FIX-4) ---------------------------------------------- */
+
+// combatId -> the highest `started` seq this client has seen in that combat's ledger.
+const _baphEngineSeenSeq = new Map();
+
+// Every client that is not the active GM: when the ledger records a start newer than any seen, run the
+// in-memory turn-start body for that creature (no write). A client's first sight of a combat's ledger
+// adopts it. A ledger change with no new start (an end, a Delay mark, a rewind) moves only the breadcrumb.
+function _baphEngineFollow(combat) {
+  if (!combat || _baphEngineIsActiveGM()) return;
+  const led = _baphLedgerRead(combat);
+  if (!led) return;
+  const list = _baphLedgerStartedList(led);
+  const top = list.length ? list[list.length - 1].seq : 0;
+  const had = _baphEngineSeenSeq.has(combat.id);
+  let seen = had ? _baphEngineSeenSeq.get(combat.id) : top;
+  if (top < seen) seen = top; // the ledger was recreated: adopt it
+  _baphEngineSeenSeq.set(combat.id, Math.max(seen, top));
+  if (led.current?.combatantId) _stampActiveCombatantBreadcrumb(combat, led.current.combatantId, led.current);
+  if (!had) return;
+  for (const s of list) {
+    if (s.seq <= seen) continue;
+    const combatant = combat.combatants?.get(s.combatantId);
+    if (!combatant?.actor) continue;
+    if (!_getState(s.combatantId)) _initState(s.combatantId, combat);
+    if (!_getState(s.combatantId)) continue;
+    _baphEngineApplyBody(combat, s.combatantId, combatant, s.seq);
+    _refreshPipRow(s.combatantId);
+  }
+}
+
+Hooks.on('updateCombat', (combat, changed) => {
+  const flags = changed?.flags?.[AT_MODULE_ID];
+  if (!flags) return;
+  if (Object.prototype.hasOwnProperty.call(flags, `-=${AT_TURN_LEDGER_KEY}`)) _baphEngineSeenSeq.delete(combat.id);
+  if (!Object.prototype.hasOwnProperty.call(flags, AT_TURN_LEDGER_KEY)) return;
+  try { _baphEngineFollow(combat); } catch (err) { console.error(`${AT_MODULE_ID} | ledger follow failed`, err); }
+});
+
+/* --- a GM who joins (FIX-8) --------------------------------------------- */
+
+// For game.combats.active, when this client is the active GM and the combat has started:
+//   no ledger at all  -> seed one (current + started[current]), no refresh;
+//   no start recorded for the current creature this round -> run its turn start (its own chain task);
+//   otherwise         -> adopt: no refresh, no refund, no write.
+// In every branch it stamps the breadcrumb and seeds the remembered state and the chain's last.
+// With no GM connected the game was paused: no end of turn is ever replayed.
+async function _baphEngineJoinTask(combat, chain, cur) {
+  chain.last = { ...cur };
+  const raw = combat.getFlag(AT_MODULE_ID, AT_TURN_LEDGER_KEY);
+  const w = _baphLedgerWork(combat);
+  const started = w.led.rounds[String(cur.round)]?.started?.[cur.combatantId];
+  if (!raw) {
+    const seq = _baphLedgerNextSeq(w);
+    _baphLedgerPut(w, _baphLedgerPath(cur.round, 'started', cur.combatantId), { seq });
+    await _baphLedgerCommit(combat, w, cur);
+    return;
+  }
+  if (started) return;
+  const seq = _baphLedgerNextSeq(w);
+  await _baphEngineTurnStart(combat, cur.combatantId, cur, seq);
+  _baphLedgerPut(w, _baphLedgerPath(cur.round, 'started', cur.combatantId), { seq });
+  await _baphLedgerCommit(combat, w, cur);
+}
+
+function _baphEngineJoin() {
+  try {
+    if (!_baphEngineIsActiveGM()) return;
+    const combat = _baphEngineCombat();
+    if (!combat || combat.started !== true) return;
+    const cur = _baphEngineStateOf(combat);
+    if (!cur.combatantId || !(cur.round > 0)) return;
+    _baphEngineRemembered.set(combat.id, { ...cur });
+    _stampActiveCombatantBreadcrumb(combat, cur.combatantId, cur);
+    _baphEngineQueue(combat, (chain) => _baphEngineJoinTask(combat, chain, cur)).catch(() => {});
+  } catch (err) {
+    console.error(`${AT_MODULE_ID} | turn engine join failed`, err);
+  }
+}
+
+// What every client knows at load: the highest start it has seen in each combat's ledger (so the first
+// ledger change after load is judged against it), and the breadcrumb.
+function _baphEngineSeedLocal() {
+  for (const combat of Array.from(game.combats?.contents ?? [])) {
+    if (_baphEngineSeenSeq.has(combat.id)) continue;
+    const led = _baphLedgerRead(combat);
+    if (!led) continue;
+    const list = _baphLedgerStartedList(led);
+    _baphEngineSeenSeq.set(combat.id, list.length ? list[list.length - 1].seq : 0);
+  }
+  const engine = _baphEngineCombat();
+  if (engine?.started === true) {
+    const led = _baphLedgerRead(engine);
+    const at = led?.current?.combatantId ? led.current : _baphEngineStateOf(engine);
+    if (at?.combatantId) _stampActiveCombatantBreadcrumb(engine, at.combatantId, at);
+  }
+}
+
+let _baphEngineWasActiveGM = false;
+
+Hooks.once('ready', () => {
+  _baphEngineWasActiveGM = _baphEngineIsActiveGM();
+  _baphEngineSeedLocal();
+  if (_baphEngineWasActiveGM) _baphEngineJoin();
+});
+
+// Follower seeding once the canvas is ready (FIX-4). The join (FIX-8) is not run here: it runs at `ready`
+// and on a `userConnected` that makes this client the active GM. `game.combats.active` follows
+// `game.scenes.current`, not the viewed canvas (F-6).
+Hooks.once('canvasReady', () => {
+  _baphEngineSeedLocal();
+});
+
+Hooks.on('userConnected', () => {
+  setTimeout(() => {
+    const now = _baphEngineIsActiveGM();
+    if (now && !_baphEngineWasActiveGM) _baphEngineJoin();
+    _baphEngineWasActiveGM = now;
+  }, 0);
+});
 
 /* ----------------------------------------------------------
    UI: BUILD PIP ROW
@@ -1845,18 +2319,14 @@ function _refreshPipRow(combatantId) {
 }
 
 /* ----------------------------------------------------------
-   COMBAT TRACKER INJECTION + RENDER-BASED TURN RESET — v1.6
+   COMBAT TRACKER INJECTION — v1.2 layout; v2.46.1 draws only
 
-   This hook now does double duty:
-   1. (Original v1.2 layout fix) Inject the pip row as a full-width
-      block below the combatant's stats row.
-   2. (NEW in v1.6) Detect the active combatant via the `.active`
-      CSS class Foundry sets on the active combatant's <li>, and
-      reset their pips if we haven't already this round.
-
-   The active-class detection is the truth source. We do NOT trust
-   combat.current.turn during volatile hook events — only the DOM
-   that Foundry has finished rendering after all updates apply.
+   This hook injects the pip row as a full-width block below the
+   combatant's stats row and draws the pips from the per-combatant state.
+   Since v2.46.1 it does NOT detect turns: the v1.6 branch that read the
+   `.active` CSS class and reset pips from here is retired. The turn start
+   comes from the turn engine — `combatTurnChange` on the active GM, every
+   other client following the turn ledger (THE TURN ENGINE, above).
 
    Insertion priority (unchanged from v1.2):
      a) .token-initiative (insert after — best, sits below stats)
@@ -1870,10 +2340,8 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
   const combat = game.combat;
   if (!combat) return;
 
-  // v1.27 (GOAL_v2.35.0_REACTION_RETIME): the per-round reaction/Combat
-  // Reflexes refresh call that used to live here is REMOVED. Reaction +
-  // reflex pips now refresh inside _maybeResetForNewTurn, alongside the
-  // action pips, for the active combatant only — see that function.
+  // v1.27 (GOAL_v2.35.0_REACTION_RETIME): reaction + Combat Reflexes pips refresh at each creature's own
+  // turn start, which since v2.46.1 is the turn engine's (see THE TURN ENGINE above), not this render's.
 
   const root = _baphNormalizeHtml(html);
   if (!root) return;
@@ -1892,7 +2360,7 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 
     // Ensure state exists
     if (!_getState(combatantId)) {
-      _initState(combatantId);
+      _initState(combatantId, combat);
     }
 
     // v1.23: sync Combat Reflexes pip count if the feat or Dex mod changed mid-combat.
@@ -1904,14 +2372,9 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
       state.reflexPip = Array.from({ length: reflexCount }, (_, i) => prev[i] ?? true);
     }
 
-    // v1.6: render-based turn-start reset.
-    // If THIS entry is the active one (Foundry's own .active class)
-    // and we haven't reset them for the current round yet, do so.
-    // Must happen BEFORE the pip row is built so the new row reflects
-    // the freshly-reset state.
-    if (entry.classList.contains('active')) {
-      _maybeResetForNewTurn(combat, combatantId, combatant);
-    }
+    // v2.46.1: no turn detection here. The turn start comes from the turn engine (the active GM's
+    // combatTurnChange task; every other client follows the turn ledger), so this hook only draws the
+    // pips from the per-combatant state, which the engine has already updated.
 
     // Remove stale pip row before re-render
     const oldRow = entry.querySelector('.baph-action-tracker');
@@ -1947,18 +2410,17 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
 /* ----------------------------------------------------------
    COMBAT LIFECYCLE: STATE INIT + CLEANUP
 
-   v1.6: turn-detection hooks (pf1PostTurnChange, combatTurn,
-   combatRound) and _handleTurnChange / _turnChangeProcessed
-   all REMOVED. Render-based detection in renderCombatTracker
-   replaces them. These lifecycle hooks remain — they manage
-   pipState entries (init / cleanup), not turn detection.
+   These lifecycle hooks manage pipState entries (init / cleanup), not turn
+   detection. Turn detection is the turn engine's (combatTurnChange on the
+   active GM; see THE TURN ENGINE above) — v1.6's render-based detection and
+   v2.46.1's replacement of it are both described in the header.
    ---------------------------------------------------------- */
 
 Hooks.on('deleteCombat', (combat) => {
   for (const c of combat.combatants) pipState.delete(c.id);
-  // v1.27 round-02: clear this combat's client-local turn-sequence tracker
-  // (hygiene only — a deleted combat's id is never reused).
-  _turnSeqTrack.delete(combat.id);
+  // v2.46.1: forget this combat's engine records (chain, remembered turn, ledger sightings) — hygiene
+  // only; a deleted combat's id is never reused.
+  _baphEngineForget(combat.id);
   // v2.34.0: clear the breadcrumb if it belonged to this now-deleted combat
   // (hygiene only — _getBreadcrumbCombatant in condition-overlay.js already
   // guards on combatId matching a live combat).
@@ -1973,37 +2435,21 @@ Hooks.on('deleteCombatant', (combatant) => {
 
 Hooks.on('createCombatant', (combatant) => {
   if (!combatant.actor) return;
-  _initState(combatant.id, _hasCombatReflexes(combatant.actor));
+  _initState(combatant.id, combatant.parent);
 });
 
 Hooks.on('combatStart', (combat) => {
   for (const combatant of combat.combatants) {
     if (!combatant.actor) continue;
-    _initState(combatant.id);
+    _initState(combatant.id, combat);
   }
 
-  // The first active combatant gets their condition locks applied
-  // immediately. The render-based reset will pick them up too on
-  // first render, but applying here means the first render shows
-  // correct state without waiting for a second render pass.
+  // The first active combatant gets their condition locks applied immediately, so the first render shows
+  // correct state. v2.46.1: the seeding that used to follow (the render's turn guard, the breadcrumb) is
+  // gone — a combat's first turn starts from its own combatTurnChange on the active GM (the engine).
   const firstCombatant = combat.turns?.[0];
   if (firstCombatant?.actor) {
     _applyConditionLocks(firstCombatant.id, firstCombatant.actor);
-    const state = _getState(firstCombatant.id);
-    const seedRound = combat.round ?? 1;
-    if (state) {
-      // v1.27 round-02: seed this combat's client-local turn-sequence
-      // tracker with the first active combatant already current, and stamp
-      // their own _resetForSeq to match — _initState already gave them a
-      // full action/reaction/reflex pool, so the first render's
-      // _maybeResetForNewTurn call should not redundantly re-reset them.
-      state._resetForSeq = 0;
-    }
-    _turnSeqTrack.set(combat.id, { seq: 0, activeId: firstCombatant.id, round: seedRound });
-    // v2.34.0: stamp the breadcrumb here too (combatStart runs synchronously,
-    // not via renderCombatTracker) so it's correct from the very first
-    // turn-transition, before any render has fired.
-    _stampActiveCombatantBreadcrumb(combat, firstCombatant.id);
   }
 });
 
@@ -2065,9 +2511,16 @@ Hooks.once('ready', () => {
     // active combat (0 when there is no count for that actor in this combat). Synchronous; per client.
     cleaveState: (actorUuid) => {
       const cur = _baphCleaveWindow.get(actorUuid);
-      const combatId = game.combat?.id ?? null;
+      const combatId = _baphEngineCombat()?.id ?? null;
       return { used: (cur && combatId && cur.combatId === combatId) ? (Number(cur.used) || 0) : 0 };
     },
+    // GOAL_v2.46.1 FIX-1: read-only. A deep copy of that combat's turn ledger (the Combat flag the turn
+    // engine writes), or null when the combat has none or does not exist. Synchronous, on every client.
+    turnLedger: (combatId) => _baphLedgerRead(game.combats?.get(combatId) ?? null),
+    // GOAL_v2.46.1 FIX-7: the Delay macro's request. Resolves { ok, reason? }. On the active GM it marks
+    // the creature 'waiting' for the current round through the combat's chain; on any other client it
+    // relays the request ('delay') through the pip relay, which re-checks sender and ownership.
+    declareDelay: (combatantId) => _baphEngineDeclareDelay(combatantId),
     reset: (combatantId) => {
       _resetState(combatantId);
       _refreshPipRow(combatantId);
@@ -2117,11 +2570,11 @@ Hooks.once('ready', () => {
       const seq = ++state.pipSeq;
       // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
       // shared rationale comment on the _togglePip revert closure below.
-      const capturedRound = game.combat?.round ?? 0;
-      const capturedActiveId = _currentActiveCombatantId(game.combat);
+      const capturedRound = _baphEngineCombat()?.round ?? 0;
+      const capturedActiveId = _currentActiveCombatantId(_baphEngineCombat());
       _baphActionEmitPipRelay(combatantId, 'reaction', {}, () => {
         if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-        if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+        if ((_baphEngineCombat()?.round ?? 0) !== capturedRound || _currentActiveCombatantId(_baphEngineCombat()) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
         state.reaction = priorReaction;
         _refreshPipRow(combatantId);
       });
@@ -2148,11 +2601,11 @@ Hooks.once('ready', () => {
       const seq = ++state.pipSeq;
       // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
       // shared rationale comment on the _togglePip revert closure below.
-      const capturedRound = game.combat?.round ?? 0;
-      const capturedActiveId = _currentActiveCombatantId(game.combat);
+      const capturedRound = _baphEngineCombat()?.round ?? 0;
+      const capturedActiveId = _currentActiveCombatantId(_baphEngineCombat());
       _baphActionEmitPipRelay(combatantId, 'combatReflex', {}, () => {
         if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-        if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+        if ((_baphEngineCombat()?.round ?? 0) !== capturedRound || _currentActiveCombatantId(_baphEngineCombat()) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
         state.reflexPip = priorReflexPip;
         _refreshPipRow(combatantId);
       });
@@ -2188,7 +2641,7 @@ Hooks.once('ready', () => {
       state.offSeq = (Number(state.offSeq) || 0) + 1;
       // v2.35.0 round-03 (FD-01): token carries activeId, not turn — the sole producer of
       // this token, so no legacy-token compatibility is needed (in-memory only, one session).
-      const token = { combatantId, round: game.combat?.round ?? 0, activeId: _currentActiveCombatantId(game.combat), seq: state.offSeq };
+      const token = { combatantId, round: _baphEngineCombat()?.round ?? 0, activeId: _currentActiveCombatantId(_baphEngineCombat()), seq: state.offSeq };
       if (game.user.isGM) {
         _writeOffBudget(combatantId);
         return token;
@@ -2202,7 +2655,7 @@ Hooks.once('ready', () => {
       // unchanged in shape (A14).
       _baphActionEmitPipRelay(combatantId, 'offHandReserve', { tier }, () => {
         if ((Number(state.offSeq) || 0) !== token.seq) return; // superseded by a newer write
-        if ((game.combat?.round ?? 0) !== token.round || _currentActiveCombatantId(game.combat) !== token.activeId) return;
+        if ((_baphEngineCombat()?.round ?? 0) !== token.round || _currentActiveCombatantId(_baphEngineCombat()) !== token.activeId) return;
         state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
         state.offSeq = (Number(state.offSeq) || 0) + 1;
       });
@@ -2218,7 +2671,7 @@ Hooks.once('ready', () => {
       if ((Number(state.offSeq) || 0) !== token.seq) return false; // superseded by a newer write
       // v2.35.0 round-03 (FD-01): compare (round, activeId), not (round, turn) — see
       // OFF_BUDGET_FLAG_KEY's comment and `_currentActiveCombatantId`.
-      if ((game.combat?.round ?? 0) !== token.round || _currentActiveCombatantId(game.combat) !== token.activeId) return false;
+      if ((_baphEngineCombat()?.round ?? 0) !== token.round || _currentActiveCombatantId(_baphEngineCombat()) !== token.activeId) return false;
       state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
       state.offSeq = (Number(state.offSeq) || 0) + 1;
       if (game.user.isGM) {
@@ -2294,7 +2747,7 @@ Hooks.once('ready', () => {
      {
        combatantId: string,                                          // required
        kind: 'reaction' | 'combatReflex' | 'action' | 'offHandReserve'
-             | 'offHandRollback' | 'toggle' | 'endTurn',              // optional, default 'action'
+             | 'offHandRollback' | 'toggle' | 'endTurn' | 'delay',   // optional, default 'action'
        count: number,                                                 // 'action' only, default 1
        allowBonus: boolean,                                           // 'action' only, default false —
                                                                         // v2.37.0 round-02 (OVERSEER FIX
@@ -2452,7 +2905,7 @@ function _releaseOffHandSwingForCombatant(combatantId) {
   const state = _getState(combatantId);
   if (!state) return false;
   if ((Number(state.offHandUsed) || 0) <= 0) return false; // nothing reserved this turn — GM's own state says so
-  if (_currentActiveCombatantId(game.combat) !== combatantId) return false; // not this combatant's turn on the GM's own client
+  if (_currentActiveCombatantId(_baphEngineCombat()) !== combatantId) return false; // not this combatant's turn on the GM's own client
   state.offHandUsed = Math.max(0, (Number(state.offHandUsed) || 0) - 1);
   state.offSeq = (Number(state.offSeq) || 0) + 1;
   _writeOffBudget(combatantId);
@@ -2491,7 +2944,7 @@ async function _baphSocketPipSpendRelay(payload = {}) {
   const requestingUserId = this?.socketdata?.userId; // verified sender — NEVER payload.requestingUserId
   const { combatantId, kind = 'action', count = 1, tier, toggleType, toggleIndex, allowBonus } = payload ?? {};
 
-  const combat = game.combat;
+  const combat = _baphEngineCombat();
   if (!combat) {
     _debugLog(`pipSpendRelay: no active combat — rejected (kind=${kind}, from ${requestingUserId})`);
     return { ok: false, reason: 'no-active-combat' };
@@ -2557,6 +3010,9 @@ async function _baphSocketPipSpendRelay(payload = {}) {
       break;
     }
     case 'offHandRollback': ok = _releaseOffHandSwingForCombatant(combatantId); break;
+    // GOAL_v2.46.1 FIX-7: a Delay request. The sender is verified and ownership re-checked above, like
+    // every kind; the mark goes through the combat's chain and the answer is the mark's own { ok, reason }.
+    case 'delay': return await _baphEngineDelayMark(combat, combatantId);
     // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-3): report _togglePip's
     // ACTUAL result. It previously always reported `ok = true`, so a refusal
     // (a locked/incapacitated pip, or an unknown toggle type) never reverted
@@ -2682,7 +3138,7 @@ function _debugLog(msg, ...args) {
  * @returns {Combatant|null}
  */
 function _getActiveCombatant() {
-  return game.combat?.combatant ?? null;
+  return _baphEngineCombat()?.combatant ?? null;
 }
 
 /**
@@ -2712,8 +3168,8 @@ function _getActiveCombatant() {
  * @returns {Combatant|null}
  */
 function _getActiveCombatantForActor(actor) {
-  if (!actor || !game.combat) return null;
-  const active = game.combat.combatant;
+  if (!actor || !_baphEngineCombat()) return null;
+  const active = _baphEngineCombat().combatant;
   if (!active?.actor) return null;
   const mine = _combatantsForActor(actor);
   if (mine.length > 1) {
@@ -2733,9 +3189,9 @@ function _getActiveCombatantForActor(actor) {
  * @returns {Combatant[]}
  */
 function _combatantsForActor(actor) {
-  if (!actor?.uuid || !game.combat) return [];
-  const turns = Array.from(game.combat.turns ?? []);
-  const list = turns.length ? turns : Array.from(game.combat.combatants ?? []);
+  if (!actor?.uuid || !_baphEngineCombat()) return [];
+  const turns = Array.from(_baphEngineCombat().turns ?? []);
+  const list = turns.length ? turns : Array.from(_baphEngineCombat().combatants ?? []);
   return list.filter((c) => c.actor?.uuid === actor.uuid);
 }
 
@@ -2832,7 +3288,7 @@ function _reconcileBonusPip(combatantId) {
 function _recomputeBonusAuto(combatantId) {
   const state = _getState(combatantId);
   if (!state) return;
-  const actor = game.combat?.combatants?.get(combatantId)?.actor;
+  const actor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
   let settingOn = false;
   try { settingOn = game.settings.get(AT_MODULE_ID, 'autoHasteBonusAction'); } catch (e) { /* not registered */ }
   state.bonusAuto = !!(settingOn && actor && _hasActiveHasteBuff(actor));
@@ -2861,7 +3317,7 @@ function _reconcileBonusAutoFor(combatantId) {
 
 function _reconcileAllBonusAuto() {
   if (game.user !== game.users?.activeGM) return;
-  const combat = game.combat;
+  const combat = _baphEngineCombat();
   if (!combat) return;
   for (const c of combat.combatants) {
     _recomputeBonusAuto(c.id);
@@ -2903,7 +3359,7 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
     return false;
   }
   if (count === 0) return true;
-  const actor = game.combat?.combatants?.get(combatantId)?.actor;
+  const actor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
   const incap = !!_readConditionActionLoss(actor).fullyIncapacitated;
   const normalAvail = state.actions.filter((a, i) => a && i >= state.conditionLocked).length;
   const bonusUsable = allowBonus && !incap && Array.isArray(state.bonusPip) && state.bonusPip[0] === true;
@@ -2935,8 +3391,8 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   const seq = ++state.pipSeq;
   // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
   // shared rationale comment on the _togglePip revert closure below.
-  const capturedRound = game.combat?.round ?? 0;
-  const capturedActiveId = _currentActiveCombatantId(game.combat);
+  const capturedRound = _baphEngineCombat()?.round ?? 0;
+  const capturedActiveId = _currentActiveCombatantId(_baphEngineCombat());
   // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect B): carry this call's own
   // `allowBonus` on the wire so the GM's replay can re-run the SAME
   // availability check the client just ran (Trap 1, GOAL:151-152) instead
@@ -2947,7 +3403,7 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   // already-granted pool the GM is allowed to draw the spend from.
   _baphActionEmitPipRelay(combatantId, 'action', { count, allowBonus }, () => {
     if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-    if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+    if ((_baphEngineCombat()?.round ?? 0) !== capturedRound || _currentActiveCombatantId(_baphEngineCombat()) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
     state.actions  = priorActions;
     state.bonusPip = priorBonusPip;
     _refreshPipRow(combatantId);
@@ -3010,7 +3466,7 @@ function _endTurnActionsCore(combatantId) {
   // never mutate bonusPip. Derive incap the same way _spendActionCore
   // already does at its own call site (:2578-2579); do not invent a new
   // reader.
-  const actor = game.combat?.combatants?.get(combatantId)?.actor;
+  const actor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
   const incap = !!_readConditionActionLoss(actor).fullyIncapacitated;
   const bonusAvail = !incap && Array.isArray(state.bonusPip) && state.bonusPip[0] === true;
   if (normalIdxs.length === 0 && !bonusAvail) return false; // nothing to zero
@@ -3037,11 +3493,11 @@ function _endTurnActionsCore(combatantId) {
   // not a second relay. Trap 2: still returns true synchronously here; the
   // relay/revert happens after this call has already returned.
   const seq = ++state.pipSeq;
-  const capturedRound = game.combat?.round ?? 0;
-  const capturedActiveId = _currentActiveCombatantId(game.combat);
+  const capturedRound = _baphEngineCombat()?.round ?? 0;
+  const capturedActiveId = _currentActiveCombatantId(_baphEngineCombat());
   _baphActionEmitPipRelay(combatantId, 'endTurn', {}, () => {
     if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-    if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3
+    if ((_baphEngineCombat()?.round ?? 0) !== capturedRound || _currentActiveCombatantId(_baphEngineCombat()) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3
     state.actions  = priorActions;
     state.bonusPip = priorBonusPip;
     _refreshPipRow(combatantId);
@@ -3559,7 +4015,7 @@ function _baphOutOfActions(actor, label) {
  */
 Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
   // Gate 1: active combat
-  if (!game.combat?.active) {
+  if (!_baphEngineCombat()?.active) {
     _debugLog(`skill auto-spend: no active combat — no spend for ${skillKey}`);
     return;
   }
@@ -3741,7 +4197,7 @@ function _isActionUseSpendDuped(actor, actionUse) {
  * GM is warned once. It never guesses.
  */
 function _getCombatantForActor(actor) {
-  if (!actor || !game.combat) return null;
+  if (!actor || !_baphEngineCombat()) return null;
   const mine = _combatantsForActor(actor); // matched by combatant.actor.uuid
   if (!mine.length) return null;
   if (mine.length === 1) return mine[0];
@@ -4402,7 +4858,7 @@ function _mapPenaltyForPrior(prior) {
 
 Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
   try {
-    if (!game.combat?.active) return;
+    if (!_baphEngineCombat()?.active) return;
     if (!game.settings.get(AT_MODULE_ID, 'mapTracking')) return;
     const actor = attackData?.actor;
     if (!actor) return;
@@ -4512,7 +4968,7 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
 // stash that swing's MAP penalty so the confirmation's pre (firing next, per the probe) reuses it.
 Hooks.on('pf1AttackRoll', (action, roll) => {
   try {
-    if (!game.combat?.active) return;
+    if (!_baphEngineCombat()?.active) return;
     if (!game.settings.get(AT_MODULE_ID, 'mapTracking')) return;
     const actor = action?.actor ?? action?.item?.actor ?? action?.parent?.actor;
     if (!actor) return;
@@ -4561,7 +5017,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
   try {
     const item  = actionUse?.item;
     const actor = actionUse?.actor ?? item?.actor;
-    if (!item || !actor || !game.combat?.active) return;
+    if (!item || !actor || !_baphEngineCombat()?.active) return;
 
     const isSpell      = item.type === 'spell';
     const isAttack     = item.type === 'attack' || item.type === 'weapon';
@@ -5859,7 +6315,7 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   // Bail fast if this isn't a pip-state flag update.
   if (!changes?.flags?.['baphomet-utils']?.[PIP_FLAG_KEY]) return;
 
-  const combat = game.combat;
+  const combat = combatant.parent;
   if (!combat) return;
 
   // Confirm this combatant belongs to the currently active combat.
@@ -5917,7 +6373,7 @@ Hooks.on('updateCombatant', (combatant, changes) => {
    ---------------------------------------------------------- */
 Hooks.on('updateCombatant', (combatant, changes) => {
   if (!changes?.flags?.['baphomet-utils']?.[OFF_BUDGET_FLAG_KEY]) return;
-  const combat = game.combat;
+  const combat = combatant.parent;
   if (!combat || combatant.parent?.id !== combat.id) return;
   const existing = _getState(combatant.id);
   if (!existing) return;
