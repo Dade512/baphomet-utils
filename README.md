@@ -3,16 +3,17 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.46.0 — *One Swing*
+**Current Version:** 2.46.1 — *Once Per Round*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**One attack each.** Vital Strike, Charge, Cleave and the Two-Weapon Fighting macro now make one attack apiece at any
-base attack bonus, as the rules price them. A Charge reads `+2[Charge]`; a Cleave takes the Multiple Attack Penalty,
-Power Attack and Charge bonus of the Strike that dropped the foe, and is once per round unless you have Great Cleave.
-The world macros need re-pasting. See the [changelog](#changelog) for the full entry.
+**Once per round.** A player's Next Turn now pays their Frightened, Fleeing and Stunned countdowns down, like the GM's,
+and Next Turn clicked twice moves twice, with no flicker and no second refresh. A new **Delay** macro passes your turn:
+nothing refreshes when you act later in the round, and your countdowns tick when that delayed turn ends. Previous Turn
+undoes the countdown the departed turn paid and tells the GM what it put back. The GM can look at another encounter
+without stopping the one in play. One new world macro to paste (Delay); see the [changelog](#changelog).
 
 ---
 
@@ -183,6 +184,53 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.46.1 — Once Per Round
+
+Six items from the v2.45.0 QA sweep plus the Delay canon (TD-95), all from one cause: turns were detected by each
+client's combat-tracker render, and the end-of-turn countdowns ran from hooks that fire only on the client that pressed
+the button. Now `combatTurnChange` — which fires on every client for every real turn change — is the one trigger, the
+active GM does the work, and a record on the Combat says what it has done. **One new world macro to paste:** "Delay"
+(`macros/delay.js`; no other macro changed). `macros/README.md` has the steps and the drift check.
+
+- **Next Turn clicked twice moves twice (F-A-01, HIGH).** Two quick Next Turns on the GM could start a turn flip that
+  never ended: every flip was a full turn start, countdowns landed on the wrong creature, and the combat could end on the
+  wrong turn in the database. Turns are now handled once each, in order, on one queue per combat. A Combatant write that
+  carries a stale turn — the module's own, or anyone's — is put back within a round trip, with one GM console warning
+  (`turn repaired: …`), no turn start, no countdown and no ledger change.
+- **A turn a player ends pays its countdowns (F-A-02 / F-C-02, HIGH).** Frightened and Fleeing go down 1 and the Stunned
+  countdown pays down, on the GM, whoever pressed Next Turn. Nothing runs on any other client.
+- **Previous Turn undoes the countdown and says so (F-C-08, Q3).** It restores what the departed turn's end paid —
+  Frightened, Fleeing and the Stunned countdown (with its stamp exactly as it was) — where the live value is unchanged
+  since, leaves any value that was edited by hand, and whispers the GM once: `Rewind — <creature>`, then
+  `<Condition> restored to <n>` or `<Condition> left at <n> — changed since the turn ended`. Next Turn then pays it once. No turn starts
+  on a rewind: nothing refreshes and no spent pip comes back. Across a wrap it also reverses the forfeits made there.
+- **A GM who joins starts the turn that began without one (F-A-03, Q4).** With no GM connected the game is paused: a
+  player's Next Turn starts and ends nothing. When a GM arrives, the current creature's turn starts once; no end of turn
+  is replayed. A GM reload in the middle of a turn refreshes and refunds nothing.
+- **Delay (H:40, A2, F-A-15; Q2).** The new "Delay" macro marks the creature as delaying and passes its turn: no
+  countdown yet, no second refresh when it acts later in the round (the GM moves its initiative by hand), and the
+  countdown runs once, when the delayed turn actually ends. A creature still delaying when the round wraps forfeited its
+  turn: the countdown runs then, its initiative is untouched, and it starts the next round at its place with one refresh.
+  A creature moved after the current one no longer gets a second refresh, and a rewind refreshes nobody (A-12, A-13).
+- **The GM may look at another encounter (F-A-08, Q5).** The engine works on the active combat
+  (`game.combats.active`), not the combat a client is viewing: while the GM views another encounter a player's spend in the
+  active one is accepted and its turns start and end on the GM. The tracker's pips, the action panel and the task widgets
+  still follow the combat being viewed. `task-tracker.js` is unchanged.
+- **The dead `pf1PostTurnChange` listener is gone.** pf1 11.11 has no such hook (P1). The `combatTurn` and `combatRound`
+  listeners and the dedupe Set went with it.
+- **The turn ledger.** One Combat flag, `flags.baphomet-utils.turnLedger`, written only by the active GM and always
+  awaited, records each turn start, each turn end (with the changes it applied), the Delay marks and the current
+  creature, for the current round, the one before it and any round a rewind stepped back from.
+  `game.baphometActions.turnLedger(combatId)` returns a deep copy on every client; `game.baphometActions.declareDelay(combatantId)`
+  is the Delay macro's request. A combat begun before this release has no ledger: it is seeded, not
+  started, when the GM loads.
+- **Trap 4 is lifted.** The v2.37.0 constraint that kept `_advanceTurnSeq`, the `advanced` guard,
+  `_turnSeqTrack` and the off-hand staleness key byte-unchanged is lifted by name: the render no longer starts turns, the
+  first three are removed, and the turn-start body moved unchanged into the engine (`_resetForSeq` stays as bookkeeping;
+  the off-hand `(round, activeId)` key is unchanged).
+- **Documentation.** This entry, the version header and blurb above, the header comments of `action-tracker.js` and
+  `condition-overlay.js`, and `macros/README.md`.
 
 ### v2.46.0 — One Swing
 
