@@ -14,6 +14,9 @@
    - [FIX-4] The Off-Guard turn-start mark moved into the engine's turn start
      (`_baphOffGuardMarkTurn`); the `updateCombat` listener and `combatStart` scheduling are gone.
    - [FIX-9] `applyCondition`'s Stunned stamp reads the engine combat (`game.combats.active`).
+   The entries below describe earlier versions. Where they name `_handleAutoDecrement`,
+   `_getBreadcrumbCombatant` or the `combatTurn` / `combatRound` / `pf1PostTurnChange` listeners,
+   v2.46.1 retired them.
 
    v2.45.0 Changes (GOAL_v2.45.0_ABILITY_CHECKS — "Every Roll That Uses It", TD-83):
    - [FIX-1] Canon (rewritten 2026-10-06): a PF1 ability penalty reaches every roll that uses the
@@ -394,7 +397,7 @@ const CONDITIONS = {
     type: 'tiered',
     description: 'You lose X actions on your next turn. While Stunned is above 0 you are also Off-Guard and cannot take reactions.',
     // v2.34.0: `autoDecrement: true` still marks this as an auto-decrementing condition for
-    // the token HUD's "↓" indicator, but `_handleAutoDecrement` skips 'stunned' in its
+    // the token HUD's "↓" indicator, but the end-of-turn pass (`_baphEndOfTurnRun`) skips 'stunned' in its
     // generic per-tier -1 loop — the real decrement is the bespoke, multi-action
     // `_decrementStunnedCountdown` (see that function's comment block below), driven by the
     // separate `stunnedCountdown` actor flag, not this buff's own `tier`.
@@ -437,7 +440,7 @@ const CONDITIONS = {
 
   // v2.42.0 FIX-5 (R-2, P-f): behavioural, no numeric changes. `maxTier: 10` is a tracker limit, not
   // a rule (P-f): a fear source longer than 10 rounds is extended by hand from the panel. It counts
-  // down with Frightened in `_handleAutoDecrement`, unchanged. Description from canon § Fleeing.
+  // down with Frightened in `_baphEndOfTurnRun`, unchanged. Description from canon § Fleeing.
   fleeing: {
     name: 'Fleeing',
     icon: 'icons/svg/door-exit.svg',
@@ -617,14 +620,14 @@ function _findExistingBuff(actor, condKey) {
 
    Call sites: the end of `applyCondition`/`removeCondition` for any of the three source keys
    (`blinded`, `stunned`, `paralyzed`) and the `offGuard` key itself, and after
-   `_decrementStunnedCountdown` runs (inside `_handleAutoDecrement`, below).
+   `_decrementStunnedCountdown` runs (inside `_baphEndOfTurnRun`, below).
 
    Non-re-entrant: this function manipulates the Item directly via `createEmbeddedDocuments`/
    `delete()` and must NEVER call `applyCondition`/`removeCondition` — the same discipline
    `_decrementStunnedCountdown` already follows (see that function's comment block).
 
    GM-gated: guarded by `_isActiveGMClient()` (defined further below in this file; a function
-   declaration, so hoisting makes it available here), mirroring `_handleAutoDecrement`'s own gate.
+   declaration, so hoisting makes it available here), mirroring the end-of-turn pass's own gate.
    An ungated helper writing Items from every connected GM-role client, or from a non-GM client
    whose flag write happened to go through, would reproduce the FD-06/TD-24 churn signature this
    goal's case 7 exists to guard against.
@@ -1130,7 +1133,7 @@ async function applyCondition(actor, condKey, tier) {
   // never calls back into applyCondition; see `_decrementStunnedCountdown`'s comment block).
   // (Re)initializes the countdown to the freshly-applied tier and stamps when this happened,
   // via a live (safe, non-hook-fire-time) read of the engine combat (game.combats.active). The stamp is compared against
-  // the proactive breadcrumb at decrement time to implement the round-4 mid-turn-application
+  // the departing state the end of turn receives (not a breadcrumb) to implement the round-4 mid-turn-application
   // skip (SS5:224). stunnedCountdown is genuinely distinct from this buff's own `tier` flag
   // above, which stays at the originally-applied value (display/history only).
   if (condKey === 'stunned') {
@@ -2055,7 +2058,7 @@ Hooks.on('renderTokenHUD', (hud, html, data) => {
    (`game.user?.isGM && game.user === game.users?.activeGM`). Bare
    `game.user.isGM` passes for EVERY connected GM-role client
    simultaneously; with two GM-role clients connected, each independently
-   running `_handleAutoDecrement` would double-decrement (or race) the
+   running the end-of-turn pass would double-decrement (or race) the
    same turn transition. Only the elected active GM client proceeds.
    task-tracker.js is not in this goal's allowlist, so this is a local
    equivalent rather than an import.

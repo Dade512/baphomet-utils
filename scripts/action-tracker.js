@@ -758,16 +758,13 @@ const TWF_OFF_BUDGET = { base: 1, improved: 2, greater: 3 };
 /**
  * v2.35.0 round-03 (GOAL_v2.35.0_REACTION_RETIME, FD-01): resolve "who is the
  * active combatant right now," for the TWF off-hand budget's staleness key
- * ONLY. Do not reuse `_turnSeqTrack` here — it is client-local by design (two
- * clients hold different `seq` values for the same combat), and this
- * comparison is inherently cross-client (one client writes the flag, another
- * reads it), so a client-local sequence would be silently wrong.
+ * ONLY. This comparison is inherently cross-client (one client writes the
+ * flag, another reads it), so a client-local signal would be silently wrong.
  *
- * Prefers `globalThis.baphometActiveCombatant`, the v2.34.0 proactive
- * breadcrumb stamped by `_stampActiveCombatantBreadcrumb` from the same
- * render-based `.active` detection this whole GOAL relies on — guarded on
- * `combatId` matching, exactly as `condition-overlay.js`'s
- * `_getBreadcrumbCombatant` does. This codebase has disproven three separate
+ * Prefers `globalThis.baphometActiveCombatant`, the breadcrumb stamped by
+ * `_stampActiveCombatantBreadcrumb` — since v2.46.1 by the turn engine's task
+ * on the active GM and by the followers on every other client — guarded on
+ * `combatId` matching. This codebase has disproven three separate
  * reactive turn-identity reads (`combat.current.turn`, `combat.combatant`,
  * `combat.turn`); prefer the module-owned signal over a fourth.
  *
@@ -822,7 +819,7 @@ function _baphIntentMatches(intent, actor, isTwf = false) {
 // pf1PreActionUse record step reads it (a missing value reads as 0) and clears it.
 const _baphMapAdded = new Map();     // actorUuid -> number (0 or negative)
 // FIX-4: the cleaver's most recent attack use - { combatId, mapPenalty, powerAttack, charge }. Cleared at
-// that actor's own turn start (_maybeResetForNewTurn). A record from another combat reads as none.
+// that actor's own turn start (the turn engine's turn start). A record from another combat reads as none.
 const _baphCleaveRecord = new Map(); // actorUuid -> record
 // FIX-5: Cleave uses this window - { combatId, used }. Cleared ONLY at that actor's own turn start; a
 // count from another combat reads as 0. A reload forgets it, like MAP (accepted).
@@ -949,10 +946,10 @@ function _initState(combatantId, combatArg) {
     bonusManual,
     bonusAuto,
     bonusPip,
-    // v1.27 round-02: the sequence value (from the client-local
-    // _advanceTurnSeq tracker) at which this combatant's own last
-    // turn-start reset fired. Replaces the retired _resetForRound /
-    // _resetForTurn pair — see _maybeResetForNewTurn and the STATE
+    // v1.27 round-02: the sequence value at which this combatant's own last
+    // turn-start reset fired (since v2.46.1 the turn ledger's seq for the
+    // start - bookkeeping only). Replaces the retired _resetForRound /
+    // _resetForTurn pair — see THE TURN ENGINE and the STATE
     // MANAGEMENT comment block above.
     _resetForSeq:    saved?.resetForSeq ?? null,
     // v2.30.0 MAP swing counter — in-memory ONLY, never flag-persisted (sidesteps R6 P-8).
@@ -1019,7 +1016,7 @@ function _resetState(combatantId) {
   const _rsActor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
   if (_rsActor) { _mapArmCrit.delete(_rsActor.uuid); _mapPendingConfirm.delete(_rsActor.uuid); }
   // _resetForSeq is metadata, not pip state — DO NOT touch it here.
-  // It's owned by the render-based reset logic (_maybeResetForNewTurn).
+  // It's owned by the turn engine's turn start (_baphEngineApplyBody).
 }
 
 /**
@@ -1206,10 +1203,10 @@ function _combatReflexCount(actor) {
    here refreshes reactions on a shared round boundary anymore.
 
    _resetReactionReflexPips (below, formerly _resetReactionReflexForRound)
-   is now called directly from _maybeResetForNewTurn, at the same
-   render-based `.active`-combatant detection point action pips already
+   is now called directly from the turn engine's turn start
+   (_baphEngineApplyBody), at the same point action pips already
    reset from. It no longer writes the pip flag itself — the caller
-   (_maybeResetForNewTurn) does a single flag write after ALL of a turn's
+   (the turn start) does a single flag write after ALL of a turn's
    resets (actions, reaction/reflex, condition locks) are applied.
    ---------------------------------------------------------- */
 
@@ -1703,15 +1700,31 @@ async function _baphEngineTurnTask(combat, chain, cur, hookPrev) {
   try {
     const w = _baphLedgerWork(combat);
     // 1. Departing: the previous task's current, else the ledger's, else the hook's previous.
-    const dep = chain.last ?? w.led.current ?? hookPrev ?? null;
-    const depRound = Number(dep?.round) || 0;
-    // 2. Nothing is done when current names the departing combatant and round.
-    if (dep?.combatantId && dep.combatantId === cur.combatantId && depRound === curRound) return;
+    let dep = chain.last ?? w.led.current ?? hookPrev ?? null;
+    let depRound = Number(dep?.round) || 0;
+    // 2. Nothing is done when current names the departing combatant and round - unless the hook's own
+    // previous names a different creature the ledger records as started and not ended in its round
+    // (a late turn change: the chain was already moved onto the arriving creature, e.g. by a GM's join).
+    // That creature is then the departing state. Reads the ledger only; writes nothing.
+    if (dep?.combatantId && dep.combatantId === cur.combatantId && depRound === curRound) {
+      const hpRound = Number(hookPrev?.round) || 0;
+      const hpRd = hpRound > 0 ? w.led.rounds[String(hpRound)] : null;
+      if (hookPrev?.combatantId && hookPrev.combatantId !== cur.combatantId
+          && hpRd?.started?.[hookPrev.combatantId] && !hpRd?.ended?.[hookPrev.combatantId]) {
+        dep = hookPrev;
+        depRound = hpRound;
+      } else {
+        return;
+      }
+    }
 
     // The departing state's own stored turn (never a fresh lookup); with no finite numeric turn, 0.
     const depTurn = (typeof dep?.turn === 'number' && Number.isFinite(dep.turn)) ? dep.turn : 0;
-    // 3. Direction.
-    const rewind = depRound > 0 && (curRound < depRound || (curRound === depRound && Number(cur.turn) < depTurn));
+    // 3. Direction. Read against the departing creature's LIVE index in combat.turns (an initiative edit
+    // re-sorts the turns and leaves the stored turn behind); a creature no longer in the turns is forward.
+    // The stored depTurn is still what the end of turn below receives.
+    const depLive = Array.from(combat.turns ?? []).findIndex((t) => t.id === dep?.combatantId);
+    const rewind = depRound > 0 && (curRound < depRound || (curRound === depRound && depLive >= 0 && Number(cur.turn) < depLive));
 
     if (rewind) {
       // 5. Rewind (FIX-6): starts nothing.
@@ -1870,7 +1883,9 @@ function _baphEngineCheckRepair(combat, userId) {
     const name = turns[index]?.name ?? remembered.combatantId;
     // turnEvents:false is load-bearing (T3): no second combatTurnChange, none of pf1's turn events re-run,
     // and current / previous and the turn markers are still corrected on every client.
-    const repair = combat.update({ turn: index }, { diff: false, turnEvents: false })
+    // pf1 (CombatPF#_onUpdate -> _isForwardTime) reads options.pf1.from unguarded and records it only when
+    // diff !== false, so the repair names its own from: the same turn, and pf1's _onNewTurn does nothing.
+    const repair = combat.update({ turn: index }, { diff: false, turnEvents: false, pf1: { from: { turn: index, round: combat.round } } })
       .catch((err) => console.error(`${AT_MODULE_ID} | turn repair failed`, err))
       .finally(() => { _baphEngineRepairing.delete(combat.id); });
     _baphEngineRepairing.set(combat.id, repair);
@@ -2170,9 +2185,15 @@ function _buildPipRow(combatantId, isOwner) {
    PIP TOGGLE LOGIC
    ---------------------------------------------------------- */
 
-function _togglePip(combatantId, type, index) {
+function _togglePip(combatantId, type, index, combatArg) {
   const state = _getState(combatantId);
   if (!state) return false;
+
+  // v2.46.2 FIX-4: the combat the toggle belongs to - the one handed in (the relay's), else the VIEWED
+  // combat (game.combat) when the combatant lives there (the tracker row that was clicked), else the
+  // engine combat, as before. The click path still passes three arguments.
+  const toggleCombat = (combatArg && typeof combatArg === 'object') ? combatArg
+    : (game.combat?.combatants?.get(combatantId) ? game.combat : _baphEngineCombat());
 
   // Preflight guards that block the toggle entirely (unchanged from pre-v2.37.0).
   // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-3): these early returns
@@ -2222,8 +2243,8 @@ function _togglePip(combatantId, type, index) {
   // guard above. This sits ADJACENT to the round-02 bounds guard immediately
   // above, not inside it: that guard answers "does this slot exist?"; this
   // one answers "may this caller move it in that direction?".
-  // _maybeResetForNewTurn does not call _togglePip and is untouched by this
-  // guard — it must keep returning pips to available on every client.
+  // The turn engine's turn start (_baphEngineApplyBody) does not call _togglePip and is untouched by
+  // this guard — it must keep returning pips to available on every client.
   if (!game.user.isGM && _toggleArr[index] === false) {
     _baphActionWarnPipRelayFailure('not-gm-return');
     return false;
@@ -2249,7 +2270,7 @@ function _togglePip(combatantId, type, index) {
   _refreshPipRow(combatantId);
 
   if (game.user.isGM) {
-    _writePipFlag(combatantId);
+    _writePipFlag(combatantId, toggleCombat);
     return true;
   }
 
@@ -2260,17 +2281,21 @@ function _togglePip(combatantId, type, index) {
   const seq = ++state.pipSeq;
   // v2.37.0 round-02 (FIX-2): a pending revert must not fire after this
   // combatant's own turn has ended and the pips have been reset in place by
-  // _maybeResetForNewTurn (Trap-4 protected — not edited here). That reset
+  // the turn engine's turn start (_baphEngineApplyBody). That start
   // writes the flag on the GM's client, which does bump pipSeq via the
   // updateCombatant hydrator (FIX-2 above) once the write round-trips back
   // to this client — but a rejection response racing ahead of that echo
   // must not be allowed to clobber the fresh post-reset pips in the
   // meantime. Capturing and re-checking (round, activeId) here closes that
-  // race without touching _maybeResetForNewTurn itself — the identical test
+  // race without touching the turn start itself — the identical test
   // rollbackOffHandSwing already uses for the same reason.
   const capturedRound = game.combat?.round ?? 0;
   const capturedActiveId = _currentActiveCombatantId(game.combat);
-  _baphActionEmitPipRelay(combatantId, 'toggle', { toggleType: type, toggleIndex: index }, () => {
+  // v2.46.2 FIX-4: the payload names the combat the toggle was made in (only when one was resolved), so
+  // the GM checks membership and ownership against it.
+  const togglePayload = { toggleType: type, toggleIndex: index };
+  if (toggleCombat?.id) togglePayload.combatId = toggleCombat.id;
+  _baphActionEmitPipRelay(combatantId, 'toggle', togglePayload, () => {
     if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
     if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
     _baphActionApplyPipValue(state, type, index, priorValue);
@@ -2422,8 +2447,8 @@ Hooks.on('deleteCombat', (combat) => {
   // only; a deleted combat's id is never reused.
   _baphEngineForget(combat.id);
   // v2.34.0: clear the breadcrumb if it belonged to this now-deleted combat
-  // (hygiene only — _getBreadcrumbCombatant in condition-overlay.js already
-  // guards on combatId matching a live combat).
+  // (hygiene only — _currentActiveCombatantId already guards on combatId
+  // matching the combat it is asked about).
   if (globalThis.baphometActiveCombatant?.combatId === combat.id) {
     globalThis.baphometActiveCombatant = null;
   }
@@ -2525,7 +2550,7 @@ Hooks.once('ready', () => {
       _resetState(combatantId);
       _refreshPipRow(combatantId);
       // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): same reasoning as
-      // _maybeResetForNewTurn — reset is not player-specific, the GM's own
+      // the turn engine's turn start — reset is not player-specific, the GM's own
       // client independently performs the same write, so a non-GM client
       // skips it (no relay needed, unlike the spend paths below).
       if (game.user.isGM) {
@@ -2886,7 +2911,7 @@ function _baphActionEmitPipRelay(combatantId, kind, extra, onFailure) {
  *   - `state.offHandUsed > 0` on the GM's own client is true ONLY within the
  *     SAME turn as the reservation that produced it. `_resetState` (the
  *     manual reset() path) and the inline reset inside
- *     `_maybeResetForNewTurn` (Trap-4 protected, not touched) both always
+ *     the turn engine's turn start (`_baphEngineApplyBody`) both always
  *     zero `offHandUsed` first, on every turn boundary, on every client
  *     including the GM's own. So a nonzero value already PROVES "this is
  *     still the current turn's reservation" — establishing that the
@@ -2942,10 +2967,17 @@ async function _baphSocketPipSpendRelay(payload = {}) {
   if (game.user !== game.users?.activeGM) return; // silent — non-active GM correctly ignores
 
   const requestingUserId = this?.socketdata?.userId; // verified sender — NEVER payload.requestingUserId
-  const { combatantId, kind = 'action', count = 1, tier, toggleType, toggleIndex, allowBonus } = payload ?? {};
+  const { combatantId, kind = 'action', count = 1, tier, toggleType, toggleIndex, allowBonus, combatId } = payload ?? {};
 
-  const combat = _baphEngineCombat();
+  // v2.46.2 FIX-4: a 'toggle' that carries combatId is checked against THAT combat (a viewed, inactive
+  // one included); every other kind, and a 'toggle' without combatId, keeps the engine combat (v2.46.1 FIX-9).
+  const toggleInCombat = kind === 'toggle' && !!combatId;
+  const combat = toggleInCombat ? (game.combats.get(combatId) ?? null) : _baphEngineCombat();
   if (!combat) {
+    if (toggleInCombat) {
+      console.warn(`${AT_MODULE_ID} | pipSpendRelay: combat "${combatId}" not found — rejected (from ${requestingUserId})`);
+      return { ok: false, reason: 'combatant-not-in-active-combat' };
+    }
     _debugLog(`pipSpendRelay: no active combat — rejected (kind=${kind}, from ${requestingUserId})`);
     return { ok: false, reason: 'no-active-combat' };
   }
@@ -2975,7 +3007,7 @@ async function _baphSocketPipSpendRelay(payload = {}) {
     return { ok: false, reason: 'not-owner' };
   }
 
-  if (!_getState(combatantId)) _initState(combatantId);
+  if (!_getState(combatantId)) _initState(combatantId, combat);
 
   let ok = false;
   switch (kind) {
@@ -3026,7 +3058,7 @@ async function _baphSocketPipSpendRelay(payload = {}) {
       // requester's own client), so the directional rule (players spend;
       // only a GM returns) must be re-enforced here against the GM's OWN
       // authoritative slot value, never the payload's claim.
-      // _maybeResetForNewTurn does not call _togglePip and is not routed
+      // The turn engine's turn start does not call _togglePip and is not routed
       // through this case, so the turn-start reset is unaffected.
       const toggleState = _getState(combatantId);
       const toggleArr = toggleType === 'action' ? toggleState?.actions
@@ -3044,7 +3076,8 @@ async function _baphSocketPipSpendRelay(payload = {}) {
         );
         return { ok: false, reason: 'return-requires-gm' };
       }
-      ok = _togglePip(combatantId, toggleType, toggleIndex);
+      // the toggle runs in the combat validated above
+      ok = _togglePip(combatantId, toggleType, toggleIndex, combat);
       break;
     }
     // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect B): call the PRIVATE
@@ -3273,7 +3306,7 @@ function _hasActiveHasteBuff(actor) {
 
 // Transition-only, LOCAL mutation. Never refills a still-effective pip (no mid-turn
 // resurrection); never considers incapacitation (derived at use). Refill happens ONLY
-// in _resetState / _maybeResetForNewTurn.
+// in _resetState / the turn engine's turn start (_baphEngineApplyBody).
 function _reconcileBonusPip(combatantId) {
   const state = _getState(combatantId);
   if (!state) return;
@@ -4177,7 +4210,7 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
 const _actionUseSpendDedupeSet = new Set();
 
 function _isActionUseSpendDuped(actor, actionUse) {
-  const actId  = actionUse?.action?.id ?? actionUse?.action?.data?.id ?? '?';
+  const actId  = actionUse?.action?.id ?? '?';
   const itemId = actionUse?.item?.id ?? actionUse?.item?.name ?? '?';
   const key = `${actor?.uuid}:${itemId}:${actId}`;
   if (_actionUseSpendDedupeSet.has(key)) return true;
@@ -4402,7 +4435,7 @@ function _deriveConsumableActionCost(actionUse) {
 
   if (subType === 'wand') {
     const act = actionUse?.action;
-    const actData = act?.data ?? act?.system ?? act ?? {};
+    const actData = act ?? {};
     const activation = actData?.activation ?? act?.activation;
     const t = activation?.type;
     if (Object.prototype.hasOwnProperty.call(CHAINED_CASTING_TIME_ACTION_COST, t)) {
@@ -4430,7 +4463,7 @@ function _deriveConsumableActionCost(actionUse) {
 function _isReactionCostSpell(actionUse) {
   if (actionUse?.item?.type !== 'spell') return false;
   const act = actionUse?.action;
-  const actData = act?.data ?? act?.system ?? act ?? {};
+  const actData = act ?? {};
   const t = (actData?.activation ?? act?.activation)?.type;
   return t === 'immediate' || t === 'reaction';
 }
@@ -4466,6 +4499,9 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
 // this hook body is in a try/catch (an error is logged and the use goes on unwrapped), and the wrapper,
 // which runs later inside pf1's process() where this try/catch no longer reaches, edits in a try/catch
 // of its own and ALWAYS calls the original alterRollData - after a failed edit too.
+// v2.46.2 FIX-6 (TD-104(b)): both catch blocks also console.warn - once per session per distinct line,
+// whether or not debugLogging is on; the use proceeds as before.
+const _baphDeclareWarned = new Set();
 Hooks.on('pf1CreateActionUse', (actionUse) => {
   try {
     const actor = actionUse?.actor ?? actionUse?.item?.actor;
@@ -4495,11 +4531,15 @@ Hooks.on('pf1CreateActionUse', (actionUse) => {
         }
       } catch (e) {
         _debugLog('pf1CreateActionUse wrapper error: ' + (e?.message ?? e));
+        const warnLine = `${AT_MODULE_ID} | pf1CreateActionUse wrapper error: ${String(e?.message ?? e)}`;
+        if (!_baphDeclareWarned.has(warnLine)) { _baphDeclareWarned.add(warnLine); console.warn(warnLine); }
       }
       return original.apply(this, args);
     };
   } catch (e) {
     _debugLog('pf1CreateActionUse error: ' + (e?.message ?? e));
+    const warnLine = `${AT_MODULE_ID} | pf1CreateActionUse hook error: ${String(e?.message ?? e)}`;
+    if (!_baphDeclareWarned.has(warnLine)) { _baphDeclareWarned.add(warnLine); console.warn(warnLine); }
   }
 });
 
@@ -4556,8 +4596,8 @@ Hooks.on('pf1CreateActionUse', (actionUse) => {
    unavailable, transient candidate count !== 1) emits a debug-gated diagnostic naming the
    reason and the manual-adjudication outcome. No player-facing UI/notification is added.
 
-   Gated on globalThis.baphometVitalStrike = { actorId } (vital-strike.js), scoped to the
-   declaring actor only. VS multiplier is 2 (Greater VS would be 3 — out of scope).
+   Gated on globalThis.baphometVitalStrike = { actorUuid } (vital-strike.js; a legacy { actorId }
+   is still honoured - see _baphIntentMatches), scoped to the declaring actor only. VS multiplier is 2 (Greater VS would be 3 — out of scope).
    ============================================================ */
 Hooks.on('pf1PreDamageRoll', (action, rollData, parts, extraParts) => {
   try {
@@ -5182,7 +5222,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         && !_routineUse && !_routineRepeat && !_routineAfterClose) {
       const swingCount = actionUse?.shared?.attacks?.length ?? 0;
       if (swingCount > 1) {
-        _debugLog(`auto-spend: §14 skip-dialog escape — "${actor.name}" resolved ${swingCount} swings on "${item.name}" with pf1.skipActionDialogs ON — allowed, not auto-tracked, posting GM card`);
+        _debugLog(`auto-spend: §14 skip-dialog escape — "${actor.name}" resolved ${swingCount} swings on "${item.name}" via the skip-dialog escape — posting the GM card (one action charged, all swings counted toward MAP)`);
         const safeActorName = foundry.utils.escapeHTML(actor.name);
         const safeItemName  = foundry.utils.escapeHTML(item.name);
         // Fire-and-forget, not awaited: this handler is synchronous and
@@ -5195,8 +5235,8 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
             `<p><strong>Action Economy Notice (Mechanics Ref §14):</strong> `
             + `${safeActorName} resolved <strong>${swingCount}</strong> swings on `
             + `<em>${safeItemName}</em> via the skip-dialog full-attack escape. `
-            + `The action was allowed and was <strong>not</strong> auto-tracked — `
-            + `adjudicate the action economy by hand.</p>`,
+            + `<strong>One action was charged and all ${swingCount} swings were counted toward MAP.</strong> `
+            + `Adjudicate the extra attacks by hand (void them or let them stand).</p>`,
           speaker: ChatMessage.getSpeaker({ actor }),
           whisper: ChatMessage.getWhisperRecipients('GM')
         }).catch((err) => {
@@ -6344,8 +6384,8 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   // EVERY authoritative pip-flag write this client observes — the requester's
   // own relayed spend echoing back, another client's spend, a manual reset(),
   // or (via this same flag key) a turn-start reset written from
-  // _maybeResetForNewTurn (Trap-4 protected — not edited; it already goes
-  // through _writePipFlag, so its write lands here like any other). Bumping
+  // the turn engine's turn start (it goes through _writePipFlag, so its
+  // write lands here like any other). Bumping
   // pipSeq on every such hydration means a pending local revert captured
   // before this authoritative state landed can never fire after it and
   // clobber it (Trap 3) — this is the guard's actual coverage; it is NOT
