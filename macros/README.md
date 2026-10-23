@@ -105,12 +105,14 @@ name and the two weapon item IDs near the top, and create a separate in-world ma
 1. The repo copy here is **canonical**. After editing either copy, update the other and bump
    `SYNC_STAMP` in the header.
 2. **Drift check** — run in the GM console any time (swap the URL filename and the world-macro
-   name per the table above):
+   name per the table above). Line endings are ignored: a Windows checkout writes CRLF, the release zip
+   ships LF, and Foundry stores whatever was pasted, so identical text must not read as drift.
    ```js
    const url = '/modules/baphomet-utils/macros/twf-tier-aware.js';
    const repo  = await (await fetch(url, { cache: 'no-store' })).text();
    const world = game.macros.getName('Two-Weapon Fighting')?.command ?? '';
-   console.log(repo.trim() === world.trim() ? 'TWF macro: IN SYNC' : 'TWF macro: DRIFT — world ≠ repo');
+   const norm = s => s.replace(/\r\n/g, '\n').trim();
+   console.log(norm(repo) === norm(world) ? 'TWF macro: IN SYNC' : 'TWF macro: DRIFT — world ≠ repo');
    ```
 
 ### v2.46.1 sync note — paste one new macro

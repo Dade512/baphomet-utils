@@ -3,17 +3,16 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.46.1 — *Once Per Round*
+**Current Version:** 2.46.2 — *Loose Ends*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Once per round.** A player's Next Turn now pays their Frightened, Fleeing and Stunned countdowns down, like the GM's,
-and Next Turn clicked twice moves twice, with no flicker and no second refresh. A new **Delay** macro passes your turn:
-nothing refreshes when you act later in the round, and your countdowns tick when that delayed turn ends. Previous Turn
-undoes the countdown the departed turn paid and tells the GM what it put back. The GM can look at another encounter
-without stopping the one in play. One new world macro to paste (Delay); see the [changelog](#changelog).
+**Loose ends.** A creature's initiative can be edited while it acts, and Previous Turn and Next Turn still do the right
+thing. A pip clicked in another encounter's tracker is saved there. The GM card for a skip-dialog full attack now says
+that one action was charged and every swing counted toward MAP. A turn repair raises no console error, and casting a
+spell logs no deprecation warning. No world macro changed; see the [changelog](#changelog).
 
 ---
 
@@ -51,6 +50,7 @@ documents from a module's files. You must place each one manually:
 | `ready.js` | Ready |
 | `total-defense.js` | Total Defense |
 | `withdraw.js` | Withdraw |
+| `delay.js` | Delay |
 
 **Two-Weapon Fighting is per-character**: `twf-tier-aware.js` hardcodes an actor name and two
 weapon item IDs near the top of the file. Copy the file's contents per dual-wielding character,
@@ -184,6 +184,45 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.46.2 — Loose Ends
+
+Eleven riders on v2.46.0 and v2.46.1 (TD-105 a to d, TD-104 a, b, c, d, g, the stale comments and the README). No new
+rule and no canon change. **No world macro changed** (the drift check in `macros/README.md` now ignores line endings).
+
+- **Initiative edited while a creature acts (TD-105(b), MEDIUM).** Moving the acting creature later and pressing
+  Previous Turn used to read as forward (its countdown ticked and the creature stepped back to was started); moving it
+  earlier and pressing Next Turn used to read as a rewind (a tick was restored and its own end never ran). The direction
+  is now read against the creature's live place in the turn order: Previous Turn is a rewind, Next Turn ends it once. The
+  at-table rule "edit a creature's initiative only while it is not acting" is lifted.
+- **A late turn change still ends the departing turn (TD-105(a)).** A turn change the GM learned of after joining could
+  skip the departing creature's end of turn. When the departing creature is recorded as started and not ended, its end
+  of turn now runs once. The join itself is unchanged.
+- **A pip clicked in another encounter is saved there (TD-105(c)).** A toggle in a viewed but inactive combat was never
+  written. The click now saves in the combat where it was made, for the GM and, through the relay, for a player (the relay
+  request carries the combat; membership and ownership are checked against it). Every other relay request still uses the
+  active combat.
+- **No console error at a turn repair (TD-105(d)).** The repair now tells pf1 it is the same turn, so
+  `CombatPF._isForwardTime` no longer raises a `TypeError` on each client. The repair itself, its single warning and
+  its `turnEvents: false` are unchanged.
+- **No deprecation warning on a spell (TD-104(a)).** The wand cost reader, the reaction-spell test and the duplicate-spend
+  key no longer read `ItemAction.data`; they return what they returned.
+- **A broken declare macro says so (TD-104(b)).** The `pf1CreateActionUse` hook's errors now reach the console as a
+  warning, once per session per distinct message, whether or not debug logging is on. The use proceeds as before.
+- **The GM card tells the truth (TD-104(d), (c)).** For a skip-dialog full attack by a PC it now reads "One action was
+  charged and all N swings were counted toward MAP. Adjudicate the extra attacks by hand (void them or let them stand)."
+  The "not auto-tracked" sentence is gone, and so is the stale debug text.
+- **The macro drift check ignores line endings (TD-104(g)).** CRLF is normalised to LF on both sides in
+  `macros/README.md`, so a Windows checkout no longer reports DRIFT on identical text.
+- **Comments.** The Vital Strike doubler banner names `{ actorUuid }`; comments that named the retired render path,
+  `_maybeResetForNewTurn`, `_handleAutoDecrement` or `_getBreadcrumbCombatant` as current describe the turn engine;
+  `condition-overlay.js`'s header now says its entries are history. Only comment lines changed in `applyCondition` and
+  `_baphEngineApplyBody`.
+- **README.** The Installation table lists `delay.js | Delay`.
+- **Accepted as they are (Q5).** The round-0 ledger wipe, the forfeiter whisper prefix, and `started` recorded after a
+  turn start whose writers swallowed their own errors. No code change.
+- **Withdrawn (R-2 (i), Fable 2026-10-22).** Seeding the join's chain from the ledger's current creature would have made
+  the GM's next Next Turn end the creature whose turn ended unseen and skip the one that acted; the join stays as it was.
 
 ### v2.46.1 — Once Per Round
 
