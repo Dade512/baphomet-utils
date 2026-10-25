@@ -2,7 +2,7 @@
  * baphomet-utils — PF1.5 READY declare macro (token-driven)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/ready.js
- *   SYNC_STAMP: 2026-09-18
+ *   SYNC_STAMP: 2026-10-24
  *   The in-world Foundry macro "Ready" must be kept byte-identical to this
  *   file. After editing either copy, sync the other and bump SYNC_STAMP.
  *   Drift check: see README.md here.
@@ -71,10 +71,13 @@
   const hadReaction = state.reactionAvailable;
 
   // 6) spend 2. Do not report success on a false return (all-or-nothing).
+  //    v2.47.0: spendAction answers true (spent), false (refused) or null (no GM connected). Proceed only on
+  //    true; warn only on false; stay silent on null (the module shows its one quiet notice; nothing declared).
   const spent = game.baphometActions.spendAction(combatant.id, 2);
-  if (!spent) {
+  if (spent === false) {
     return ui.notifications.warn(`baphomet-utils | Ready: ${actor.name}'s Ready could not be declared — the spend was refused.`);
   }
+  if (spent !== true) return;
 
   // 7) warn (do not block) when the Reaction was already gone before this declare.
   if (!hadReaction) {

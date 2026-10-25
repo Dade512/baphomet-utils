@@ -886,6 +886,16 @@ function _isSavedConditionLock(v) {
   return Number.isInteger(v) && v >= 0 && v <= 3;
 }
 
+// v2.47.0 FIX-6 (F-A-06, R-5 as amended by Fable 2026-10-24): the ONE builder of the Combat Reflexes (jade)
+// array. `reflexCount` pips, the LAST min(reflexSpent, reflexCount) of them spent; every pip spent while
+// `locked` (the combatant's `stunLock` record is present). The spent COUNT is stored apart from the array
+// (`state.reflexSpent`, the `pipState` flag), so a Dex dip and regrow cannot hand a spent pip back.
+function _baphReflexPips(reflexCount, reflexSpent, locked) {
+  const n = Number.isFinite(Number(reflexCount)) ? Math.max(0, Math.floor(Number(reflexCount))) : 0;
+  const spent = locked ? n : Math.min(Math.max(0, Math.floor(Number(reflexSpent) || 0)), n);
+  return Array.from({ length: n }, (_, i) => i < n - spent);
+}
+
 function _initState(combatantId, combatArg) {
   // Hydrate from the shared combatant flag if it exists (cross-client reload support).
   // getFlag is synchronous — reads from the document's in-memory data.
@@ -898,9 +908,12 @@ function _initState(combatantId, combatArg) {
   // v1.23: Combat Reflexes pips scale to the actor's Dex modifier. Reconcile
   // any saved reflexPip array to the current count, preserving spent state.
   const reflexCount = _combatReflexCount(actor);
-  const reflexPip = Array.isArray(saved?.reflexPip)
-    ? Array.from({ length: reflexCount }, (_, i) => saved.reflexPip[i] ?? true)
-    : Array(reflexCount).fill(true);
+  // v2.47.0 FIX-6: the spent count is hydrated from the flag (a whole number >= 0), else counted from a
+  // flag written before 2.47.0 (its `false` entries); the array is rebuilt from the count by one helper.
+  const reflexSpent = (Number.isInteger(saved?.reflexSpent) && saved.reflexSpent >= 0)
+    ? saved.reflexSpent
+    : (Array.isArray(saved?.reflexPip) ? saved.reflexPip.filter(p => p === false).length : 0);
+  const reflexPip = _baphReflexPips(reflexCount, reflexSpent, !!combatant?.getFlag(AT_MODULE_ID, AT_STUN_LOCK_FLAG_KEY));
 
   // v2.29.0 Haste bonus: hydrate provenance + availability LOCALLY (no flag write in init).
   // Auto is derived from the actor's active Haste buffs when the setting is on; forced false
@@ -910,8 +923,11 @@ function _initState(combatantId, combatArg) {
   const bonusManual = !!saved?.bonusManual;
   const bonusAuto   = _bonusSettingOn ? _hasActiveHasteBuff(actor) : false;
   const bonusEff    = bonusManual || bonusAuto;
+  // v2.47.0 FIX-5 (F-A-05): a boolean in the flag, default false; while it is true a grant that finds no
+  // saved pip does not create an available one.
+  const bonusSpentThisTurn = typeof saved?.bonusSpentThisTurn === 'boolean' ? saved.bonusSpentThisTurn : false;
   const bonusPip    = bonusEff
-    ? ((Array.isArray(saved?.bonusPip) && saved.bonusPip.length === 1) ? [...saved.bonusPip] : [true])
+    ? ((Array.isArray(saved?.bonusPip) && saved.bonusPip.length === 1) ? [...saved.bonusPip] : [!bonusSpentThisTurn])
     : [];
 
   // v2.30.0: TWF off-hand budget hydrates from its OWN isolated, versioned flag (NOT pipState).
@@ -942,10 +958,12 @@ function _initState(combatantId, combatArg) {
     reaction:        (saved?.reaction && saved.reaction.length === 1)  ? [...saved.reaction] : [true],
     combatReflex:    reflexCount > 0,
     reflexPip,
+    reflexSpent,
     conditionLocked: savedLock,
     bonusManual,
     bonusAuto,
     bonusPip,
+    bonusSpentThisTurn,
     // v1.27 round-02: the sequence value at which this combatant's own last
     // turn-start reset fired (since v2.46.1 the turn ledger's seq for the
     // start - bookkeeping only). Replaces the retired _resetForRound /
@@ -995,9 +1013,11 @@ function _resetState(combatantId) {
   const reflexCount = _combatReflexCount(_baphEngineCombat()?.combatants?.get(combatantId)?.actor);
   state.combatReflex = reflexCount > 0;
   state.reflexPip = Array(reflexCount).fill(true);
+  state.reflexSpent = 0; // v2.47.0 FIX-6: the stored jade spent count clears with the refill
   state.conditionLocked = 0;
   // v2.29.0: refill the Haste bonus availability (grant persists; incap is derived at use).
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
+  state.bonusSpentThisTurn = false; // v2.47.0 FIX-5: a refill is a new turn's worth of Haste
   // v2.30.0: clear the per-turn MAP counter + TWF off-hand budget on a manual reset too.
   state.swingsTaken = 0;
   // GOAL_v2.38.0 FIX-4: clear the routine record wherever swingsTaken clears — a record that
@@ -1041,10 +1061,12 @@ function _writePipFlag(combatantId, combatArg) {
     actions:      [...state.actions],
     reaction:     [...state.reaction],
     reflexPip:    [...state.reflexPip],
+    reflexSpent:  Math.max(0, Math.floor(Number(state.reflexSpent) || 0)), // v2.47.0 FIX-6: the stored jade spent count
     conditionLocked: Number(state.conditionLocked) || 0, // v2.44.1 FIX-A: the turn's lock survives a reload
     bonusManual:  !!state.bonusManual,
     bonusAuto:    !!state.bonusAuto,
     bonusPip:     Array.isArray(state.bonusPip) ? [...state.bonusPip] : [],
+    bonusSpentThisTurn: state.bonusSpentThisTurn === true, // v2.47.0 FIX-5: the Haste pip was spent this turn
     resetForSeq:  state._resetForSeq, // v1.27 round-02 — bookkeeping since v2.46.1 (the turn ledger's seq)
   }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
 }
@@ -1157,7 +1179,10 @@ function _readConditionActionLoss(actor) {
     }
   }
 
-  if (fullyIncapacitated) {
+  // v2.47.0 FIX-1 (A4): the no-action set (pf1 Paralyzed, Unconscious, Dying, Stable, Asleep, Petrified,
+  // Dazed, Cowering; an active Ledger Paralyzed or Fascinated) is full incapacitation too, so the turn
+  // start's locks and the Haste pip follow the same set the gate and the spends read.
+  if (fullyIncapacitated || _baphNoActionReason(actor)) {
     return { actionsLost: 3, fullyIncapacitated: true };
   }
 
@@ -1223,6 +1248,7 @@ function _resetReactionReflexPips(combatantId, combatant) {
   const reflexCount = _combatReflexCount(combatant?.actor);
   state.combatReflex = reflexCount > 0;
   state.reflexPip = Array(reflexCount).fill(true);
+  state.reflexSpent = 0; // v2.47.0 FIX-6: a turn start clears the stored jade spent count
   const { fullyIncapacitated } = _readConditionActionLoss(combatant?.actor);
   if (fullyIncapacitated) {
     state.reaction = [false];
@@ -1253,6 +1279,85 @@ const AT_STUN_LOCK_FLAG_KEY = 'stunLock';
 function _baphStunnedCountdownOf(actor) {
   return Number(actor?.getFlag?.(AT_MODULE_ID, 'stunnedCountdown')) || 0;
 }
+
+/* ----------------------------------------------------------
+   v2.47.0 — THE REACTION GATE (GOAL_v2.47.0_REACTION_GATE FIX-1; TD-96; R-1, A1, A4, F-C-15)
+
+   ONE live answer to "can this creature react?", read where a Reaction or a Combat Reflexes pip is spent,
+   clicked or drawn: `_baphReactionGate(actor, combatant, pool)` -> { ok, reason }. It reads live state only
+   (the Stunned countdown, the actor's statuses, the Ledger buffs, the combat's start and the combatant's
+   turn mark), never a stored array, so a GM `reset()` or a pip click cannot make a pool spendable while the
+   reason holds. `stunLock` (syncStunLock) stays only as the record of what to give back.
+
+   Order — the first that holds names the reason: Stunned (both pools); the no-action set (both pools, and
+   every action pip); an active Ledger Nauseated (both pools); and, Reaction only, "your first turn has not
+   started" in a started combat the module flagged `offGuardInitiative`, Uncanny Dodge exempt.
+   ---------------------------------------------------------- */
+
+// An ACTIVE Ledger buff: a buff Item with system.active === true carrying conditionKey === key.
+function _baphLedgerActive(actor, key) {
+  if (!actor?.items) return false;
+  return Array.from(actor.items).some(i =>
+    i.type === 'buff' && i.system?.active === true && i.flags?.[AT_MODULE_ID]?.conditionKey === key);
+}
+
+// pf1 statuses (pf1.registry.conditions ids) that leave a creature no actions and no reactions.
+// Helpless alone is NOT in the set. Order is the order the reason is named in.
+const _BAPH_NO_ACTION_STATUSES = [
+  ['paralyzed', 'Paralyzed'], ['unconscious', 'Unconscious'], ['dying', 'Dying'], ['stable', 'Stable'],
+  ['sleep', 'Asleep'], ['petrified', 'Petrified'], ['dazed', 'Dazed'], ['cowering', 'Cowering'],
+];
+
+// The reason a creature has no actions (and no reactions), or null: the first pf1 status of the set found
+// in actor.statuses; else an active Ledger Paralyzed; else an active Ledger Fascinated.
+function _baphNoActionReason(actor) {
+  if (!actor) return null;
+  const statuses = actor.statuses;
+  if (statuses && typeof statuses.has === 'function') {
+    for (const [id, label] of _BAPH_NO_ACTION_STATUSES) {
+      if (statuses.has(id)) return label;
+    }
+  }
+  if (_baphLedgerActive(actor, 'paralyzed')) return 'Paralyzed';
+  if (_baphLedgerActive(actor, 'fascinated')) return 'Fascinated';
+  return null;
+}
+
+function _baphReactionGate(actor, combatant, pool) {
+  if (!actor) return { ok: true, reason: null };
+  if (_baphStunnedCountdownOf(actor) > 0) return { ok: false, reason: 'Stunned' };
+  const noAction = _baphNoActionReason(actor);
+  if (noAction) return { ok: false, reason: noAction };
+  if (_baphLedgerActive(actor, 'nauseated')) return { ok: false, reason: 'Nauseated' };
+  if (pool === 'reaction' && combatant) {
+    const combat = combatant.parent;
+    // A combat without the offGuardInitiative flag never writes the turn mark (v2.42.0 P-k), so it never gates.
+    if (combat?.started === true
+        && combat.getFlag(AT_MODULE_ID, 'offGuardInitiative') === true
+        && combatant.getFlag(AT_MODULE_ID, 'offGuardTurnStarted') !== true) {
+      const uncanny = typeof _offGuardHasUncannyDodge === 'function' && _offGuardHasUncannyDodge(actor) === true;
+      if (!uncanny) return { ok: false, reason: 'your first turn has not started' };
+    }
+  }
+  return { ok: true, reason: null };
+}
+
+// The combatant a pip belongs to, in the engine combat or the viewed one (combatant ids are unique).
+function _baphGateCombatant(combatantId) {
+  return _baphEngineCombat()?.combatants?.get(combatantId) ?? game.combat?.combatants?.get(combatantId) ?? null;
+}
+
+// The gate's reason string for one pool of one combatant, or null when it is open (or the combatant is in
+// neither the engine combat nor the viewed one).
+function _baphGateReasonFor(combatantId, pool) {
+  const combatant = _baphGateCombatant(combatantId);
+  if (!combatant?.actor) return null;
+  const gate = _baphReactionGate(combatant.actor, combatant, pool);
+  return gate.ok ? null : gate.reason;
+}
+
+// One notice per page session for a GM's hand on a gated pip (FIX-2, Q2).
+let _baphGmOverrideWarned = false;
 
 // Calls are chained so two syncs for the same stun can never both read "no stunLock yet".
 let _baphStunLockChain = Promise.resolve();
@@ -1601,6 +1706,9 @@ async function _baphEngineTurnStart(combat, combatantId, at, seq) {
     const state = _getState(combatantId);
     if (state) {
       _baphEngineApplyBody(combat, combatantId, combatant, seq);
+      // v2.47.0 FIX-5 (R-4): a new turn clears the Haste pip's spent-this-turn mark. Here, after the body and
+      // before the flag write below, never inside the protected body.
+      state.bonusSpentThisTurn = false;
       _stampActiveCombatantBreadcrumb(combat, combatantId, at);
       _refreshPipRow(combatantId);
 
@@ -1686,6 +1794,30 @@ async function _baphEngineRewind(combat, w, cur, depRound) {
   }
 }
 
+// v2.47.0 FIX-4 (R-3, Q5, F-A-04): the combat start. On the engine's start transition (round 0 -> 1) every
+// combatant's three action pips, Reaction and jade pips refill, its swing counter, routine records and
+// off-hand budget clear, `conditionLocked` clears and the live condition locks re-apply; the first creature's
+// own turn start then runs as before. `stunnedCountdown`, `stunnedAppliedAt` and every `stunLock` record are
+// left alone (the gate keeps a Stunned creature's Reaction unavailable). Errors are caught per combatant.
+async function _baphEngineStartRefill(combat) {
+  for (const combatant of Array.from(combat.combatants ?? [])) {
+    if (!combatant?.actor) continue;
+    const id = combatant.id;
+    try {
+      if (!_getState(id)) _initState(id, combat);
+      const state = _getState(id);
+      if (!state) continue;
+      _resetState(id);
+      state.bonusSpentThisTurn = false;
+      _applyConditionLocks(id, combatant.actor);
+      _refreshPipRow(id);
+      await _writePipFlag(id, combat);
+    } catch (err) {
+      console.error(`${AT_MODULE_ID} | combat start refill failed for ${combatant.name ?? id}`, err);
+    }
+  }
+}
+
 // FIX-2: one queued turn change. `cur` is a copy of the hook's `current`; `hookPrev` the hook's `previous`
 // (used only on a GM that has neither a previous task nor a ledger).
 async function _baphEngineTurnTask(combat, chain, cur, hookPrev) {
@@ -1760,6 +1892,12 @@ async function _baphEngineTurnTask(combat, chain, cur, hookPrev) {
           _baphLedgerPut(w, _baphLedgerPath(curRound, 'delaying', cur.combatantId), 'acting');
         }
       } else {
+        // v2.47.0 FIX-4: the combat's start (round 0 -> 1, nothing yet started in round 1) refills everyone
+        // before the first creature's turn starts.
+        if (depRound === 0 && curRound === 1 && Number(hookPrev?.round) === 0
+            && Object.keys(here?.started ?? {}).length === 0) {
+          await _baphEngineStartRefill(combat);
+        }
         const seq = _baphLedgerNextSeq(w);
         try {
           await _baphEngineTurnStart(combat, cur.combatantId, curState, seq);
@@ -1806,7 +1944,11 @@ async function _baphEngineDeclareDelay(combatantId) {
   if (!combat || combat.started !== true) return { ok: false, reason: 'no combat is running' };
   if (!combat.combatants?.get(combatantId)) return { ok: false, reason: 'not in the active combat' };
   if (_baphEngineIsActiveGM()) return _baphEngineDelayMark(combat, combatantId);
-  if (!game.users?.activeGM) return { ok: false, reason: 'no GM is connected' };
+  if (!game.users?.activeGM) {
+    // v2.47.0 FIX-10 (TD-103(b)): the one quiet notice, and a refusal the Delay macro can tell apart.
+    _baphActionWarnPipRelayFailure('no-active-gm');
+    return { ok: false, reason: 'no-active-gm' };
+  }
   if (!_baphActionSocket) return { ok: false, reason: 'the GM cannot be reached' };
   try {
     const result = await _baphActionSocket.executeAsGM('baphPipSpendRelay', { combatantId, kind: 'delay' });
@@ -2052,6 +2194,16 @@ function _buildPipRow(combatantId, isOwner) {
   const reactionsRow = document.createElement('div');
   reactionsRow.classList.add('baph-pip-reactions');
 
+  // v2.47.0 FIX-2 (R-1, Q2, A4): what the gate says RIGHT NOW draws the pips locked with the reason, whatever
+  // the stored arrays hold. A Reaction or jade pip whose gate refuses is `condition-locked`, never `spent`;
+  // while the no-action set holds every action pip is locked. The click listeners stay (the GM's override and
+  // a player's toast both need them).
+  const _gateCombatant = _baphGateCombatant(combatantId);
+  const _gateActor = _gateCombatant?.actor ?? null;
+  const _noActionWhy = _baphNoActionReason(_gateActor);
+  const _reactionWhy = _gateActor ? (() => { const g = _baphReactionGate(_gateActor, _gateCombatant, 'reaction'); return g.ok ? null : g.reason; })() : null;
+  const _reflexWhy = _gateActor ? (() => { const g = _baphReactionGate(_gateActor, _gateCombatant, 'reflex'); return g.ok ? null : g.reason; })() : null;
+
   // --- Action pips (3) ---
   state.actions.forEach((available, idx) => {
     const pip = document.createElement('button');
@@ -2061,7 +2213,10 @@ function _buildPipRow(combatantId, isOwner) {
     pip.dataset.pipIndex = idx;
     pip.title = `Action ${idx + 1}`;
 
-    if (!available && idx < state.conditionLocked) {
+    if (_noActionWhy) {
+      pip.classList.add('condition-locked');
+      pip.title = `Action ${idx + 1} — ${_noActionWhy}`;
+    } else if (!available && idx < state.conditionLocked) {
       pip.classList.add('condition-locked');
       pip.title = `Action ${idx + 1} — Lost to condition`;
     } else if (!available) {
@@ -2126,7 +2281,10 @@ function _buildPipRow(combatantId, isOwner) {
     pip.dataset.pipIndex = idx;
     pip.title = 'Reaction';
 
-    if (!available) pip.classList.add('spent');
+    if (_reactionWhy) {
+      pip.classList.add('condition-locked');
+      pip.title = `Reaction — ${_reactionWhy}`;
+    } else if (!available) pip.classList.add('spent');
 
     if (isOwner) {
       pip.addEventListener('click', (e) => {
@@ -2151,7 +2309,10 @@ function _buildPipRow(combatantId, isOwner) {
       pip.dataset.pipIndex = idx;
       pip.title = 'Combat Reflexes — AoO Only';
 
-      if (!available) pip.classList.add('spent');
+      if (_reflexWhy) {
+        pip.classList.add('condition-locked');
+        pip.title = `Combat Reflexes — ${_reflexWhy}`;
+      } else if (!available) pip.classList.add('spent');
 
       if (isOwner) {
         pip.addEventListener('click', (e) => {
@@ -2212,9 +2373,10 @@ function _togglePip(combatantId, type, index, combatArg) {
   // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): a locally-knowable fact (is
   // there an active GM at all) is checked BEFORE mutating, same as the spend
   // functions below — no active GM means no mutation, no relay, one warning.
+  // v2.47.0 FIX-10: the refusal is `null` (not `false`), so a caller can tell "no GM" from "refused".
   if (!game.user.isGM && !game.users.activeGM) {
     _baphActionWarnPipRelayFailure('no-active-gm');
-    return false;
+    return null;
   }
 
   // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect A): a toggle may only flip a
@@ -2235,6 +2397,26 @@ function _togglePip(combatantId, type, index, combatArg) {
     return false;
   }
 
+  // v2.47.0 FIX-2 (R-1, Q2, F-A-07): the gate, for the Reaction and the jade pips, BEFORE the "only a GM
+  // returns" rule below. A non-GM caller whose gate refuses is told why and nothing changes; a GM proceeds
+  // (the override), with one warning per page session. The gate reads the combatant of `toggleCombat`.
+  if (type === 'reaction' || type === 'reflex') {
+    const gateCombatant = toggleCombat?.combatants?.get(combatantId) ?? _baphGateCombatant(combatantId);
+    if (gateCombatant?.actor) {
+      const gate = _baphReactionGate(gateCombatant.actor, gateCombatant, type);
+      if (!gate.ok) {
+        if (!game.user.isGM) {
+          ui.notifications?.warn?.(`${gateCombatant.name ?? gateCombatant.actor.name}: ${gate.reason} — this pip cannot be used now; nothing changed.`);
+          return false;
+        }
+        if (!_baphGmOverrideWarned) {
+          _baphGmOverrideWarned = true;
+          ui.notifications?.warn?.(`GM override: a gated Reaction or Combat Reflexes pip was changed by hand (${gate.reason}).`);
+        }
+      }
+    }
+  }
+
   // v2.37.1 (GOAL_v2.37.1_RELAY_PARAMS FIX-3 / F7 ruling, 2026-08-23): a
   // non-GM may flip a pip available -> spent freely (spending is presumed
   // valid), but only a GM may flip spent -> available. "Am I a GM" and "is
@@ -2251,6 +2433,8 @@ function _togglePip(combatantId, type, index, combatArg) {
   }
 
   let priorValue;
+  const priorReflexSpent = state.reflexSpent;             // v2.47.0 FIX-6 / FIX-11: a relay revert puts back
+  const priorBonusSpentFlag = state.bonusSpentThisTurn;   // the values it captured
   if (type === 'action') {
     priorValue = state.actions[index];
     state.actions[index] = !priorValue;
@@ -2260,9 +2444,13 @@ function _togglePip(combatantId, type, index, combatArg) {
   } else if (type === 'reflex') {
     priorValue = state.reflexPip[index];
     state.reflexPip[index] = !priorValue;
+    // v2.47.0 FIX-6: the stored jade spent count follows the click (available -> spent +1, spent -> available
+    // -1, never below 0).
+    state.reflexSpent = Math.max(0, (Math.floor(Number(state.reflexSpent)) || 0) + (priorValue ? 1 : -1));
   } else if (type === 'bonus') {
     priorValue = state.bonusPip[index];
     state.bonusPip[index] = !priorValue;
+    if (priorValue === true) state.bonusSpentThisTurn = true; // v2.47.0 FIX-5: available -> spent
   } else {
     return false;
   }
@@ -2289,16 +2477,21 @@ function _togglePip(combatantId, type, index, combatArg) {
   // meantime. Capturing and re-checking (round, activeId) here closes that
   // race without touching the turn start itself — the identical test
   // rollbackOffHandSwing already uses for the same reason.
-  const capturedRound = game.combat?.round ?? 0;
-  const capturedActiveId = _currentActiveCombatantId(game.combat);
+  // v2.47.0 FIX-11 (TD-106(a)): the revert compares against the combat the toggle was MADE in, captured now,
+  // never a combat looked up when the reply arrives.
+  const reqCombat = toggleCombat;
+  const capturedRound = reqCombat?.round ?? 0;
+  const capturedActiveId = _currentActiveCombatantId(reqCombat);
   // v2.46.2 FIX-4: the payload names the combat the toggle was made in (only when one was resolved), so
   // the GM checks membership and ownership against it.
   const togglePayload = { toggleType: type, toggleIndex: index };
   if (toggleCombat?.id) togglePayload.combatId = toggleCombat.id;
   _baphActionEmitPipRelay(combatantId, 'toggle', togglePayload, () => {
     if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-    if ((game.combat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(game.combat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+    if ((reqCombat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(reqCombat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
     _baphActionApplyPipValue(state, type, index, priorValue);
+    if (type === 'reflex') state.reflexSpent = priorReflexSpent;
+    if (type === 'bonus') state.bonusSpentThisTurn = priorBonusSpentFlag;
     _refreshPipRow(combatantId);
   });
   return true;
@@ -2393,8 +2586,8 @@ Hooks.on('renderCombatTracker', (app, html, data) => {
     const reflexCount = _combatReflexCount(combatant.actor);
     if (state.combatReflex !== (reflexCount > 0) || state.reflexPip.length !== reflexCount) {
       state.combatReflex = reflexCount > 0;
-      const prev = state.reflexPip;
-      state.reflexPip = Array.from({ length: reflexCount }, (_, i) => prev[i] ?? true);
+      // v2.47.0 FIX-6 (F-A-06): rebuilt from the stored spent count, not by index from the previous array.
+      state.reflexPip = _baphReflexPips(reflexCount, state.reflexSpent, !!combatant.getFlag(AT_MODULE_ID, AT_STUN_LOCK_FLAG_KEY));
     }
 
     // v2.46.1: no turn detection here. The turn start comes from the turn engine (the active GM's
@@ -2498,7 +2691,12 @@ Hooks.once('ready', () => {
         bonusManualGranted:    !!state.bonusManual,
         // GOAL_v2.37.9 FIX-5: read-only, so the probe can assert on the MAP counter. Existing
         // fields above keep their names, order and meanings — this is appended, not inserted.
-        swingsTaken:           Number(state.swingsTaken) || 0
+        swingsTaken:           Number(state.swingsTaken) || 0,
+        // GOAL_v2.47.0 FIX-2: read-only. The reaction gate's reason for each pool ('Stunned', 'Paralyzed', ...,
+        // 'your first turn has not started'), or null when it is open (also null when the combatant is in
+        // neither the engine combat nor the viewed one). The fields above keep reporting the raw pools.
+        reactionGate:          _baphGateReasonFor(combatantId, 'reaction'),
+        reflexGate:            _baphGateReasonFor(combatantId, 'reflex')
       };
     },
     // GOAL_v2.37.9 FIX-5: read-only accessor so the probe can assert on _isQualifyingBundle
@@ -2574,13 +2772,19 @@ Hooks.once('ready', () => {
     spendReaction: (combatantId) => {
       const state = _getState(combatantId);
       if (!state || !state.reaction[0]) return false;
+      // v2.47.0 FIX-2 (R-1, F-A-07): the live gate, after the empty-pool test and BEFORE the no-GM test. A
+      // refused gate returns false with no mutation, no relay and no notice (the caller names the reason); the
+      // GM's relay replay runs this same function, so it refuses too.
+      const gateCombatant = _baphGateCombatant(combatantId);
+      if (gateCombatant?.actor && !_baphReactionGate(gateCombatant.actor, gateCombatant, 'reaction').ok) return false;
       // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): "is a GM connected at
       // all" is locally knowable synchronously — refuse cleanly, no
       // mutation, no relay, one warning. Contrast case 7 (ownership), which
       // cannot be known client-side and is why the relay round trip exists.
+      // v2.47.0 FIX-10: `null`, not `false` — a caller can tell "no GM" from "no Reaction".
       if (!game.user.isGM && !game.users.activeGM) {
         _baphActionWarnPipRelayFailure('no-active-gm');
-        return false;
+        return null;
       }
       const priorReaction = [...state.reaction];
       state.reaction[0] = false;
@@ -2595,11 +2799,13 @@ Hooks.once('ready', () => {
       const seq = ++state.pipSeq;
       // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
       // shared rationale comment on the _togglePip revert closure below.
-      const capturedRound = _baphEngineCombat()?.round ?? 0;
-      const capturedActiveId = _currentActiveCombatantId(_baphEngineCombat());
+      // v2.47.0 FIX-11 (TD-106(a)): the combat the request was made in, captured now.
+      const reqCombat = _baphEngineCombat();
+      const capturedRound = reqCombat?.round ?? 0;
+      const capturedActiveId = _currentActiveCombatantId(reqCombat);
       _baphActionEmitPipRelay(combatantId, 'reaction', {}, () => {
         if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-        if ((_baphEngineCombat()?.round ?? 0) !== capturedRound || _currentActiveCombatantId(_baphEngineCombat()) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+        if ((reqCombat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(reqCombat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
         state.reaction = priorReaction;
         _refreshPipRow(combatantId);
       });
@@ -2612,12 +2818,18 @@ Hooks.once('ready', () => {
       if (!state) return false;
       const idx = state.reflexPip.findIndex(p => p);
       if (idx === -1) return false;
+      // v2.47.0 FIX-2 (R-1): the live gate for the jade pool ("first turn" does not gate it), before the
+      // no-GM test; a refusal mutates, relays and notifies nothing.
+      const gateCombatant = _baphGateCombatant(combatantId);
+      if (gateCombatant?.actor && !_baphReactionGate(gateCombatant.actor, gateCombatant, 'reflex').ok) return false;
       if (!game.user.isGM && !game.users.activeGM) {
         _baphActionWarnPipRelayFailure('no-active-gm');
-        return false;
+        return null; // v2.47.0 FIX-10
       }
       const priorReflexPip = [...state.reflexPip];
+      const priorReflexSpent = state.reflexSpent;
       state.reflexPip[idx] = false;
+      state.reflexSpent = Math.max(0, (Math.floor(Number(state.reflexSpent)) || 0)) + 1; // v2.47.0 FIX-6
       _refreshPipRow(combatantId);
       if (game.user.isGM) {
         _writePipFlag(combatantId);
@@ -2626,12 +2838,15 @@ Hooks.once('ready', () => {
       const seq = ++state.pipSeq;
       // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
       // shared rationale comment on the _togglePip revert closure below.
-      const capturedRound = _baphEngineCombat()?.round ?? 0;
-      const capturedActiveId = _currentActiveCombatantId(_baphEngineCombat());
+      // v2.47.0 FIX-11 (TD-106(a)): the combat the request was made in, captured now.
+      const reqCombat = _baphEngineCombat();
+      const capturedRound = reqCombat?.round ?? 0;
+      const capturedActiveId = _currentActiveCombatantId(reqCombat);
       _baphActionEmitPipRelay(combatantId, 'combatReflex', {}, () => {
         if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-        if ((_baphEngineCombat()?.round ?? 0) !== capturedRound || _currentActiveCombatantId(_baphEngineCombat()) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+        if ((reqCombat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(reqCombat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
         state.reflexPip = priorReflexPip;
+        state.reflexSpent = priorReflexSpent;
         _refreshPipRow(combatantId);
       });
       return true;
@@ -2840,15 +3055,29 @@ Hooks.once('socketlib.ready', () => {
  * false/no-op above with no notification, unchanged pre-v2.37.0
  * behavior), so this is never ambiguous with that case.
  */
+let _baphNoGmNoticeShown = false; // v2.47.0 FIX-10: the no-GM notice shows once per page session
+
 function _baphActionWarnPipRelayFailure(reason) {
+  // v2.47.0 FIX-10 (TD-103(b); R-7, Q8): with no GM connected the spends refuse with `null` and the module
+  // posts no card; this is the ONE quiet notice, once per page session, then only a debug line.
+  if (reason === 'no-active-gm') {
+    if (!_baphNoGmNoticeShown) {
+      _baphNoGmNoticeShown = true;
+      ui.notifications?.warn?.('No GM is connected — actions are not tracked until one joins.');
+    }
+    _debugLog('pipSpendRelay: no active GM — nothing saved');
+    return;
+  }
   const messages = {
-    'no-active-gm':  'No GM is connected — this action could not be saved and was undone.',
     'not-owner':     'The GM rejected this action (ownership check failed) — it was undone.',
     'rejected':      'The GM could not process this action — it was undone.',
     // v2.37.1 (GOAL_v2.37.1_RELAY_PARAMS FIX-3 / F7 ruling): a non-GM tried
     // to flip a spent pip back to available. Distinguishable from an
     // ordinary exhausted-pool no-op (which never reaches this function).
     'not-gm-return': 'Only the GM may return a spent pip — this click was undone.',
+    // v2.47.0 FIX-2: the GM's relay refused a Reaction or jade toggle because the gate says that creature
+    // cannot react now.
+    'reaction-gated': 'The GM refused this click — that creature cannot react now. It was undone.',
   };
   ui.notifications?.warn?.(messages[reason] ?? messages.rejected);
   _debugLog(`pipSpendRelay: reverted (${reason})`);
@@ -3075,6 +3304,14 @@ async function _baphSocketPipSpendRelay(payload = {}) {
           `only a GM may do that — rejected`
         );
         return { ok: false, reason: 'return-requires-gm' };
+      }
+      // v2.47.0 FIX-2 (R-1): a non-GM requester's Reaction or jade toggle whose gate refuses is refused,
+      // read against the combat validated above (a GM requester is the override, as at its own client).
+      if (!requestingUser.isGM && (toggleType === 'reaction' || toggleType === 'reflex') && combatant.actor) {
+        if (!_baphReactionGate(combatant.actor, combatant, toggleType).ok) {
+          _debugLog(`pipSpendRelay: toggle ${toggleType} for "${combatant.name}" refused - the reaction gate holds`);
+          return { ok: false, reason: 'reaction-gated' };
+        }
       }
       // the toggle runs in the combat validated above
       ok = _togglePip(combatantId, toggleType, toggleIndex, combat);
@@ -3313,7 +3550,9 @@ function _reconcileBonusPip(combatantId) {
   if (!Array.isArray(state.bonusPip)) state.bonusPip = [];
   const effective = !!(state.bonusManual || state.bonusAuto);
   if (!effective) { state.bonusPip = []; return; }            // true -> false: remove pip
-  if (state.bonusPip.length === 0) state.bonusPip = [true];    // false -> true: new grant, available
+  // false -> true: new grant, available - v2.47.0 FIX-5 (R-4, F-A-05): unless this turn's Haste pip was
+  // already spent (a buff off and on, a revoke and grant, the setting), when the new pip stays spent.
+  if (state.bonusPip.length === 0) state.bonusPip = [state.bonusSpentThisTurn === true ? false : true];
   // else: still effective -> preserve existing [true]/[false]
 }
 
@@ -3378,9 +3617,35 @@ Hooks.on('createItem', (item) => _onBuffChangeForHasteBonus(item));
 Hooks.on('updateItem', (item) => _onBuffChangeForHasteBonus(item));
 Hooks.on('deleteItem', (item) => _onBuffChangeForHasteBonus(item));
 
+// v2.47.0 FIX-5 / FIX-9: how many actions a spend with this `allowBonus` could draw on - the free normal pips
+// (below the turn's condition lock) plus the Haste pip when that spend may use it and it is usable. ONE helper,
+// shared by _spendActionCore and the out-of-actions notice. A creature in the no-action set has none.
+function _baphActionsLeft(state, actor, allowBonus) {
+  if (!state || _baphNoActionReason(actor)) return { normal: 0, bonus: 0, total: 0 };
+  const normal = state.actions.filter((a, i) => a && i >= state.conditionLocked).length;
+  const bonus = (!!allowBonus && Array.isArray(state.bonusPip) && state.bonusPip[0] === true) ? 1 : 0;
+  return { normal, bonus, total: normal + bonus };
+}
+
+// The same count for a combatant id (the engine combat's actor).
+function _baphActionsLeftFor(combatantId, allowBonus) {
+  const actor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
+  return _baphActionsLeft(_getState(combatantId), actor, allowBonus).total;
+}
+
+// Which reasons may spend the Haste pip: a single ordinary Strike (reason `attack-*`, count 1), a per-roll
+// routine-repeat Strike charge of any count, and (v2.47.0 FIX-5, Q4) the action panel's Spend 1 (`manual-1`,
+// count 1). Spend 2 and Spend 3 stay normal-only. The public spendAction never allows it.
+function _baphBonusAllowedFor(count, reason, perRollCharge) {
+  const isAttackReason = typeof reason === 'string' && reason.startsWith('attack-');
+  return (isAttackReason && (count === 1 || perRollCharge === true)) || (reason === 'manual-1' && count === 1);
+}
+
 // Single spend implementation. Bonus eligibility is enforced HERE (never exposed via the
 // public spendAction API): allowBonus is set ONLY by _spendActionForCombatant on a validated
-// single ordinary Strike. All-or-nothing; spends the 3 normal pips first, then the bonus.
+// single ordinary Strike (or the panel's Spend 1). All-or-nothing; v2.47.0 FIX-5: with the bonus allowed it
+// spends the Haste pip FIRST, then the normal pips. Returns true (spent), false (refused) or, v2.47.0 FIX-10,
+// null when it refused only because no GM is connected.
 function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   const state = _getState(combatantId);
   if (!state) return false;
@@ -3392,25 +3657,30 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
     return false;
   }
   if (count === 0) return true;
-  const actor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
-  const incap = !!_readConditionActionLoss(actor).fullyIncapacitated;
-  const normalAvail = state.actions.filter((a, i) => a && i >= state.conditionLocked).length;
-  const bonusUsable = allowBonus && !incap && Array.isArray(state.bonusPip) && state.bonusPip[0] === true;
-  const bonusAvail  = bonusUsable ? 1 : 0;
-  if (normalAvail + bonusAvail < count) return false; // all-or-nothing across both pools
+  const reqCombat = _baphEngineCombat();
+  const actor = reqCombat?.combatants?.get(combatantId)?.actor;
+  // v2.47.0 FIX-2 (A4, F-A-23): the no-action set refuses every action pip and the Haste pip, on turn or off,
+  // mid-turn included - no mutation. (Nauseated does not refuse here: two non-offensive actions remain.)
+  if (_baphNoActionReason(actor)) return false;
+  const left = _baphActionsLeft(state, actor, allowBonus);
+  const bonusUsable = left.bonus > 0;
+  if (left.total < count) return false; // all-or-nothing across both pools
   // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): "is a GM connected at all"
   // is locally knowable synchronously — refuse cleanly before mutating.
+  // v2.47.0 FIX-10: `null`, not `false` - not a shortfall, so the caller reads no empty pool and posts no card.
   if (!game.user.isGM && !game.users.activeGM) {
     _baphActionWarnPipRelayFailure('no-active-gm');
-    return false;
+    return null;
   }
   const priorActions  = [...state.actions];
   const priorBonusPip = Array.isArray(state.bonusPip) ? [...state.bonusPip] : [];
+  const priorBonusSpentFlag = state.bonusSpentThisTurn;
   let remaining = count;
+  // v2.47.0 FIX-5 (R-4, A2): the Haste pip first when the bonus is allowed, then the normal pips.
+  if (bonusUsable && remaining > 0) { state.bonusPip[0] = false; state.bonusSpentThisTurn = true; remaining--; }
   for (let i = 0; i < 3 && remaining > 0; i++) {
     if (state.actions[i] && i >= state.conditionLocked) { state.actions[i] = false; remaining--; }
   }
-  if (remaining > 0 && bonusUsable) { state.bonusPip[0] = false; remaining--; }
   _refreshPipRow(combatantId);
   if (game.user.isGM) {
     _writePipFlag(combatantId);
@@ -3424,8 +3694,9 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   const seq = ++state.pipSeq;
   // v2.37.0 round-02 (FIX-2): also capture (round, activeId) — see the
   // shared rationale comment on the _togglePip revert closure below.
-  const capturedRound = _baphEngineCombat()?.round ?? 0;
-  const capturedActiveId = _currentActiveCombatantId(_baphEngineCombat());
+  // v2.47.0 FIX-11 (TD-106(a)): the revert keys on the combat the request was made in, captured now.
+  const capturedRound = reqCombat?.round ?? 0;
+  const capturedActiveId = _currentActiveCombatantId(reqCombat);
   // v2.37.0 round-02 (OVERSEER FIX BRIEF Defect B): carry this call's own
   // `allowBonus` on the wire so the GM's replay can re-run the SAME
   // availability check the client just ran (Trap 1, GOAL:151-152) instead
@@ -3436,9 +3707,10 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   // already-granted pool the GM is allowed to draw the spend from.
   _baphActionEmitPipRelay(combatantId, 'action', { count, allowBonus }, () => {
     if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-    if ((_baphEngineCombat()?.round ?? 0) !== capturedRound || _currentActiveCombatantId(_baphEngineCombat()) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
+    if ((reqCombat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(reqCombat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
     state.actions  = priorActions;
     state.bonusPip = priorBonusPip;
+    state.bonusSpentThisTurn = priorBonusSpentFlag; // v2.47.0 FIX-5 / FIX-11
     _refreshPipRow(combatantId);
   });
   return true;
@@ -3457,13 +3729,16 @@ function _spendActionForCombatant(combatantId, count = 1, reason = '', perRollCh
   // three arguments (perRollCharge defaults false), so this widens nothing for them.
   // Spells/skills/manual-panel and cost>1 Vital Strike/Charge use normal pips only. Move /
   // manually-resolved Strike use the bonus via a direct click on the pip. (Codex r3 #1.)
-  const isAttackReason = typeof reason === 'string' && reason.startsWith('attack-');
-  const allowBonus = isAttackReason && (count === 1 || perRollCharge === true);
+  // v2.47.0 FIX-5 (Q4): the panel's Spend 1 (`manual-1`, count 1) may spend it too - one helper decides.
+  const allowBonus = _baphBonusAllowedFor(count, reason, perRollCharge);
 
-  // All-or-nothing is enforced inside _spendActionCore (preflight across both pools).
+  // All-or-nothing is enforced inside _spendActionCore (preflight across both pools). v2.47.0 FIX-10: `null`
+  // (no GM connected) is passed through untouched.
   const ok = _spendActionCore(combatantId, count, allowBonus);
-  if (ok) {
+  if (ok === true) {
     _debugLog(`_spendActionForCombatant: spent ${count} action(s) for ${combatantId} [${reason}${allowBonus ? ', bonus-eligible' : ''}]`);
+  } else if (ok === null) {
+    _debugLog(`_spendActionForCombatant: no GM connected - nothing spent for ${combatantId} [${reason}]`);
   } else {
     _debugLog(`_spendActionForCombatant: insufficient actions (${count} needed) for ${combatantId} [${reason}]`);
   }
@@ -3499,23 +3774,35 @@ function _endTurnActionsCore(combatantId) {
   // never mutate bonusPip. Derive incap the same way _spendActionCore
   // already does at its own call site (:2578-2579); do not invent a new
   // reader.
-  const actor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
+  const reqCombat = _baphEngineCombat();
+  const withdrawCombatant = reqCombat?.combatants?.get(combatantId);
+  const actor = withdrawCombatant?.actor;
   const incap = !!_readConditionActionLoss(actor).fullyIncapacitated;
   const bonusAvail = !incap && Array.isArray(state.bonusPip) && state.bonusPip[0] === true;
-  if (normalIdxs.length === 0 && !bonusAvail) return false; // nothing to zero
+  if (normalIdxs.length === 0) {
+    // v2.47.0 FIX-5 (R-4, A3, Q6): Withdraw needs at least one NORMAL action; the Haste pip alone does not
+    // pay for it. Nothing is spent. With the Haste pip live one warning says why; with nothing at all the
+    // caller (the macro) says so.
+    if (bonusAvail) {
+      ui.notifications?.warn?.(`${withdrawCombatant?.name ?? actor?.name ?? 'This creature'}: Withdraw needs at least one normal action; you may Move.`);
+    }
+    return false;
+  }
 
   // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): "is a GM connected at all"
   // is locally knowable synchronously — refuse cleanly before mutating, same
   // as every other public spend (action-tracker.js:1805-1808, :2555-2556).
+  // v2.47.0 FIX-10: `null`, not `false`.
   if (!game.user.isGM && !game.users.activeGM) {
     _baphActionWarnPipRelayFailure('no-active-gm');
-    return false;
+    return null;
   }
 
   const priorActions  = [...state.actions];
   const priorBonusPip = Array.isArray(state.bonusPip) ? [...state.bonusPip] : [];
+  const priorBonusSpentFlag = state.bonusSpentThisTurn;
   for (const i of normalIdxs) state.actions[i] = false;
-  if (bonusAvail) state.bonusPip[0] = false;
+  if (bonusAvail) { state.bonusPip[0] = false; state.bonusSpentThisTurn = true; }
   _refreshPipRow(combatantId);
   if (game.user.isGM) {
     _writePipFlag(combatantId);
@@ -3526,13 +3813,15 @@ function _endTurnActionsCore(combatantId) {
   // not a second relay. Trap 2: still returns true synchronously here; the
   // relay/revert happens after this call has already returned.
   const seq = ++state.pipSeq;
-  const capturedRound = _baphEngineCombat()?.round ?? 0;
-  const capturedActiveId = _currentActiveCombatantId(_baphEngineCombat());
+  // v2.47.0 FIX-11 (TD-106(a)): the revert keys on the combat the request was made in, captured now.
+  const capturedRound = reqCombat?.round ?? 0;
+  const capturedActiveId = _currentActiveCombatantId(reqCombat);
   _baphActionEmitPipRelay(combatantId, 'endTurn', {}, () => {
     if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
-    if ((_baphEngineCombat()?.round ?? 0) !== capturedRound || _currentActiveCombatantId(_baphEngineCombat()) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3
+    if ((reqCombat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(reqCombat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3
     state.actions  = priorActions;
     state.bonusPip = priorBonusPip;
+    state.bonusSpentThisTurn = priorBonusSpentFlag; // v2.47.0 FIX-5 / FIX-11
     _refreshPipRow(combatantId);
   });
   return true;
@@ -4016,15 +4305,26 @@ function _isSkillSpendDuped(actor, skillKey, chatMessage) {
 // Runs on the acting client: a toast there, plus one GM-whispered card (no buttons, never
 // "resolved"). Nothing is charged and the roll is never blocked; the GM rules, including voiding
 // the result. Module-private: no new public API.
-function _baphOutOfActions(actor, label) {
+// v2.47.0 FIX-9 (r2; R-8, Q10): `left` is the actions the spend could have drawn on (_baphActionsLeft) and
+// `cost` what it needed. With none left (or `left` not a number) today's "no actions left" toast and card stay
+// word for word; with some left the notice says "N of M remaining". v2.47.0 FIX-10: no card while no GM is
+// connected; the callers invoke this only on a real shortfall (`=== false`), never for a no-GM refusal.
+function _baphOutOfActions(actor, label, left, cost) {
   try {
-    ui.notifications?.warn?.(`${actor.name}: no actions left for ${label} — not charged. The GM rules.`);
+    const partial = typeof left === 'number' && Number.isFinite(left) && left > 0
+      && typeof cost === 'number' && Number.isFinite(cost);
+    ui.notifications?.warn?.(partial
+      ? `${actor.name}: not enough actions for ${label} — ${left} of ${cost} remaining; not charged. The GM rules.`
+      : `${actor.name}: no actions left for ${label} — not charged. The GM rules.`);
+    if (!game.users?.activeGM) return;
     const safeActorName = foundry.utils.escapeHTML(actor.name);
     const safeLabel = foundry.utils.escapeHTML(String(label));
     ChatMessage.create({
-      content:
-        `<p><strong>Out of actions:</strong> ${safeActorName} used ${safeLabel} with no actions left `
-        + `— not charged. The GM rules, including voiding the result.</p>`,
+      content: partial
+        ? `<p><strong>Out of actions:</strong> ${safeActorName}: not enough actions for ${safeLabel} — ${left} of ${cost} remaining; `
+          + `not charged. The GM rules, including voiding the result.</p>`
+        : `<p><strong>Out of actions:</strong> ${safeActorName} used ${safeLabel} with no actions left `
+          + `— not charged. The GM rules, including voiding the result.</p>`,
       speaker: ChatMessage.getSpeaker({ actor }),
       whisper: ChatMessage.getWhisperRecipients('GM'),
       flags: { 'baphomet-utils': { outOfActions: true } }
@@ -4160,13 +4460,22 @@ Hooks.on('pf1ActorRollSkill', (actor, chatMessage, skillKey) => {
   _debugLog(`skill auto-spend: attempting spend — ${actor.name} / ${skillKey} / cost ${cost}`);
   const spent = _spendActionForCombatant(combatant.id, cost, `skill-${skillKey}`);
 
+  // v2.47.0 FIX-10 (TD-103(b)): `null` means no GM is connected - not a shortfall. The module's one notice has
+  // been shown; no empty-pool read, no card.
+  if (spent === null) {
+    _debugLog(`skill auto-spend: no GM connected — nothing charged for ${actor.name} [${skillKey}]`);
+    return;
+  }
+
   if (!spent) {
     // _spendActionForCombatant already logged the reason (insufficient actions
     // or API not ready).
     _debugLog(`skill auto-spend: failed — spend blocked or insufficient actions for ${actor.name} [${skillKey}], needed ${cost}`);
     // v2.45.2 FIX-7 (F-A-18): a refused skill spend tells the acting client and the GM.
+    // v2.47.0 FIX-9 (r2): the notice says how many actions remained when it was a partial shortfall.
     const _skillCfgName = globalThis.pf1?.config?.skills?.[baseSkillKey];
-    _baphOutOfActions(actor, (typeof _skillCfgName === 'string' && _skillCfgName) ? _skillCfgName : baseSkillKey);
+    _baphOutOfActions(actor, (typeof _skillCfgName === 'string' && _skillCfgName) ? _skillCfgName : baseSkillKey,
+      _baphActionsLeftFor(combatant.id, false), cost);
     return;
   }
 
@@ -5038,16 +5347,95 @@ Hooks.on('pf1AttackRoll', (action, roll) => {
 // ruling lets the GM adjudicate rather than blocking the roll.
 function _baphSpendReactionForSpell(combatant, actor, item) {
   const r = game.baphometActions?.spendReaction?.(combatant.id);
-  if (r) {
+  if (r === true) {
     _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — Reaction spent`);
+  } else if (r === null) {
+    // v2.47.0 FIX-10: no GM connected - the module's one notice has been shown; no second warning.
+    _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — no GM connected, not charged`);
   } else {
     _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — no Reaction available, not charged`);
-    // v2.44.0 FIX-3 (Q4): still warn-only; while Stunned the warning names it.
-    ui.notifications?.warn?.(_baphStunnedCountdownOf(actor) > 0
-      ? `${actor.name}: Stunned — no reaction available to cast ${item.name} — not charged. The GM decides.`
-      : `${actor.name}: no Reaction available to cast ${item.name} — not charged.`);
+    // v2.44.0 FIX-3 (Q4): still warn-only. v2.47.0 FIX-2: the warning names the gate's reason (Stunned, a
+    // no-action state, Nauseated, a first turn not yet started) when one holds.
+    const gate = _baphReactionGate(actor, combatant, 'reaction');
+    ui.notifications?.warn?.(gate.ok
+      ? `${actor.name}: no Reaction available to cast ${item.name} — not charged.`
+      : `${actor.name}: ${gate.reason} — no reaction available to cast ${item.name} — not charged. The GM decides.`);
   }
 }
+
+// v2.47.0 FIX-3 (TD-96 item 3; A1, Q3, F-3): a Nauseated creature may not attack or cast. On its own turn the
+// use charges nothing, toasts, and posts one GM-whispered card (none while no GM is connected); the roll is
+// never blocked - the GM rules, including voiding the result. `isCast` is a spell, scroll, wand or staff.
+function _baphNauseatedUse(actor, item, isCast) {
+  try {
+    const verb = isCast ? 'cast' : 'attack';
+    ui.notifications?.warn?.(isCast
+      ? `${actor.name}: Nauseated — cannot cast ${item.name} — not charged. The GM rules.`
+      : `${actor.name}: Nauseated — cannot attack with ${item.name} — not charged. The GM rules.`);
+    if (!game.users?.activeGM) return;
+    const safeActorName = foundry.utils.escapeHTML(actor.name);
+    const safeItemName = foundry.utils.escapeHTML(String(item.name));
+    ChatMessage.create({
+      content:
+        `<p><strong>Nauseated — cannot ${verb}:</strong> ${safeActorName} used ${safeItemName} while Nauseated `
+        + `— not charged. The GM rules, including voiding the result.</p>`,
+      speaker: ChatMessage.getSpeaker({ actor }),
+      whisper: ChatMessage.getWhisperRecipients('GM'),
+      flags: { 'baphomet-utils': { nauseatedUse: true } }
+    }).catch((err) => {
+      console.warn(
+        `baphomet-utils | Nauseated card failed to post for "${actor.name}" — `
+        + `handled here, not thrown. Nothing was charged and the roll was never blocked.`, err
+      );
+    });
+  } catch (e) {
+    console.warn('baphomet-utils | Nauseated notice failed:', e);
+  }
+}
+
+// v2.47.0 FIX-8 (r1; R-8, Q10): the §14 skip-dialog escape card, posted from the handler's finally AFTER the
+// charge decision, so its bold sentence says what was actually charged. `card` is { swingCount, onTurn };
+// `decision` is { kind: 'action' | 'jade' | 'reaction' | 'none', reason? }. Not posted while no GM is connected.
+function _baphPostSwingCard(actor, item, card, decision) {
+  const n = card.swingCount;
+  const kind = decision?.kind ?? 'none';
+  const reason = decision?.reason ?? 'no charge decision';
+  let sentence;
+  if (card.onTurn) {
+    sentence = (kind === 'action')
+      ? `One action was charged and all ${n} swings counted toward MAP.`
+      : `Not charged (${reason}); the ${n} swings still counted toward MAP.`;
+  } else if (kind === 'jade') {
+    sentence = 'Off turn: a Combat Reflexes pip was spent; no swing counted.';
+  } else if (kind === 'reaction') {
+    sentence = 'Off turn: the Reaction was spent; no swing counted.';
+  } else {
+    sentence = `Off turn: nothing was charged (${reason}); no swing counted.`;
+  }
+  _debugLog(`auto-spend: §14 skip-dialog escape — "${actor.name}" resolved ${n} swings on "${item.name}" via the skip-dialog escape — posting the GM card (${sentence})`);
+  const safeActorName = foundry.utils.escapeHTML(actor.name);
+  const safeItemName  = foundry.utils.escapeHTML(item.name);
+  // Fire-and-forget, not awaited: the handler is synchronous and OBSERVE-ONLY (it must never return a
+  // Promise to pf1PreActionUse), and the enclosing try/catch cannot observe an async rejection.
+  ChatMessage.create({
+    content:
+      `<p><strong>Action Economy Notice (Mechanics Ref §14):</strong> `
+      + `${safeActorName} resolved <strong>${n}</strong> swings on `
+      + `<em>${safeItemName}</em> via the skip-dialog full-attack escape. `
+      + `<strong>${sentence}</strong> `
+      + `Adjudicate the extra attacks by hand (void them or let them stand).</p>`,
+    speaker: ChatMessage.getSpeaker({ actor }),
+    whisper: ChatMessage.getWhisperRecipients('GM')
+  }).catch((err) => {
+    console.warn(
+      `baphomet-utils | FIX-3 §14 card failed to post for "${actor.name}" — handled here, not thrown. `
+      + `The attack still resolved and was never blocked.`, err
+    );
+  });
+}
+
+// v2.47.0 FIX-4: the combat ids already logged as "not started - nothing charged" this session.
+const _baphUnstartedLogged = new Set();
 
 /**
  * Live pf1PreActionUse handler — attack & spell auto-spend.
@@ -5156,6 +5544,11 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       }
     }
 
+    // v2.47.0 FIX-8 (r1): the §14 card's inputs (set where the escape is detected, below) and the charge
+    // decision every path below records; the card is posted from this handler's finally.
+    let _swingCard = null;
+    let _chargeDecision = null;
+
     try {
 
     // FIX-3 (GOAL_v2.37.7, D-3, Mechanics Ref §14): the skip-dialog
@@ -5222,29 +5615,10 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         && !_routineUse && !_routineRepeat && !_routineAfterClose) {
       const swingCount = actionUse?.shared?.attacks?.length ?? 0;
       if (swingCount > 1) {
-        _debugLog(`auto-spend: §14 skip-dialog escape — "${actor.name}" resolved ${swingCount} swings on "${item.name}" via the skip-dialog escape — posting the GM card (one action charged, all swings counted toward MAP)`);
-        const safeActorName = foundry.utils.escapeHTML(actor.name);
-        const safeItemName  = foundry.utils.escapeHTML(item.name);
-        // Fire-and-forget, not awaited: this handler is synchronous and
-        // OBSERVE-ONLY (must never return a Promise to pf1PreActionUse), and
-        // the enclosing try/catch is synchronous and cannot observe an async
-        // rejection. See RUNTIME_VERIFICATION_REQUIRED.md:128-139 — do not
-        // infer a settled promise from a rendered card.
-        ChatMessage.create({
-          content:
-            `<p><strong>Action Economy Notice (Mechanics Ref §14):</strong> `
-            + `${safeActorName} resolved <strong>${swingCount}</strong> swings on `
-            + `<em>${safeItemName}</em> via the skip-dialog full-attack escape. `
-            + `<strong>One action was charged and all ${swingCount} swings were counted toward MAP.</strong> `
-            + `Adjudicate the extra attacks by hand (void them or let them stand).</p>`,
-          speaker: ChatMessage.getSpeaker({ actor }),
-          whisper: ChatMessage.getWhisperRecipients('GM')
-        }).catch((err) => {
-          console.warn(
-            `baphomet-utils | FIX-3 §14 card failed to post for "${actor.name}" — handled here, not thrown. `
-            + `The attack still resolved and was never blocked.`, err
-          );
-        });
+        // v2.47.0 FIX-8 (r1): the card is no longer posted here, before any charge. The condition and the swing
+        // count are evaluated where they always were; "on turn" is the actor being the active combatant NOW.
+        // `_baphPostSwingCard` posts it from this handler's finally, after the charge decision.
+        _swingCard = { swingCount, onTurn: _getActiveCombatantForActor(actor) !== null };
       }
     }
 
@@ -5256,6 +5630,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // OBSERVE-ONLY: returns early, never returns false.
     if (isAttack && globalThis.baphometTWF?.offhand && _baphIntentMatches(globalThis.baphometTWF, actor, true)) { // v2.46.0 FIX-3
       _debugLog(`auto-spend: TWF off-hand swing for "${actor.name}" — rides on main-hand Strike, no action spent`);
+      _chargeDecision = { kind: 'none', reason: 'off-hand swing' };
       return;
     }
 
@@ -5268,6 +5643,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       : game.settings.get(AT_MODULE_ID, 'autoSpellSpend');
     if (!settingOn) {
       _debugLog(`auto-spend: ${item.type} setting OFF — no spend for "${item.name}"`);
+      _chargeDecision = { kind: 'none', reason: 'auto-spend off' };
       return;
     }
 
@@ -5279,11 +5655,13 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // OBSERVE-ONLY: returns early, never returns false.
     if (isAttack && _baphIntentMatches(globalThis.baphometCleave, actor)) { // v2.46.0 FIX-3
       _debugLog(`auto-spend: Cleave free Strike for "${actor.name}" — 0 actions, no action spent`);
+      _chargeDecision = { kind: 'none', reason: 'Cleave' };
       return;
     }
 
     if (_isActionUseSpendDuped(actor, actionUse)) {
       _debugLog(`auto-spend: duplicate action-use for "${item.name}" — skipping`);
+      _chargeDecision = { kind: 'none', reason: 'duplicate use' };
       return;
     }
 
@@ -5311,10 +5689,36 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     const aooIntentForActor = !!(_aooFlag?.active && _aooFlag.actorUuid === actor.uuid);
     if (_aooFlag && _aooFlag.actorUuid === actor.uuid) globalThis.baphometAoO = null;
 
+    // v2.47.0 FIX-4 (R-3, F-A-04): an action use in a combat that has not been started charges nothing - not
+    // an action, not the Reaction. Placed after the AoO intent is consumed (so no intent outlives the use) and
+    // before the on/off-turn branch; it covers attacks, spells and consumables alike.
+    const _engineCombatNow = _baphEngineCombat();
+    if (_engineCombatNow?.started !== true) {
+      if (_engineCombatNow?.id && !_baphUnstartedLogged.has(_engineCombatNow.id)) {
+        _baphUnstartedLogged.add(_engineCombatNow.id);
+        _debugLog('auto-spend: combat not started — nothing charged');
+      }
+      _chargeDecision = { kind: 'none', reason: 'combat not started' };
+      return;
+    }
+
     if (activeCombatant) {
       // On-turn: spend the action cost (all-or-nothing).
       if (!_canUserControlCombatant(activeCombatant)) {
         _debugLog(`auto-spend: user cannot control "${actor.name}" — no spend`);
+        _chargeDecision = { kind: 'none', reason: 'cannot control this creature' };
+        return;
+      }
+      // v2.47.0 FIX-3 (TD-96 item 3; A1, Q3, F-3): a Nauseated creature's attack, spell, or scroll / wand /
+      // staff (spell completion and spell trigger - casting a spell) charges nothing, is warned and carded, and
+      // is never blocked. A potion, poison, drug, rod or other consumable stays allowed and is charged as
+      // before. A routine use reaching here still marks the routine paid, as a refused spend does.
+      const _nauseatedCast = isSpell || (isConsumable && ['scroll', 'wand', 'staff'].includes(item.system?.subType));
+      if ((isAttack || _nauseatedCast) && _baphLedgerActive(actor, 'nauseated')) {
+        _baphNauseatedUse(actor, item, _nauseatedCast);
+        if (_routineUse && _routineState) _routineState.routinePaid = true;
+        _debugLog(`auto-spend: Nauseated "${actor.name}" ${_nauseatedCast ? 'cast' : 'attack'} with "${item.name}" — warned, carded, not charged`);
+        _chargeDecision = { kind: 'none', reason: 'Nauseated' };
         return;
       }
       if (isSpell && _isReactionCostSpell(actionUse)) {
@@ -5328,11 +5732,9 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       // GOAL_v2.38.1 FIX-2 ruling D, extended by GOAL_v2.39.0 FIX-3: the fourth argument marks
       // a per-roll routine-repeat (or after-close) Strike charge, letting the Haste bonus pip
       // cover one roll even when count > 1.
-      const spent = _spendActionForCombatant(
-        activeCombatant.id, cost,
-        isSpell ? `spell-${item.name}` : isAttack ? `attack-${item.name}` : `consumable-${item.name}`,
-        _routineRepeat || _routineAfterClose
-      );
+      const _spendReason = isSpell ? `spell-${item.name}` : isAttack ? `attack-${item.name}` : `consumable-${item.name}`;
+      const _perRollSpend = _routineRepeat || _routineAfterClose;
+      const spent = _spendActionForCombatant(activeCombatant.id, cost, _spendReason, _perRollSpend);
       // GOAL_v2.38.1 FIX-1: the paid mark is set on the first routine use that reaches this
       // spend decision, whether the spend succeeded or was refused — the routine is one
       // action, asked for once.
@@ -5340,14 +5742,22 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         _routineState.routinePaid = true;
       }
       if (_routineRepeat || _routineAfterClose) {
-        _routineActionsCharged = spent;
+        _routineActionsCharged = spent === true;
       }
-      if (spent) {
+      if (spent === true) {
         _debugLog(`auto-spend: spent ${cost} action(s) for "${actor.name}" [${item.type}: ${item.name}]`);
+        _chargeDecision = { kind: 'action' };
+      } else if (spent === null) {
+        // v2.47.0 FIX-10 (TD-103(b)): no GM connected - not a shortfall; the one notice has been shown.
+        _debugLog(`auto-spend: no GM connected — nothing charged for "${actor.name}" [${item.name}]`);
+        _chargeDecision = { kind: 'none', reason: 'no GM is connected' };
       } else {
         _debugLog(`auto-spend: insufficient actions (${cost} needed) for "${actor.name}" [${item.name}]`);
         // v2.45.2 FIX-7 (F-A-18): toast plus one flagged GM whisper; nothing charged, roll not blocked.
-        _baphOutOfActions(actor, item.name);
+        // v2.47.0 FIX-9 (r2): "N of M remaining" when some were left.
+        _chargeDecision = { kind: 'none', reason: 'not enough actions' };
+        _baphOutOfActions(actor, item.name,
+          _baphActionsLeftFor(activeCombatant.id, _baphBonusAllowedFor(cost, _spendReason, _perRollSpend)), cost);
       }
       // NOTE: swing-counter / MAP tracking deferred (GOAL_v2.22.0 Out of Scope).
     } else {
@@ -5389,10 +5799,12 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       const own = _getCombatantForActor(actor);
       if (!own) {
         _debugLog(`auto-spend: off-turn attack but "${actor.name}" not in combat — no spend`);
+        _chargeDecision = { kind: 'none', reason: 'not in this combat' };
         return;
       }
       if (!_canUserControlCombatant(own)) {
         _debugLog(`auto-spend: cannot control "${actor.name}" — no reaction spend`);
+        _chargeDecision = { kind: 'none', reason: 'cannot control this creature' };
         return;
       }
       // v1.25: prefer the green Combat Reflexes (jade) pool when the attack
@@ -5402,27 +5814,43 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       // (actor-scoped) — a stale on-turn tick can't survive, and actor A's
       // attack never eats actor B's open-dialog flag.
       const wantsCR = isAttack && aooIntentForActor && _combatReflexCount(actor) > 0;
-      if (wantsCR && game.baphometActions?.spendCombatReflex?.(own.id)) {
+      // v2.47.0 FIX-10: a jade `null` (no GM connected) is not an empty pool - it skips the Reaction attempt.
+      const jade = wantsCR ? game.baphometActions?.spendCombatReflex?.(own.id) : false;
+      if (jade === true) {
         _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — Combat Reflexes (jade) pip spent`);
+        _chargeDecision = { kind: 'jade' };
       } else {
-        const r = game.baphometActions?.spendReaction?.(own.id);
-        if (!r) {
-          // v2.44.1 FIX-C (TD-82, Q1): every off-turn attack that finds no Reaction warns once,
-          // naming Stunned while the creature is stunned. Warn only: nothing is charged and the
-          // roll is never blocked (the GM decides).
-          const _stunnedNow = _baphStunnedCountdownOf(actor) > 0;
+        const r = jade === null ? null : game.baphometActions?.spendReaction?.(own.id);
+        if (r === true) {
+          _chargeDecision = { kind: 'reaction' };
+        } else if (r === null) {
+          _chargeDecision = { kind: 'none', reason: 'no GM is connected' };
+        } else {
+          // v2.44.1 FIX-C (TD-82, Q1): every off-turn attack that finds no Reaction warns once. v2.47.0 FIX-2:
+          // the warning names the gate's reason (Stunned, a no-action state, Nauseated, a first turn not yet
+          // started) when one holds, else the plain text. Warn only: nothing is charged and the roll is never
+          // blocked (the GM decides).
+          const _gate = _baphReactionGate(actor, own, 'reaction');
+          const _why = _gate.ok ? null : _gate.reason;
           ui.notifications?.warn?.(wantsCR
-            ? (_stunnedNow
-              ? `${actor.name}: Stunned — no Combat Reflexes AoO or reaction left — not charged. The GM decides.`
+            ? (_why
+              ? `${actor.name}: ${_why} — no Combat Reflexes AoO or reaction left — not charged. The GM decides.`
               : `${actor.name}: no Combat Reflexes AoO or reaction left.`)
-            : (_stunnedNow
-              ? `${actor.name}: Stunned — no reaction available for ${item.name} — not charged. The GM decides.`
+            : (_why
+              ? `${actor.name}: ${_why} — no reaction available for ${item.name} — not charged. The GM decides.`
               : `${actor.name}: no Reaction available for ${item.name} — not charged.`));
+          _chargeDecision = { kind: 'none', reason: _why ?? 'no Reaction left' };
         }
-        _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — ${wantsCR ? 'no jade → ' : ''}reaction ${r ? 'spent' : 'unavailable'} (no action, no swing)`);
+        _debugLog(`auto-spend: off-turn AoO by "${actor.name}" — ${wantsCR ? 'no jade → ' : ''}reaction ${r === true ? 'spent' : (r === null ? 'refused (no GM)' : 'unavailable')} (no action, no swing)`);
       }
     }
     } finally {
+      // v2.47.0 FIX-8 (r1): the §14 card, posted after the charge decision with what was actually charged -
+      // whatever gate above returned early first - and only while a GM is connected (FIX-10).
+      if (_swingCard && game.users?.activeGM) {
+        try { _baphPostSwingCard(actor, item, _swingCard, _chargeDecision); }
+        catch (cardErr) { console.warn('baphomet-utils | §14 card could not be built:', cardErr); }
+      }
       // FIX-4 (GOAL_v2.38.1, TD-60, ruling C): the repeat card posts after the charge
       // decision, whatever gate above returned early first (autoAttackSpend off, Cleave,
       // dedupe, TWF off-hand) — those gates skip the CHARGE, never the REPORT. Only fires for
@@ -5610,6 +6038,14 @@ function _buildActionSpendButton(cost, label, hint, reason) {
 
     // _spendActionForCombatant is synchronous and all-or-nothing.
     const spent = _spendActionForCombatant(active.id, cost, reason);
+
+    // v2.47.0 FIX-10 (TD-103(b)): `null` is "no GM connected" - the module's one notice has been shown; this
+    // is not a shortfall, so no "not enough actions" warning.
+    if (spent === null) {
+      _debugLog(`Action panel: no GM connected — nothing spent for ${active.name}`);
+      _refreshPipRow(active.id);
+      return;
+    }
 
     if (!spent) {
       _debugLog(`Action panel: failed — not enough actions for ${active.name}, needed ${cost}`);
@@ -6375,9 +6811,14 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   if (Array.isArray(saved.actions)   && saved.actions.length   === 3) existing.actions   = [...saved.actions];
   if (Array.isArray(saved.reaction)  && saved.reaction.length  === 1) existing.reaction  = [...saved.reaction];
   if (Array.isArray(saved.reflexPip))                                  existing.reflexPip = [...saved.reflexPip];
+  // v2.47.0 FIX-6: the stored jade spent count - the saved number when it is a whole number >= 0, else the
+  // count of spent entries in a flag written before 2.47.0.
+  if (Number.isInteger(saved.reflexSpent) && saved.reflexSpent >= 0)   existing.reflexSpent = saved.reflexSpent;
+  else if (Array.isArray(saved.reflexPip))                             existing.reflexSpent = saved.reflexPip.filter(p => p === false).length;
   if ('bonusManual' in saved) existing.bonusManual = !!saved.bonusManual;
   if ('bonusAuto'   in saved) existing.bonusAuto   = !!saved.bonusAuto;
   if (Array.isArray(saved.bonusPip)) existing.bonusPip = [...saved.bonusPip];
+  if (typeof saved.bonusSpentThisTurn === 'boolean') existing.bonusSpentThisTurn = saved.bonusSpentThisTurn; // v2.47.0 FIX-5
   if ('resetForSeq' in saved) existing._resetForSeq = saved.resetForSeq; // v1.27 round-02
 
   // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): this hook fires for
