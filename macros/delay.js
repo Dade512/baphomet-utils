@@ -2,7 +2,7 @@
  * baphomet-utils — PF1.5 DELAY declare macro (token-driven)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/delay.js
- *   SYNC_STAMP: 2026-10-18
+ *   SYNC_STAMP: 2026-10-24
  *   The in-world Foundry macro "Delay" must be kept byte-identical to this
  *   file. After editing either copy, sync the other and bump SYNC_STAMP.
  *   Drift check: see README.md here.
@@ -57,6 +57,8 @@
 
   // 5) ask the module to mark the delay (through the GM when this is a player's client), then pass the turn
   const result = await api.declareDelay(combatant.id);
+  // v2.47.0: with no GM connected the module has shown its one quiet notice and answers 'no-active-gm' - say nothing more.
+  if (result?.ok !== true && result?.reason === 'no-active-gm') return;
   if (!result?.ok) return refuse(`the GM refused it (${result?.reason ?? 'no reason given'}).`);
   await combat.nextTurn();
   ui.notifications.info(`${actor.name} Delays — the GM moves their initiative when they act.`);

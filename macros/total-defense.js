@@ -2,7 +2,7 @@
  * baphomet-utils — PF1.5 TOTAL DEFENSE declare macro (token-driven)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/total-defense.js
- *   SYNC_STAMP: 2026-09-18
+ *   SYNC_STAMP: 2026-10-24
  *   The in-world Foundry macro "Total Defense" must be kept byte-identical to
  *   this file. After editing either copy, sync the other and bump SYNC_STAMP.
  *   Drift check: see README.md here.
@@ -52,10 +52,14 @@
   }
 
   // 4) declare -> spend 1 -> apply the buff ONLY on a successful spend.
+  //    v2.47.0: spendAction answers true (spent), false (refused) or null (no GM connected). Proceed only on
+  //    true; warn only on false; stay silent on null (the module shows its one quiet notice; no buff, nothing
+  //    declared).
   const spent = game.baphometActions.spendAction(combatant.id, 1);
-  if (!spent) {
+  if (spent === false) {
     return ui.notifications.warn(`baphomet-utils | Total Defense: ${actor.name} has no action left to declare Total Defense.`);
   }
+  if (spent !== true) return;
 
   // 5) sweep any prior Total Defense buff before adding a new one so repeated declares
   //    across turns don't accumulate inert residue (charge.js's own sweep, same shape).

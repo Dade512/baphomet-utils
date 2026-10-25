@@ -3,16 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.46.2 — *Loose Ends*
+**Current Version:** 2.47.0 — *Can You React?*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Loose ends.** A creature's initiative can be edited while it acts, and Previous Turn and Next Turn still do the right
-thing. A pip clicked in another encounter's tracker is saved there. The GM card for a skip-dialog full attack now says
-that one action was charged and every swing counted toward MAP. A turn repair raises no console error, and casting a
-spell logs no deprecation warning. No world macro changed; see the [changelog](#changelog).
+**Can you react?** A creature that cannot react now shows its Reaction (and its Combat Reflexes pips) locked, with the
+reason on hover, from the moment the condition lands: Stunned, Paralyzed, Unconscious, Dying, Stable, Asleep, Petrified,
+Dazed, Cowering, Fascinated or Nauseated. Nobody has a Reaction before their first turn, except with Uncanny Dodge;
+Combat Reflexes pips still work. Starting a combat refills everyone, and an attack before the start costs nothing. Haste
+is spent first, and Withdraw needs a normal action. The skip-dialog and out-of-actions GM cards say what was actually
+charged, and with no GM connected a player sees one quiet notice instead of one per click. **Re-paste four world macros:**
+Withdraw, Delay, Ready and Total Defense; see the [changelog](#changelog).
 
 ---
 
@@ -184,6 +187,49 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.47.0 — Can You React?
+
+TD-96 (the reaction gate) with its riders r1 and r2, TD-103(b) and TD-106(a). One live answer to "can this creature
+react?" read where a Reaction or a Combat Reflexes pip is spent, clicked or drawn, and the rules ruled on 2026-10-11 that
+hang on it. No canon change. **Four world macros to re-paste:** Withdraw, Delay, Ready and Total Defense (see the
+v2.47.0 sync note in `macros/README.md`, `SYNC_STAMP` `2026-10-24`).
+
+- **The reaction gate (TD-96 items 1 to 4, F-A-07, F-A-23, F-C-15).** `_baphReactionGate` reads, live: Stunned; the
+  no-action set (pf1 Paralyzed, Unconscious, Dying, Stable, Asleep, Petrified, Dazed, Cowering; Ledger Paralyzed and
+  Fascinated); Ledger Nauseated; and, for the Reaction only, "your first turn has not started" in a started combat
+  (Uncanny Dodge excepted, read strictly: a flag stored `false` no longer counts). A gated Reaction or jade pip draws
+  locked with the reason on both seats; a player's click toasts the reason and changes nothing; a GM's click still works,
+  with one override warning; a GM reset no longer lets a stunned creature's Reaction be spent. An off-turn attack or
+  reaction spell that finds a gated pool is warned with the reason and not charged. While the no-action set holds, every
+  action pip is refused and drawn locked, a status applied mid-turn included. `getState` gains `reactionGate` and
+  `reflexGate`.
+- **Nauseated (TD-96 item 3).** Its Reaction and Combat Reflexes pips lock; an on-turn attack, spell, scroll, wand or
+  staff is warned, carded for the GM and not charged (the roll proceeds); a potion is still charged. Its card text no
+  longer says "not yet enforced".
+- **Combat start (TD-96 item 5, F-A-04).** The start refills every combatant (actions, Reaction, jade pips, swings) before
+  the first creature's turn, leaving a Stunned creature's countdown, locks and gated Reaction alone. An attack, spell or
+  consumable before `startCombat()` charges nothing. Reset Encounter is not a start and changes nothing.
+- **Haste and Withdraw (TD-96 item 6, F-A-05).** The Haste pip is spent first, the action panel's Spend 1 included; a
+  spent Haste pip is not re-granted by a buff off and on, a revoke and grant, or the setting before the creature's next
+  turn start. Withdraw needs a normal action: the Haste pip alone refuses with a warning, and a paid Withdraw still zeroes
+  the Haste pip.
+- **The jade spent count is stored (F-A-06).** A Dex dip and regrow no longer hands back a spent Combat Reflexes pip,
+  in the tracker's draw or on a reload (`reflexSpent` in the pip flag).
+- **The GM follows another user's write (F-C-06, F-C-03, F-C-09).** A player's Stunned or forced Off-Guard gets its stun
+  record and its Off-Guard from the active GM; a Stunned item deleted from the sheet takes its Off-Guard with it; an
+  inactive Ledger buff counts in no Off-Guard or translator read (a pf1 `blind` arriving over an inactive Blinded is
+  translated and re-activates it).
+- **The skip-dialog card says what was charged (r1).** Posted after the charge decision: "One action was charged and all N
+  swings counted toward MAP", "Not charged (reason); the N swings still counted toward MAP", or, off turn, which pool was
+  spent (or that nothing was, and why) with no swing counted.
+- **Not enough actions (r2).** A 2-action use with 1 action left says "1 of 2 remaining"; "no actions left" is kept for
+  none.
+- **No GM connected (TD-103(b)).** One quiet notice per session ("No GM is connected — actions are not tracked until one
+  joins"), no module GM cards, and no pip changes: the spends answer `null` and the callers read no empty pool. Delay,
+  Ready, Total Defense and Withdraw stay silent on it.
+- **Reverts key on the request's combat (TD-106(a)).** A refused player spend or toggle reverts against the combat it was
+  made in, whatever the view or the active combat became meanwhile.
 
 ### v2.46.2 — Loose Ends
 

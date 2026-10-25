@@ -539,7 +539,7 @@ const CONDITIONS = {
     icon: 'icons/svg/acid.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'You lose 1 action at the start of your turn (2 actions remain, as Slowed 1). None of your remaining actions may be used to attack or to cast a spell; you may move, reposition, withdraw, drink a potion, or take other non-offensive actions (table-adjudicated, not enforced). You also cannot use your Reaction (not yet enforced — the GM applies it).',
+    description: 'You lose 1 action at the start of your turn (2 actions remain, as Slowed 1). None of your remaining actions may be used to attack or to cast a spell (the tracker warns, charges nothing and the GM rules); you may move, reposition, withdraw, drink a potion, or take other non-offensive actions. You cannot use your Reaction or your Combat Reflexes attacks.',
     autoDecrement: false,
     buildChanges() {
       // v2.45.2 (Q8): the `-20 allAttack` change is deleted; v2.37.3's probe found `allAttack` resolves to
@@ -592,6 +592,18 @@ function _buffName(condKey, tier) {
 function _findExistingBuff(actor, condKey) {
   return actor.items.find(i =>
     i.type === 'buff' &&
+    i.getFlag(MODULE_ID, 'conditionKey') === condKey
+  );
+}
+
+// v2.47.0 FIX-7 (F-C-09, R-6): `_findExistingBuff` restricted to an ACTIVE buff (system.active === true). An
+// inactive Ledger buff counts in no Off-Guard source and no translator tier or release read; applyCondition,
+// removeCondition, getTier and the panel keep `_findExistingBuff` (an inactive buff is still found to be
+// re-activated or removed).
+function _findActiveBuff(actor, condKey) {
+  return actor.items.find(i =>
+    i.type === 'buff' &&
+    i.system?.active === true &&
     i.getFlag(MODULE_ID, 'conditionKey') === condKey
   );
 }
@@ -665,7 +677,14 @@ function _offGuardPf1SourceIds() {
 }
 
 function _offGuardHasUncannyDodge(actor) {
-  return !!actor?.itemFlags?.boolean?.uncannyDodge;
+  // v2.47.0 FIX-1 (F-C-15, R-6): strict. pf1 keeps a key stored `false` in `itemFlags.boolean` as
+  // `{ sources: [...] }` (its preparation lists every item whose `system.flags.boolean` has the key, whatever
+  // the value), so presence alone counted a flag stored `false` as set. True only when at least one source
+  // item stores `system.flags.boolean.uncannyDodge === true`. The initiative source, the reaction gate
+  // (action-tracker.js) and the GM-load audit all read this one function.
+  const sources = actor?.itemFlags?.boolean?.uncannyDodge?.sources;
+  if (!sources) return false;
+  return Array.from(sources).some(item => item?.system?.flags?.boolean?.uncannyDodge === true);
 }
 
 // FIX-3: the initiative source. Holds for an actor that is a combatant (matched by uuid) in a started
@@ -686,9 +705,9 @@ function _offGuardInitiativeHolds(actor) {
 
 function _offGuardDerived(actor) {
   const sources = [];
-  if (_findExistingBuff(actor, 'blinded')) sources.push('ledger:blinded');
+  if (_findActiveBuff(actor, 'blinded')) sources.push('ledger:blinded');
   if ((Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0) > 0) sources.push('ledger:stunned');
-  if (_findExistingBuff(actor, 'paralyzed')) sources.push('ledger:paralyzed');
+  if (_findActiveBuff(actor, 'paralyzed')) sources.push('ledger:paralyzed');
   for (const id of _offGuardPf1SourceIds()) {
     if (actor.statuses?.has(id)) sources.push(`pf1:${id}`);
   }
@@ -2345,8 +2364,39 @@ async function _onDeleteItemCleanupOrphanedStunnedFlags(item) {
   await actor.unsetFlag(MODULE_ID, 'stunnedCountdown');
   await actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
   await _syncStunLock(actor);
+  // v2.47.0 FIX-7 (F-C-03): the translator check the other deleteItem hook schedules runs before the unset
+  // lands, so the stun's Off-Guard stayed; re-sync it here, after the countdown is gone.
+  await _syncOffGuard(actor);
 }
 Hooks.on('deleteItem', (item) => _onDeleteItemCleanupOrphanedStunnedFlags(item));
+
+/* ----------------------------------------------------------
+   v2.47.0 FIX-7 (F-C-06, R-6) — THE GM FOLLOWS ANOTHER USER'S WRITE
+
+   `applyCondition` on a PLAYER's client writes the buff and `stunnedCountdown`, then calls `_syncStunLock`
+   and `_syncOffGuard`, which act only on the active GM; the GM's `createItem` translator check may run before
+   the countdown lands, and an actor-flag write runs no GM hook at all. This `updateActor` listener closes
+   that: on the active GM only, for a write by ANOTHER user whose `flags['baphomet-utils']` touches
+   `stunnedCountdown` (set or `-=` unset) or `offGuardForced`, it runs `_syncStunLock` (when the countdown was
+   touched) and then `_syncOffGuard`. The active GM's own writes already run both inline and are not repeated.
+   ---------------------------------------------------------- */
+
+async function _onUpdateActorFollowUps(actor, changes, userId) {
+  if (!_isActiveGMClient()) return;
+  if (!userId || userId === game.user?.id) return;
+  const flags = changes?.flags?.[MODULE_ID];
+  if (!flags || typeof flags !== 'object') return;
+  const touched = (key) => Object.hasOwn(flags, key) || Object.hasOwn(flags, `-=${key}`);
+  const countdownTouched = touched('stunnedCountdown');
+  if (!countdownTouched && !touched('offGuardForced')) return;
+  try {
+    if (countdownTouched) await _syncStunLock(actor);
+    await _syncOffGuard(actor);
+  } catch (err) {
+    console.error(`${MODULE_ID} | updateActor follow-ups failed for ${actor?.name ?? 'unknown actor'}`, err);
+  }
+}
+Hooks.on('updateActor', (actor, changes, options, userId) => { _onUpdateActorFollowUps(actor, changes, userId); });
 
 /* ----------------------------------------------------------
    CONDITION TRANSLATOR — v2.41.0 (GOAL_v2.41.0_CONDITION_TRANSLATOR, FIX-2/FIX-3, TD-38 part 2)
@@ -2500,7 +2550,7 @@ function _translatorGroupByKey(ids) {
 // P-1: the current tier is `getTier()`, except Stunned, where it is `stunnedCountdown`.
 function _translatorCurrentTier(actor, key) {
   if (key === 'stunned') return Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0;
-  return _findExistingBuff(actor, key)?.getFlag(MODULE_ID, 'tier') ?? 0;
+  return _findActiveBuff(actor, key)?.getFlag(MODULE_ID, 'tier') ?? 0; // v2.47.0 FIX-7 (F-C-09): an inactive buff reads as absent
 }
 
 // Which Ledger writes a set of appeared ids needs. A key whose Ledger tier is already at or above
@@ -2732,7 +2782,7 @@ async function _translatorTranslate(actor, rec, had, now) {
     const stillOn = _translatorStatusSet(actor);
     for (const [key, statuses] of _translatorGroupByKey(rec.removed)) {
       const status = statuses[0];
-      const buff = _findExistingBuff(actor, key);
+      const buff = _findActiveBuff(actor, key); // v2.47.0 FIX-7 (F-C-09): an inactive buff is not one to release
       if (!buff) continue; // nothing left to decide for this key
 
       // v2.45.2 FIX-6 (F-C-13 (g)): an unmarked buff logs not-translated first; a marked buff of a
@@ -2766,7 +2816,7 @@ async function _translatorTranslate(actor, rec, had, now) {
       const also = _TRANSLATION_TABLE[id]?.also;
       if (!also || alsoSeen.has(also.key)) continue;
       alsoSeen.add(also.key);
-      if (!_TRANSLATOR_SELF_DECREMENTING.includes(also.key) || !_findExistingBuff(actor, also.key)) continue;
+      if (!_TRANSLATOR_SELF_DECREMENTING.includes(also.key) || !_findActiveBuff(actor, also.key)) continue; // v2.47.0 FIX-7
       rec.kept.push({ status: id, key: also.key, reason: 'self-decrementing' });
     }
   }

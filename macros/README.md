@@ -115,6 +115,18 @@ name and the two weapon item IDs near the top, and create a separate in-world ma
    console.log(norm(repo) === norm(world) ? 'TWF macro: IN SYNC' : 'TWF macro: DRIFT — world ≠ repo');
    ```
 
+### v2.47.0 sync note — re-paste four
+
+`withdraw.js`, `delay.js`, `ready.js` and `total-defense.js` changed in v2.47.0 (`SYNC_STAMP` `2026-10-24`). The
+module's spends now answer `null` — not `false` — when no GM is connected, and show one quiet notice; Ready, Total
+Defense, Delay and Withdraw stay silent on that answer instead of adding a second warning of their own. Withdraw also
+needs a normal action: with only the Haste pip left it refuses and warns. After updating the module, **re-paste each of
+the four world macros in place** (open the existing macro and replace its command; keep its id and owner), then run the
+drift check above for each (`withdraw.js` / `Withdraw`, `delay.js` / `Delay`, `ready.js` / `Ready`, `total-defense.js` /
+`Total Defense`). A world macro that is not re-pasted keeps working, but with no GM connected it adds its own second
+warning (Ready, Total Defense, Delay), and Withdraw on the Haste pip alone reads the module's refusal as "no remaining
+actions".
+
 ### v2.46.1 sync note — paste one new macro
 
 `delay.js` is new in v2.46.1 (`SYNC_STAMP` `2026-10-18`). After updating the module, **create one new world macro named
@@ -141,6 +153,10 @@ edit. A future deployment/sync mechanism is out of scope for this milestone.
 
 ## History
 
+- **v2.47.0** — `withdraw.js`, `delay.js`, `ready.js` and `total-defense.js` (`GOAL_v2.47.0_REACTION_GATE` FIX-5,
+  FIX-10): Withdraw needs a normal action (the Haste pip alone refuses) and says nothing on a no-GM `null`; Delay,
+  Ready and Total Defense stay silent when no GM is connected. All four `SYNC_STAMP`s set to `2026-10-24`;
+  re-paste the four world macros (see the v2.47.0 sync note above).
 - **v2.46.1** — New `delay.js` (`GOAL_v2.46.1_TURN_ENGINE` FIX-7): Delay, token-driven, no feat gate. Marks the
   creature as delaying through `game.baphometActions.declareDelay` and passes the turn. `SYNC_STAMP` `2026-10-18`.
   Paste a new world macro "Delay"; no other macro changed.
