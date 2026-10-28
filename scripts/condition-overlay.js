@@ -272,7 +272,7 @@ const CONDITIONS = {
     icon: 'icons/svg/terror.svg',
     maxTier: 4,
     type: 'tiered',
-    description: '–X penalty to attack rolls, saving throws, skill checks, and ability checks (initiative included). Decreases by 1 at end of your turn. A value gained during your own turn first decreases at the end of your next turn, and a Frightened from a source with its own duration ends when that source ends (not yet enforced — the GM applies it).',
+    description: '–X penalty to attack rolls, saving throws, skill checks, and ability checks (initiative included). Decreases by 1 at end of your turn. A value gained during your own turn first decreases at the end of your next turn, and a Frightened from a source with its own duration ends when that source ends.',
     autoDecrement: true,
     buildChanges(tier) {
       const v = String(-tier);
@@ -446,7 +446,7 @@ const CONDITIONS = {
     icon: 'icons/svg/door-exit.svg',
     maxTier: 10,
     type: 'tiered',
-    description: 'On your turn you must spend your actions moving away from the source of your fear by the most direct safe route. You cannot willingly move toward it or take offensive actions against it (you may defend yourself if cornered). You provoke attacks of opportunity normally — Fleeing is not the Withdraw action. Decreases by 1 at end of your turn. A value gained during your own turn first decreases at the end of your next turn, and Fleeing ends when its source ends (not yet enforced — the GM applies it).',
+    description: 'On your turn you must spend your actions moving away from the source of your fear by the most direct safe route. You cannot willingly move toward it or take offensive actions against it (you may defend yourself if cornered). You provoke attacks of opportunity normally — Fleeing is not the Withdraw action. Decreases by 1 at end of your turn. A value gained during your own turn first decreases at the end of your next turn, and Fleeing ends when its source ends. A morale Fleeing (∞ on the panel) holds with no countdown until it is cleared or the creature rallies.',
     autoDecrement: true,
     buildChanges(_tier) {
       return [];
@@ -1060,7 +1060,64 @@ async function _stampChangesAt(buff) {
   await buff.setFlag(MODULE_ID, 'changesAt', Math.max(Date.now(), previous + 1));
 }
 
-async function applyCondition(actor, condKey, tier) {
+// v2.47.1 FIX-1 / FIX-3 (TD-97 items 1-2; R-1, R-2): the per-buff flags a Frightened or Fleeing write carries.
+// Returns { update, create } — dotted keys for `existing.update()`, plain keys for the create payload — and both
+// are empty unless the condition auto-decrements and is not Stunned. The stamp `appliedAt` is always written WHOLE
+// (exactly combatId, round, combatantId) or removed with Foundry's deletion key, inside the existing payload, so
+// `_stampChangesAt` stays the last write to the buff (T-4). `options.appliedAt` (the rewind) restores a recorded
+// stamp as it was; otherwise a RISING write stamps the engine combat's current combatant, and outside combat removes an
+// old stamp. A lowering or equal write adds nothing.
+function _baphCountdownFlagPatch(condKey, existing, tier, options) {
+  const patch = { update: {}, create: {} };
+  const cond = CONDITIONS[condKey];
+  if (!cond || cond.autoDecrement !== true || condKey === 'stunned') return patch;
+  const opts = options && typeof options === 'object' ? options : {};
+  const stampKey = `flags.${MODULE_ID}.appliedAt`;
+  const unsetKey = `flags.${MODULE_ID}.-=appliedAt`;
+  const whole = (s) => ({ combatId: s.combatId ?? null, round: s.round ?? null, combatantId: s.combatantId ?? null });
+
+  if (opts.appliedAt !== undefined) {
+    if (opts.appliedAt && typeof opts.appliedAt === 'object') {
+      const stamp = whole(opts.appliedAt);
+      patch.update[stampKey] = stamp;
+      patch.create.appliedAt = stamp;
+    } else if (existing) {
+      patch.update[unsetKey] = null;
+    }
+  } else {
+    const prior = existing ? (Number(existing.getFlag(MODULE_ID, 'tier')) || 0) : 0;
+    if (!existing || tier > prior) {
+      const combat = _baphEngineCombat();
+      if (combat?.started && combat.combatant) {
+        const stamp = { combatId: combat.id, round: combat.round, combatantId: combat.combatant.id };
+        patch.update[stampKey] = stamp;
+        patch.create.appliedAt = stamp;
+      } else if (existing) {
+        patch.update[unsetKey] = null;
+      }
+    }
+  }
+
+  if (condKey === 'fleeing' && typeof opts.hold === 'boolean') {
+    patch.update[`flags.${MODULE_ID}.hold`] = opts.hold;
+    patch.create.hold = opts.hold;
+  }
+  return patch;
+}
+
+// v2.47.1 FIX-1: does a recorded `appliedAt` stamp name the turn that is ending? Combat, round and combatant (the
+// Stunned comparison without its index fallback — every new stamp carries `combatantId`).
+function _baphStampNamesTurn(stamp, departing) {
+  return !!(
+    stamp && departing &&
+    typeof stamp.combatantId === 'string' && stamp.combatantId !== '' &&
+    stamp.combatId === departing.combatId &&
+    stamp.round === departing.round &&
+    stamp.combatantId === departing.combatantId
+  );
+}
+
+async function applyCondition(actor, condKey, tier, options = {}) {
   if (!actor || !CONDITIONS[condKey]) return;
 
   const cond = CONDITIONS[condKey];
@@ -1096,6 +1153,7 @@ async function applyCondition(actor, condKey, tier) {
   }
 
   const existing = _findExistingBuff(actor, condKey);
+  const flagPatch = _baphCountdownFlagPatch(condKey, existing, tier, options); // v2.47.1 FIX-1: read before the update
 
   if (existing) {
     const changes = cond.buildChanges(tier);
@@ -1105,6 +1163,7 @@ async function applyCondition(actor, condKey, tier) {
       'system.description.value': _conditionCardHtml(cond, tier),
       'system.changes': [],
       [`flags.${MODULE_ID}.tier`]: tier,
+      ...flagPatch.update,
     });
     if (changes.length > 0) {
       await pf1.components.ItemChange.create(changes, { parent: existing });
@@ -1132,6 +1191,7 @@ async function applyCondition(actor, condKey, tier) {
           tier: tier,
           autoDecrement: cond.autoDecrement,
           conditionType: cond.type,
+          ...flagPatch.create,
         }
       }
     }]);
@@ -1225,9 +1285,21 @@ async function removeCondition(actor, condKey) {
   // it. Read before the buff is gone. A buff-sourced stun, or a Stunned with no/other mark, never clears it.
   const stunMark = condKey === 'stunned' ? existing.getFlag(MODULE_ID, 'translatedFrom') : null;
   const clearToggleStun = stunMark?.status === 'stunned' && stunMark?.source === 'condition toggle';
+  // v2.47.1 FIX-7 (F-C-12; R-6): a Frightened or Fleeing the translator made from pf1's condition toggle takes
+  // that pf1 status with it — unless another Ledger buff on the actor still carries a mark from the same status
+  // (a Panicked's Frightened and Fleeing share it, so the last one to go clears it). Read before the buff is gone.
+  const fearMark = (condKey === 'frightened' || condKey === 'fleeing') ? existing.getFlag(MODULE_ID, 'translatedFrom') : null;
+  const clearToggleFear = !!fearMark
+    && fearMark.source === 'condition toggle'
+    && ['shaken', 'frightened', 'panicked'].includes(fearMark.status)
+    && !actor.items.contents.some(i => i.id !== existing.id
+      && i.type === 'buff'
+      && i.getFlag(MODULE_ID, 'conditionKey')
+      && i.getFlag(MODULE_ID, 'translatedFrom')?.status === fearMark.status);
   await existing.delete();
   if (pf1StatusToClear) await actor.setCondition(pf1StatusToClear, false);
   if (clearToggleStun && actor.statuses?.has('stunned')) await actor.setCondition('stunned', false);
+  if (clearToggleFear && actor.statuses?.has(fearMark.status)) await actor.setCondition(fearMark.status, false);
   _postConditionChat(actor, cond, 0, 'remove');
   if (condKey === 'stunned') await _syncStunLock(actor); // v2.44.0 FIX-3: the buff is gone — restore the locked pips
 
@@ -1237,7 +1309,51 @@ async function removeCondition(actor, condKey) {
   }
 }
 
+// v2.47.1 FIX-4 (TD-97 item 3; R-3): Stunned shows its REMAINING countdown. One Item update puts the buff's name, card
+// and tier flag at `value`. Stunned writes no `system.changes` (`buildChanges` returns []), so no `_stampChangesAt`
+// is owed. It never writes `stunnedAppliedAt`.
+async function _baphStunnedShow(buff, value) {
+  return buff.update({
+    name: _buffName('stunned', value),
+    'system.description.value': _conditionCardHtml(CONDITIONS.stunned, value),
+    [`flags.${MODULE_ID}.tier`]: value,
+  });
+}
+
+// v2.47.1 FIX-4 (F-C-05; R-3, Q3, trap T-2): an adjust of Stunned corrects the countdown in place — it never goes
+// through `applyCondition`, so it never re-stamps `stunnedAppliedAt` (a re-stamp skipped the next pay-down). A result
+// at or below 0 removes the condition. With no Stunned buff or no countdown, a positive delta is a fresh application.
+async function _adjustStunned(actor, delta) {
+  const existing = _findExistingBuff(actor, 'stunned');
+  const countdown = Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0;
+  const d = Number(delta);
+  if (!Number.isFinite(d)) return;
+  if (!existing || countdown <= 0) {
+    const fresh = Math.floor(d);
+    if (fresh > 0) return applyCondition(actor, 'stunned', fresh);
+    return;
+  }
+  const next = Math.floor(countdown + d);
+  if (next <= 0) return removeCondition(actor, 'stunned');
+  await actor.setFlag(MODULE_ID, 'stunnedCountdown', next);
+  await _baphStunnedShow(existing, next);
+  await _syncStunLock(actor);
+  await _syncOffGuard(actor);
+  _postConditionChat(actor, CONDITIONS.stunned, next, 'apply');
+}
+
+// v2.47.1 FIX-3 (R-2, Q5): the morale hold — Fleeing only. A plain flag on the existing buff (it changes no
+// `system.changes`, so no `_stampChangesAt` is owed). False for any other key or with no buff.
+async function setConditionHold(actor, condKey, on) {
+  if (condKey !== 'fleeing' || !actor) return false;
+  const buff = _findExistingBuff(actor, 'fleeing');
+  if (!buff) return false;
+  await buff.setFlag(MODULE_ID, 'hold', !!on);
+  return true;
+}
+
 async function adjustCondition(actor, condKey, delta) {
+  if (condKey === 'stunned') return _adjustStunned(actor, delta);
   const existing = _findExistingBuff(actor, condKey);
   const currentTier = existing?.getFlag(MODULE_ID, 'tier') ?? 0;
   const newTier = Math.max(0, currentTier + delta);
@@ -1311,7 +1427,11 @@ function _buildConditionPanel(actor) {
 
 function _buildTieredRow(actor, key, cond) {
   const existing = _findExistingBuff(actor, key);
-  const currentTier = existing?.getFlag(MODULE_ID, 'tier') ?? 0;
+  // v2.47.1 FIX-4: Stunned shows its remaining countdown, not the value first applied.
+  const currentTier = key === 'stunned'
+    ? (Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0)
+    : (existing?.getFlag(MODULE_ID, 'tier') ?? 0);
+  const holdOn = key === 'fleeing' && existing?.getFlag(MODULE_ID, 'hold') === true; // v2.47.1 FIX-3
 
   const row = document.createElement('div');
   row.classList.add('baph-condition-row');
@@ -1332,8 +1452,8 @@ function _buildTieredRow(actor, key, cond) {
   if (cond.autoDecrement) {
     const indicator = document.createElement('span');
     indicator.classList.add('baph-auto-indicator');
-    indicator.textContent = '↓';
-    indicator.title = 'Auto-decrements at end of turn';
+    indicator.textContent = holdOn ? 'held' : '↓';
+    indicator.title = holdOn ? 'Morale Fleeing — no countdown until cleared or rallied' : 'Auto-decrements at end of turn';
     labelRow.appendChild(indicator);
   }
 
@@ -1353,6 +1473,22 @@ function _buildTieredRow(actor, key, cond) {
     _refreshPanel(e.target);
   });
   tierGroup.appendChild(btnRemove);
+
+  // v2.47.1 FIX-3 (R-2): a morale Fleeing holds with no countdown. One button beside ✕, Fleeing only.
+  if (key === 'fleeing') {
+    const btnHold = document.createElement('button');
+    btnHold.classList.add('baph-tier-btn', 'baph-btn-hold');
+    btnHold.textContent = '∞';
+    btnHold.title = 'Morale Fleeing — no countdown until cleared or rallied';
+    if (holdOn) btnHold.classList.add('selected');
+    if (currentTier === 0) btnHold.classList.add('disabled');
+    btnHold.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await setConditionHold(actor, 'fleeing', !holdOn);
+      _refreshPanel(e.target);
+    });
+    tierGroup.appendChild(btnHold);
+  }
 
   for (let t = 1; t <= cond.maxTier; t++) {
     const btn = document.createElement('button');
@@ -1899,19 +2035,28 @@ Hooks.once('ready', () => {
     remove: removeCondition,
     adjust: adjustCondition,
     CONDITIONS,
+    setHold: setConditionHold, // v2.47.1 FIX-3: (actor, 'fleeing', bool)
     getTier(actor, condKey) {
+      // v2.47.1 FIX-4: Stunned's tier is what is left of its countdown.
+      if (condKey === 'stunned') return Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0;
       const buff = _findExistingBuff(actor, condKey);
       return buff?.getFlag(MODULE_ID, 'tier') ?? 0;
     },
     listActive(actor) {
       return actor.items
         .filter(i => i.type === 'buff' && i.getFlag(MODULE_ID, 'conditionKey'))
-        .map(i => ({
-          key: i.getFlag(MODULE_ID, 'conditionKey'),
-          tier: i.getFlag(MODULE_ID, 'tier'),
-          name: i.name,
-          active: i.system.active,
-        }));
+        .map(i => {
+          const key = i.getFlag(MODULE_ID, 'conditionKey');
+          return {
+            key,
+            tier: key === 'stunned'
+              ? (Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0)
+              : i.getFlag(MODULE_ID, 'tier'),
+            name: i.name,
+            active: i.system.active,
+            hold: i.getFlag(MODULE_ID, 'hold') === true,
+          };
+        });
     },
     // v2.40.0 — pf1 condition registry canary (TD-38 part 1)
     registryCanary() {
@@ -2167,7 +2312,7 @@ function _isActiveGMClient() {
    `applyCondition`, and this trap does not apply to this implementation.
    ---------------------------------------------------------- */
 
-async function _decrementStunnedCountdown(actor, departing) {
+async function _decrementStunnedCountdown(actor, departing, available = 3) {
   if (!actor) return null;
 
   const countdown = Number(actor.getFlag(MODULE_ID, 'stunnedCountdown')) || 0;
@@ -2189,7 +2334,10 @@ async function _decrementStunnedCountdown(actor, departing) {
     return null;
   }
 
-  const paidDown = Math.min(countdown, 3);
+  // v2.47.1 FIX-5 (R-4, Q6): the pay-down is against the actions the creature had at its turn start — 3 plus a Haste
+  // pip when the turn start recorded one; anything but a whole number >= 3 counts 3.
+  const pool = Number.isInteger(available) && available >= 3 ? available : 3;
+  const paidDown = Math.min(countdown, pool);
   const remaining = countdown - paidDown;
   console.debug(`${MODULE_ID} | Stunned countdown: ${actor.name} ${countdown} -> ${remaining} (paid down ${paidDown})`);
   // v2.46.1 FIX-5: what the ledger keeps so a rewind can restore it exactly — the countdown and the stamp as they were.
@@ -2200,7 +2348,11 @@ async function _decrementStunnedCountdown(actor, departing) {
     return { kind: 'stunned', from, to: { countdown: 0 }, removed: true };
   }
   await actor.setFlag(MODULE_ID, 'stunnedCountdown', remaining);
+  // v2.47.1 FIX-4 (R-3, Q2): the buff shows what is left, and one card says so. Never `applyCondition` (T-2).
+  const stunnedBuff = _findExistingBuff(actor, 'stunned');
+  if (stunnedBuff) await _baphStunnedShow(stunnedBuff, remaining);
   await _syncStunLock(actor); // v2.44.0 FIX-3: after the partial pay-down write (the lock stays while > 0)
+  _postConditionChat(actor, CONDITIONS.stunned, remaining, 'apply');
   return { kind: 'stunned', from, to: { countdown: remaining }, removed: false };
 }
 
@@ -2230,19 +2382,32 @@ async function _baphEndOfTurnRun(combat, combatant, departing) {
     if (!cond.autoDecrement) continue;
     if (key === 'stunned') continue; // v2.34.0: bespoke multi-action countdown, handled below — not a simple -1
 
-    const buff = _findExistingBuff(actor, key);
+    // v2.47.1 FIX-1 (T-7): an inactive Ledger buff counts nowhere — it neither counts down nor is re-activated by a pay-down.
+    const buff = _findActiveBuff(actor, key);
     if (!buff) continue;
 
     const currentTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
     if (currentTier > 0) {
+      // v2.47.1 FIX-3 (R-2): a held Fleeing keeps its value; nothing is applied, no card (Q9).
+      if (buff.getFlag(MODULE_ID, 'hold') === true) {
+        console.debug(`${MODULE_ID} | End of turn: ${actor.name} ${cond.name} ${currentTier} is held — no countdown`);
+        continue;
+      }
+      // v2.47.1 FIX-1 (R-1): a value gained during this very turn first pays at the end of the next one; no card, nothing applied.
+      const stamp = buff.getFlag(MODULE_ID, 'appliedAt') ?? null;
+      if (_baphStampNamesTurn(stamp, departing)) {
+        console.debug(`${MODULE_ID} | End of turn: ${actor.name} ${cond.name} ${currentTier} was gained during the turn that just ended — first pays at the end of the next one`);
+        continue;
+      }
+      const stampBefore = stamp ? JSON.parse(JSON.stringify(stamp)) : null;
       console.debug(`${MODULE_ID} | End of turn: ${actor.name} ${cond.name} ${currentTier} → ${currentTier - 1}`);
       await adjustCondition(actor, key, -1);
       const to = _findExistingBuff(actor, key)?.getFlag(MODULE_ID, 'tier') ?? 0; // 0 when the pay-down removed it
-      applied.push({ kind: key, from: currentTier, to });
+      applied.push({ kind: key, from: { tier: currentTier, appliedAt: stampBefore }, to });
     }
   }
 
-  const stunned = await _decrementStunnedCountdown(actor, departing);
+  const stunned = await _decrementStunnedCountdown(actor, departing, departing?.available);
   if (stunned) applied.push(stunned);
 
   // v2.37.3 FIX-5: explicit call site named by the goal. `_decrementStunnedCountdown` already
@@ -2280,6 +2445,11 @@ async function _baphRewindRestore(actor, applied, label = null) {
       // behind where there was none would do the same).
       if (change.removed) await applyCondition(actor, 'stunned', from);
       await actor.setFlag(MODULE_ID, 'stunnedCountdown', from);
+      if (!change.removed) {
+        // v2.47.1 FIX-4: the name and tier return with the countdown (the pay-down renamed the buff).
+        const shown = _findExistingBuff(actor, 'stunned');
+        if (shown) await _baphStunnedShow(shown, from);
+      }
       const stamp = change.from?.appliedAt ?? null;
       await actor.unsetFlag(MODULE_ID, 'stunnedAppliedAt');
       if (stamp && typeof stamp === 'object') await actor.setFlag(MODULE_ID, 'stunnedAppliedAt', stamp);
@@ -2293,8 +2463,12 @@ async function _baphRewindRestore(actor, applied, label = null) {
         lines.push(`${prefix}${cond.name} left at ${live} — changed since the turn ended`);
         continue;
       }
-      await applyCondition(actor, change.kind, Number(change.from));
-      lines.push(`${prefix}${cond.name} restored to ${change.from}`);
+      // v2.47.1 FIX-2 (T-1): the record is { tier, appliedAt } (a number before 2.47.1). The stamp goes back as it was,
+      // whole, or is removed when there was none — a bare rising write would stamp the rewound turn and skip its real end.
+      const fromRec = change.from && typeof change.from === 'object' ? change.from : null;
+      const fromTier = fromRec ? Number(fromRec.tier) : Number(change.from);
+      await applyCondition(actor, change.kind, fromTier, { appliedAt: fromRec?.appliedAt ?? null });
+      lines.push(`${prefix}${cond.name} restored to ${fromTier}`);
     }
   }
   return lines;
@@ -2792,13 +2966,18 @@ async function _translatorTranslate(actor, rec, had, now) {
         rec.kept.push({ status, key, reason: 'not-translated' });
         continue;
       }
-      if (_TRANSLATOR_SELF_DECREMENTING.includes(key)) {
+      // v2.47.1 FIX-6 (A7; R-5): only Stunned still keeps self-decrementing (its conversion already carries the
+      // source's duration). Frightened and Fleeing end with their source (below).
+      if (key === 'stunned') {
         rec.kept.push({ status, key, reason: 'self-decrementing' });
         continue;
       }
 
       let reason = null;
-      if ((buff.getFlag(MODULE_ID, 'tier') ?? 0) !== mark.tier) reason = 'tier-changed';
+      const liveTier = buff.getFlag(MODULE_ID, 'tier') ?? 0;
+      const fearKey = key === 'frightened' || key === 'fleeing';
+      // A fear is kept only when the GM raised it ABOVE the translator's value; at or below it, it is released.
+      if (fearKey ? liveTier > Number(mark.tier) : liveTier !== mark.tier) reason = 'tier-changed';
       else if (Object.entries(_TRANSLATION_TABLE).some(([id, row]) => row.key === key && stillOn.has(id))) reason = 'other-source';
 
       if (reason) {
@@ -2809,15 +2988,30 @@ async function _translatorTranslate(actor, rec, had, now) {
       }
     }
 
-    // v2.42.0 FIX-5: a row's `also` condition (Fleeing) counts itself down, so it is kept like
-    // Frightened and never released (R-2). Only the self-decrementing path exists for it.
+    // v2.47.1 FIX-6 (A7; R-5): a row's `also` condition (Fleeing) follows its own mark — released at or below it when
+    // no status whose row's `also` is the same key is still on, kept `tier-changed` above it, `other-source` otherwise.
+    // An unmarked one is kept `not-translated`.
     const alsoSeen = new Set();
     for (const id of [...rec.removed].sort()) {
       const also = _TRANSLATION_TABLE[id]?.also;
       if (!also || alsoSeen.has(also.key)) continue;
       alsoSeen.add(also.key);
-      if (!_TRANSLATOR_SELF_DECREMENTING.includes(also.key) || !_findActiveBuff(actor, also.key)) continue; // v2.47.0 FIX-7
-      rec.kept.push({ status: id, key: also.key, reason: 'self-decrementing' });
+      const alsoBuff = _findActiveBuff(actor, also.key); // v2.47.0 FIX-7
+      if (!alsoBuff) continue;
+      const alsoMark = alsoBuff.getFlag(MODULE_ID, 'translatedFrom') ?? null;
+      if (!alsoMark) {
+        rec.kept.push({ status: id, key: also.key, reason: 'not-translated' });
+        continue;
+      }
+      let alsoReason = null;
+      if ((alsoBuff.getFlag(MODULE_ID, 'tier') ?? 0) > Number(alsoMark.tier)) alsoReason = 'tier-changed';
+      else if (Object.entries(_TRANSLATION_TABLE).some(([sid, row]) => row.also?.key === also.key && stillOn.has(sid))) alsoReason = 'other-source';
+      if (alsoReason) {
+        rec.kept.push({ status: id, key: also.key, reason: alsoReason });
+      } else {
+        await removeCondition(actor, also.key);
+        rec.released.push(also.key);
+      }
     }
   }
 }

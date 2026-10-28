@@ -3,19 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.47.0 — *Can You React?*
+**Current Version:** 2.47.1 — *The Turn After*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Can you react?** A creature that cannot react now shows its Reaction (and its Combat Reflexes pips) locked, with the
-reason on hover, from the moment the condition lands: Stunned, Paralyzed, Unconscious, Dying, Stable, Asleep, Petrified,
-Dazed, Cowering, Fascinated or Nauseated. Nobody has a Reaction before their first turn, except with Uncanny Dodge;
-Combat Reflexes pips still work. Starting a combat refills everyone, and an attack before the start costs nothing. Haste
-is spent first, and Withdraw needs a normal action. The skip-dialog and out-of-actions GM cards say what was actually
-charged, and with no GM connected a player sees one quiet notice instead of one per click. **Re-paste four world macros:**
-Withdraw, Delay, Ready and Total Defense; see the [changelog](#changelog).
+**The turn after.** A Frightened or Fleeing you gain on your own turn waits a turn: it first counts down at the end of
+your next turn, not this one. The ∞ button on Fleeing holds a morale Fleeing with no countdown until the GM clears it or the
+creature rallies. Stunned shows what is left (on the token, the sheet and the panel) with a chat line each time it pays down,
+and an adjust corrects that number without restarting the stun. A Hasted creature loses its Haste action last, and a big
+stun eats it (Stunned 4 with Haste is the whole turn). A fear the translator made from a pf1 condition ends when that
+condition ends, unless the GM raised it, and pf1's own Shaken icon goes when the Frightened it made runs out. No macro
+changes; nothing to re-paste. See the [changelog](#changelog).
 
 ---
 
@@ -187,6 +187,33 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.47.1 — The Turn After
+
+TD-97 (the countdown rules) with rider r1 (F-C-12). No canon change: the rules were ruled on 2026-10-11 and this release
+carries them into the end-of-turn engine. No macro changes; nothing to re-paste. Council-verified on the dev server
+(run `20261025-170722`, runtime 83/83) and at the table (nine checks) 2026-10-27; shipped 2026-10-28.
+
+- **A fear gained on your own turn waits a turn (TD-97 item 1, C-21).** A Frightened or Fleeing whose tier rises during
+  its own creature's turn is stamped with that turn (`appliedAt`, written inside the same buff update) and the end of that
+  turn skips the −1, with no chat card. One gained on another creature's turn, or while its creature is delaying, pays at
+  its creature's next end. Nothing is stamped outside combat. Previous Turn puts the old stamp back (T-1).
+- **Morale Fleeing holds (TD-97 item 2).** `apply(actor, 'fleeing', tier, { hold })`, `setHold(actor, 'fleeing', bool)`
+  and the panel's ∞ button keep a Fleeing at its value through every turn end, with no card. `listActive` reports `hold`.
+- **Stunned shows and adjusts what is left (TD-97 item 3, F-C-05, C-47).** `getTier`, `listActive` and the panel read the
+  countdown; each pay-down renames the buff and posts one card ("Stunned 12"); `adjust(actor, 'stunned', delta)` writes the
+  countdown directly, never restarts the stun, and removes it at or below 0. A rewound pay-down gets its name back.
+- **Haste is lost last (TD-97 item 4, B8).** A Stunned or other loss above 3 locks the Haste action after the three normal
+  ones (drawn "Bonus action — lost (Stunned)"; `getState().bonusLocked`). The turn start records the actions the creature
+  had, and the Stunned pay-down is that many (Stunned 4 on a Hasted creature is paid off at its end). A GM joining mid-turn
+  counts 3.
+- **A translated fear ends with its source (TD-97 item 5, A7).** A Frightened or Fleeing the translator made is released
+  when its source status ends, at or below the translator's value; one the GM raised above it is kept (`tier-changed`).
+- **pf1's Shaken goes with its Frightened (r1, F-C-12).** A Frightened or Fleeing made from pf1's condition toggle clears
+  that toggle when it ends, unless another Ledger buff still carries a mark from the same status.
+- **An inactive Frightened stays inactive (T-7).** The end of turn reads active buffs only; a pay-down no longer
+  re-activates an inactive Frightened.
+- The Frightened and Fleeing descriptions no longer say "not yet enforced".
 
 ### v2.47.0 — Can You React?
 
@@ -597,8 +624,9 @@ appears on an actor, the module applies the Ledger condition canon assigns it, o
   not put them back while the pf1 status stays on the actor.
 - **Removal, in both settings.** When the status goes, the module removes the Ledger condition only if
   it created it, it is Blinded, Sickened, Slowed or Nauseated, its tier is unchanged since, and no other
-  mapped status still holds it. Frightened and Stunned are left to count down. A condition the GM applied
-  or changed is never taken away.
+  mapped status still holds it. From v2.47.1 a Frightened or Fleeing it made ends with its source too (at or
+  below the translator's value; one the GM raised is kept); Stunned is left to count down. A condition the GM
+  applied or changed is never taken away.
 - **Not yet (1.7c).** *Panicked* gives Frightened 3 but **Fleeing is not automated** — the card and a GM
   whisper say so, and it is adjudicated by hand. Off-Guard is not yet derived from pf1's own statuses
   (Flat-Footed, Paralyzed, Cowering, Pinned), and Deaf, Dazzled and every other status pf1 keeps are not
