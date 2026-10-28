@@ -926,6 +926,8 @@ function _initState(combatantId, combatArg) {
   // v2.47.0 FIX-5 (F-A-05): a boolean in the flag, default false; while it is true a grant that finds no
   // saved pip does not create an available one.
   const bonusSpentThisTurn = typeof saved?.bonusSpentThisTurn === 'boolean' ? saved.bonusSpentThisTurn : false;
+  // v2.47.1 FIX-5: the Haste pip was locked by a Stunned loss above 3 (a boolean in the flag, default false).
+  const bonusLocked = typeof saved?.bonusLocked === 'boolean' ? saved.bonusLocked : false;
   const bonusPip    = bonusEff
     ? ((Array.isArray(saved?.bonusPip) && saved.bonusPip.length === 1) ? [...saved.bonusPip] : [!bonusSpentThisTurn])
     : [];
@@ -964,6 +966,7 @@ function _initState(combatantId, combatArg) {
     bonusAuto,
     bonusPip,
     bonusSpentThisTurn,
+    bonusLocked,
     // v1.27 round-02: the sequence value at which this combatant's own last
     // turn-start reset fired (since v2.46.1 the turn ledger's seq for the
     // start - bookkeeping only). Replaces the retired _resetForRound /
@@ -1018,6 +1021,7 @@ function _resetState(combatantId) {
   // v2.29.0: refill the Haste bonus availability (grant persists; incap is derived at use).
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
   state.bonusSpentThisTurn = false; // v2.47.0 FIX-5: a refill is a new turn's worth of Haste
+  state.bonusLocked = false; // v2.47.1 FIX-5: a reset is a refill, as it clears conditionLocked
   // v2.30.0: clear the per-turn MAP counter + TWF off-hand budget on a manual reset too.
   state.swingsTaken = 0;
   // GOAL_v2.38.0 FIX-4: clear the routine record wherever swingsTaken clears — a record that
@@ -1067,6 +1071,7 @@ function _writePipFlag(combatantId, combatArg) {
     bonusAuto:    !!state.bonusAuto,
     bonusPip:     Array.isArray(state.bonusPip) ? [...state.bonusPip] : [],
     bonusSpentThisTurn: state.bonusSpentThisTurn === true, // v2.47.0 FIX-5: the Haste pip was spent this turn
+    bonusLocked:  state.bonusLocked === true, // v2.47.1 FIX-5: the Haste pip was lost to a Stunned above 3
     resetForSeq:  state._resetForSeq, // v1.27 round-02 — bookkeeping since v2.46.1 (the turn ledger's seq)
   }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
 }
@@ -1155,7 +1160,7 @@ function _writeOffBudget(combatantId, combatArg, atRound) {
    ---------------------------------------------------------- */
 
 function _readConditionActionLoss(actor) {
-  if (!actor) return { actionsLost: 0, fullyIncapacitated: false };
+  if (!actor) return { actionsLost: 0, lossWanted: 0, fullyIncapacitated: false };
 
   let isNauseated        = false;
   let slowedTotal        = 0;
@@ -1183,14 +1188,17 @@ function _readConditionActionLoss(actor) {
   // Dazed, Cowering; an active Ledger Paralyzed or Fascinated) is full incapacitation too, so the turn
   // start's locks and the Haste pip follow the same set the gate and the spends read.
   if (fullyIncapacitated || _baphNoActionReason(actor)) {
-    return { actionsLost: 3, fullyIncapacitated: true };
+    return { actionsLost: 3, lossWanted: 3, fullyIncapacitated: true };
   }
 
   const stunnedCountdown = Number(actor.getFlag(AT_MODULE_ID, 'stunnedCountdown')) || 0;
   const nauseatedLoss = isNauseated ? 1 : 0;
-  const actionsLost = Math.min(Math.max(slowedTotal, stunnedCountdown, nauseatedLoss), 3);
+  // v2.47.1 FIX-5 (T-5): `lossWanted` is the loss uncapped — only `_applyConditionLocks` reads it (a loss above 3 takes
+  // the Haste action too). `actionsLost` stays capped at 3 for every other reader.
+  const lossWanted = Math.max(slowedTotal, stunnedCountdown, nauseatedLoss);
+  const actionsLost = Math.min(lossWanted, 3);
 
-  return { actionsLost, fullyIncapacitated: false };
+  return { actionsLost, lossWanted, fullyIncapacitated: false };
 }
 
 function _hasCombatReflexes(actor) {
@@ -1424,7 +1432,8 @@ function _applyConditionLocks(combatantId, actor) {
   const state = _getState(combatantId);
   if (!state) return;
 
-  const { actionsLost, fullyIncapacitated } = _readConditionActionLoss(actor);
+  const { actionsLost, lossWanted, fullyIncapacitated } = _readConditionActionLoss(actor);
+  state.bonusLocked = false; // v2.47.1 FIX-5: recomputed on every lock pass
 
   if (fullyIncapacitated) {
     state.actions = [false, false, false];
@@ -1439,6 +1448,13 @@ function _applyConditionLocks(combatantId, actor) {
     state.actions[i] = false;
   }
   state.conditionLocked = toLock;
+
+  // v2.47.1 FIX-5 (TD-97 item 4, B8; R-4): the normal actions go first, the Haste action last. A loss above 3 (Stunned 4
+  // or more) takes the Haste pip too, and it is not re-granted in the turn (`_reconcileBonusPip`).
+  if (lossWanted > 3 && Array.isArray(state.bonusPip) && state.bonusPip.length > 0) {
+    state.bonusPip = [false];
+    state.bonusLocked = true;
+  }
 }
 
 /* ----------------------------------------------------------
@@ -1700,12 +1716,15 @@ function _baphEngineApplyBody(combat, combatantId, combatant, seq) {
 // FIX-4, on the active GM, inside a task: `at` is the task's { round, turn }. Awaits every Combatant
 // write; the caller records `started` in the ledger only after this resolves.
 async function _baphEngineTurnStart(combat, combatantId, at, seq) {
+  let available = 3; // v2.47.1 FIX-5 (T-6): the actions the creature has at this turn start (3, plus a Haste pip)
   const combatant = combat.combatants?.get(combatantId);
   if (combatant?.actor) {
     if (!_getState(combatantId)) _initState(combatantId, combat);
     const state = _getState(combatantId);
     if (state) {
       _baphEngineApplyBody(combat, combatantId, combatant, seq);
+      // The lock writes the Haste pip's value, never the array's length, so this is the count present at the start.
+      available = 3 + (Array.isArray(state.bonusPip) ? state.bonusPip.length : 0);
       // v2.47.0 FIX-5 (R-4): a new turn clears the Haste pip's spent-this-turn mark. Here, after the body and
       // before the flag write below, never inside the protected body.
       state.bonusSpentThisTurn = false;
@@ -1740,6 +1759,7 @@ async function _baphEngineTurnStart(combat, combatantId, at, seq) {
   // The Off-Guard mark (moved here from condition-overlay.js's retired updateCombat path): for THIS
   // combatant, then the translator checks. Resolved when called (condition-overlay.js loads after this file).
   if (typeof _baphOffGuardMarkTurn === 'function') await _baphOffGuardMarkTurn(combat, combatantId);
+  return available;
 }
 
 /* --- the end of a turn, a rewind, the task ------------------------------ */
@@ -1749,9 +1769,13 @@ async function _baphEngineEndTurn(combat, w, departing, forfeit) {
   const combatant = combat.combatants?.get(departing.combatantId);
   const seq = _baphLedgerNextSeq(w);
   let applied = [];
+  // v2.47.1 FIX-5 (T-6): the actions the creature had at its turn start, from the ledger's `started` entry — a whole
+  // number >= 3, else 3 (the join and adopt sites record none).
+  const recordedAvailable = w.led?.rounds?.[String(departing.round)]?.started?.[departing.combatantId]?.available;
+  const available = (Number.isInteger(recordedAvailable) && recordedAvailable >= 3) ? recordedAvailable : 3;
   try {
     if (combatant?.actor && typeof _baphEndOfTurnRun === 'function') {
-      applied = (await _baphEndOfTurnRun(combat, combatant, departing)) ?? [];
+      applied = (await _baphEndOfTurnRun(combat, combatant, { ...departing, available })) ?? [];
     }
   } catch (err) {
     console.error(`${AT_MODULE_ID} | end of turn failed for ${combatant?.name ?? departing.combatantId}`, err);
@@ -1899,12 +1923,13 @@ async function _baphEngineTurnTask(combat, chain, cur, hookPrev) {
           await _baphEngineStartRefill(combat);
         }
         const seq = _baphLedgerNextSeq(w);
+        let available = 3; // v2.47.1 FIX-5 (T-6): 3 if the start threw
         try {
-          await _baphEngineTurnStart(combat, cur.combatantId, curState, seq);
+          available = await _baphEngineTurnStart(combat, cur.combatantId, curState, seq);
         } catch (err) {
           console.error(`${AT_MODULE_ID} | turn start failed for ${cur.combatantId}`, err);
         }
-        _baphLedgerPut(w, _baphLedgerPath(curRound, 'started', cur.combatantId), { seq });
+        _baphLedgerPut(w, _baphLedgerPath(curRound, 'started', cur.combatantId), { seq, available });
       }
     }
     // 6. One awaited ledger write.
@@ -2254,11 +2279,15 @@ function _buildPipRow(combatantId, isOwner) {
       if (_bonusIncap) {
         pip.classList.add('condition-locked');
         pip.title = 'Bonus action — suppressed (incapacitated)';
+      } else if (state.bonusLocked === true) {
+        // v2.47.1 FIX-5: a Stunned loss above 3 took the Haste action last.
+        pip.classList.add('condition-locked');
+        pip.title = 'Bonus action — lost (Stunned)';
       } else if (!available) {
         pip.classList.add('spent');
       }
 
-      if (isOwner && !_bonusIncap) {
+      if (isOwner && !_bonusIncap && state.bonusLocked !== true) {
         pip.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -2367,6 +2396,7 @@ function _togglePip(combatantId, type, index, combatArg) {
     // v2.29.0: can't use the Haste bonus while fully incapacitated (derived guard).
     const _bActor = game.combat?.combatants?.get(combatantId)?.actor;
     if (_readConditionActionLoss(_bActor).fullyIncapacitated) return false;
+    if (state.bonusLocked === true) return false; // v2.47.1 FIX-5: the Haste pip was lost to Stunned
     if (!Array.isArray(state.bonusPip)) return false;
   }
 
@@ -2696,7 +2726,9 @@ Hooks.once('ready', () => {
         // 'your first turn has not started'), or null when it is open (also null when the combatant is in
         // neither the engine combat nor the viewed one). The fields above keep reporting the raw pools.
         reactionGate:          _baphGateReasonFor(combatantId, 'reaction'),
-        reflexGate:            _baphGateReasonFor(combatantId, 'reflex')
+        reflexGate:            _baphGateReasonFor(combatantId, 'reflex'),
+        // GOAL_v2.47.1 FIX-5: read-only. True while a Stunned loss above 3 holds the Haste pip locked this turn.
+        bonusLocked:           state.bonusLocked === true
       };
     },
     // GOAL_v2.37.9 FIX-5: read-only accessor so the probe can assert on _isQualifyingBundle
@@ -3552,7 +3584,8 @@ function _reconcileBonusPip(combatantId) {
   if (!effective) { state.bonusPip = []; return; }            // true -> false: remove pip
   // false -> true: new grant, available - v2.47.0 FIX-5 (R-4, F-A-05): unless this turn's Haste pip was
   // already spent (a buff off and on, a revoke and grant, the setting), when the new pip stays spent.
-  if (state.bonusPip.length === 0) state.bonusPip = [state.bonusSpentThisTurn === true ? false : true];
+  // v2.47.1 FIX-5: a pip the Stunned loss locked is never re-granted in the turn either.
+  if (state.bonusPip.length === 0) state.bonusPip = [(state.bonusSpentThisTurn === true || state.bonusLocked === true) ? false : true];
   // else: still effective -> preserve existing [true]/[false]
 }
 
@@ -6819,6 +6852,7 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   if ('bonusAuto'   in saved) existing.bonusAuto   = !!saved.bonusAuto;
   if (Array.isArray(saved.bonusPip)) existing.bonusPip = [...saved.bonusPip];
   if (typeof saved.bonusSpentThisTurn === 'boolean') existing.bonusSpentThisTurn = saved.bonusSpentThisTurn; // v2.47.0 FIX-5
+  if (typeof saved.bonusLocked === 'boolean') existing.bonusLocked = saved.bonusLocked; // v2.47.1 FIX-5
   if ('resetForSeq' in saved) existing._resetForSeq = saved.resetForSeq; // v1.27 round-02
 
   // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): this hook fires for
