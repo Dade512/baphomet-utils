@@ -4772,7 +4772,9 @@ function _deriveConsumableActionCost(actionUse) {
   const subType = item?.system?.subType ?? null;
   const actor = actionUse?.actor ?? item?.actor;
 
-  if (subType === 'potion') return 2; // Draw 1 + Drink 1
+  // v2.48.0 FIX-4 (TD-98 item 5; R-4, Q6): Administer Potion (declared by macros/administer-potion.js, which holds the
+  // intent only inside its own use()) - draw, kneel, administer - costs 3 (H:563). An oil is a `potion` in pf1 11.11.
+  if (subType === 'potion') return _baphIntentMatches(globalThis.baphometAdminister, actor) ? 3 : 2; // Draw 1 + Drink 1
   if (subType === 'scroll') return 3; // Draw 1 + Cast 2
 
   if (subType === 'wand') {
@@ -5378,21 +5380,89 @@ Hooks.on('pf1AttackRoll', (action, roll) => {
 // cannot pay for a spell. When the Reaction is unavailable: warn once,
 // charge nothing, and do NOT cancel the use — the 2026-08-29 "SOFTEN CANON"
 // ruling lets the GM adjudicate rather than blocking the roll.
+// v2.48.0 FIX-2 (TD-98; R-2, Q5; T-5, T-9): returns { spent, reason } - `spent` is spendReaction's true / false /
+// null, `reason` the gate's reason on a refusal (else null). The one spendReaction call is unchanged. A refusal
+// toasts the caster (a spell "cast", a consumable "use" - the same two strings) and posts one GM-whispered card
+// (none while no GM is connected); a spend posts none; null (no GM) shows nothing more - the notice was shown.
 function _baphSpendReactionForSpell(combatant, actor, item) {
+  const isUse = item.type === 'consumable';
+  const what = isUse ? 'consumable' : 'spell';
   const r = game.baphometActions?.spendReaction?.(combatant.id);
   if (r === true) {
-    _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — Reaction spent`);
-  } else if (r === null) {
+    _debugLog(`auto-spend: ${what} "${item.name}" by "${actor.name}" — Reaction spent`);
+    return { spent: true, reason: null };
+  }
+  if (r === null) {
     // v2.47.0 FIX-10: no GM connected - the module's one notice has been shown; no second warning.
-    _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — no GM connected, not charged`);
-  } else {
-    _debugLog(`auto-spend: reaction-cost spell "${item.name}" by "${actor.name}" — no Reaction available, not charged`);
-    // v2.44.0 FIX-3 (Q4): still warn-only. v2.47.0 FIX-2: the warning names the gate's reason (Stunned, a
-    // no-action state, Nauseated, a first turn not yet started) when one holds.
-    const gate = _baphReactionGate(actor, combatant, 'reaction');
-    ui.notifications?.warn?.(gate.ok
-      ? `${actor.name}: no Reaction available to cast ${item.name} — not charged.`
-      : `${actor.name}: ${gate.reason} — no reaction available to cast ${item.name} — not charged. The GM decides.`);
+    _debugLog(`auto-spend: ${what} "${item.name}" by "${actor.name}" — no GM connected, not charged`);
+    return { spent: null, reason: null };
+  }
+  _debugLog(`auto-spend: ${what} "${item.name}" by "${actor.name}" — no Reaction available, not charged`);
+  // v2.44.0 FIX-3 (Q4): still warn-only. v2.47.0 FIX-2: the warning names the gate's reason (Stunned, a
+  // no-action state, Nauseated, a first turn not yet started) when one holds.
+  const gate = _baphReactionGate(actor, combatant, 'reaction');
+  const why = gate.ok ? null : gate.reason;
+  const verb = isUse ? 'use' : 'cast';
+  ui.notifications?.warn?.(gate.ok
+    ? `${actor.name}: no Reaction available to ${verb} ${item.name} — not charged.`
+    : `${actor.name}: ${gate.reason} — no reaction available to ${verb} ${item.name} — not charged. The GM decides.`);
+  try {
+    if (game.users?.activeGM) {
+      const onTurn = _getActiveCombatantForActor(actor) !== null;
+      const safeActorName = foundry.utils.escapeHTML(actor.name);
+      const safeItemName = foundry.utils.escapeHTML(String(item.name));
+      const safeWhy = foundry.utils.escapeHTML(String(why ?? 'none left'));
+      ChatMessage.create({
+        content:
+          `<p><strong>${onTurn ? 'No Reaction:' : 'Off turn, no Reaction:'}</strong> ${safeActorName} ${isUse ? 'used' : 'cast'} `
+          + `${safeItemName} with no Reaction available (${safeWhy}) — not charged. `
+          + `The GM rules, including voiding the result.</p>`,
+        speaker: ChatMessage.getSpeaker({ actor }),
+        whisper: ChatMessage.getWhisperRecipients('GM'),
+        flags: { 'baphomet-utils': { offTurnNoReaction: true } }
+      }).catch((err) => {
+        console.warn(
+          `baphomet-utils | no-Reaction card failed to post for "${actor.name}" — `
+          + `handled here, not thrown. Nothing was charged and the roll was never blocked.`, err
+        );
+      });
+    }
+  } catch (e) {
+    console.warn('baphomet-utils | no-Reaction notice failed:', e);
+  }
+  return { spent: false, reason: why };
+}
+
+// v2.48.0 FIX-3 (b) (TD-98 item 4; R-3b): the item flag `reactionFree` - a GM-set pf1 boolean flag on a spell or
+// consumable (a contingency, a Legacy ability's spell): the item never spends the Reaction. Read at two places.
+function _baphReactionFree(item) {
+  return (item?.type === 'spell' || item?.type === 'consumable')
+    && item.system?.flags?.boolean?.reactionFree === true;
+}
+
+// v2.48.0 FIX-3 (TD-98 item 4; R-3): the one exemption card - a Legendary or Lair action, or an item carrying the
+// `reactionFree` flag, charged nothing. kind: 'legendary' | 'lair' | 'item-flag'. One debug line, then one
+// GM-whispered card while a GM is connected; fire-and-forget, never blocks.
+function _baphExemptUse(actor, item, kind) {
+  try {
+    const heading = kind === 'legendary' ? 'Legendary action' : kind === 'lair' ? 'Lair action' : 'Exempt by item flag';
+    _debugLog(`auto-spend: ${heading.toLowerCase()} — "${actor.name}" used "${item.name}", nothing charged`);
+    if (!game.users?.activeGM) return;
+    const safeActorName = foundry.utils.escapeHTML(actor.name);
+    const safeItemName = foundry.utils.escapeHTML(String(item.name));
+    ChatMessage.create({
+      content: `<p><strong>${heading} — nothing charged:</strong> ${safeActorName} used ${safeItemName}.</p>`,
+      speaker: ChatMessage.getSpeaker({ actor }),
+      whisper: ChatMessage.getWhisperRecipients('GM'),
+      flags: { 'baphomet-utils': { exemptUse: kind } }
+    }).catch((err) => {
+      console.warn(
+        `baphomet-utils | exemption card failed to post for "${actor.name}" — `
+        + `handled here, not thrown. Nothing was charged and the roll was never blocked.`, err
+      );
+    });
+  } catch (e) {
+    console.warn('baphomet-utils | exemption notice failed:', e);
   }
 }
 
@@ -5735,6 +5805,20 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       return;
     }
 
+    // v2.48.0 FIX-3 (a) (TD-98 item 4; R-3a, Q4, T-7): a declared Boss Action (macros/boss-action.js, GM-only) - the
+    // next action use by that actor, on turn or off, charges nothing: no action, no Reaction, no jade. Spent on the
+    // next use whatever it is (the card names that item). Placed after the dedupe (T-2), the AoO intent's
+    // consumption and the unstarted-combat gate, before the on/off-turn branch.
+    const _bossIntent = globalThis.baphometBossAction;
+    if (_baphIntentMatches(_bossIntent, actor) && (_bossIntent.kind === 'legendary' || _bossIntent.kind === 'lair')) {
+      const _bossKind = _bossIntent.kind;
+      globalThis.baphometBossAction = null;
+      if (_routineUse && _routineState) _routineState.routinePaid = true;
+      _baphExemptUse(actor, item, _bossKind);
+      _chargeDecision = { kind: 'none', reason: _bossKind === 'legendary' ? 'Legendary action' : 'Lair action' };
+      return;
+    }
+
     if (activeCombatant) {
       // On-turn: spend the action cost (all-or-nothing).
       if (!_canUserControlCombatant(activeCombatant)) {
@@ -5752,6 +5836,15 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         if (_routineUse && _routineState) _routineState.routinePaid = true;
         _debugLog(`auto-spend: Nauseated "${actor.name}" ${_nauseatedCast ? 'cast' : 'attack'} with "${item.name}" — warned, carded, not charged`);
         _chargeDecision = { kind: 'none', reason: 'Nauseated' };
+        return;
+      }
+      if (isSpell && _isReactionCostSpell(actionUse) && _baphReactionFree(item)) {
+        // v2.48.0 FIX-3 (b) (R-3b, Fable's gate review blocker 1): an immediate spell carrying the `reactionFree`
+        // item flag never spends the Reaction, on its own turn as much as off it (H:295) - and, as for any
+        // immediate spell, no action. Any other flagged use still costs its actions (the flag never reaches the
+        // action spend below).
+        _baphExemptUse(actor, item, 'item-flag');
+        _chargeDecision = { kind: 'none', reason: 'exempt by item flag' };
         return;
       }
       if (isSpell && _isReactionCostSpell(actionUse)) {
@@ -5794,6 +5887,14 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       }
       // NOTE: swing-counter / MAP tracking deferred (GOAL_v2.22.0 Out of Scope).
     } else {
+      // v2.48.0 FIX-3 (b) (R-3b; design call 3): an item carrying the `reactionFree` flag never spends the
+      // Reaction - off turn its whole cost IS the Reaction, so every flagged spell or consumable (immediate or
+      // not) charges nothing and cards the GM. Placed before the reaction-cost carve-out below, which does not move.
+      if (_baphReactionFree(item) && _combatantsForActor(actor).length > 0) {
+        _baphExemptUse(actor, item, 'item-flag');
+        _chargeDecision = { kind: 'none', reason: 'exempt by item flag' };
+        return;
+      }
       // Off-turn → reaction. FIX-1 (GOAL_v2.37.4, D-2): a reaction-cost spell
       // spends the Reaction here too — the archetypal immediate-action spell
       // use (Feather Fall, a readied counterspell) is off-turn. Self-
@@ -5814,19 +5915,28 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         _baphSpendReactionForSpell(ownForSpell, actor, item);
         return;
       }
-      // FIX-1 (GOAL_v2.37.7, D-1): off-turn consumables are not charged,
-      // debug text only — this mirrors spells (v2.37.4 carved exactly one
-      // exception out of the return below, the reaction-cost spell above,
-      // and nothing about drinking a potion out of turn asks for a second).
-      // Placed after that carve-out and before the generic !isAttack return,
-      // so the debug text correctly names a consumable instead of reusing
-      // the spell-only wording below.
-      if (isConsumable) {
-        _debugLog(`auto-spend: off-turn consumable "${item.name}" by "${actor.name}" — not charged (no active-turn action)`);
-        return;
-      }
-      if (!isAttack) {
-        _debugLog(`auto-spend: off-turn spell by "${actor.name}" — not charged (no active-turn action)`);
+      // v2.48.0 FIX-1 (TD-98 items 1-3; R-1, Q2, Q7, Q8; T-1, T-2, T-3, T-4, T-10): one off-turn cast rule. After
+      // the reaction-cost carve-out above (unchanged), every remaining spell and every consumable of a creature
+      // in the engine combat spends the Reaction (never a Combat Reflexes pip) through the same helper, behind
+      // the same combatant and control guards. Replaces the two "not charged" returns of v2.37.4 / v2.37.7. A
+      // refusal warns and cards the GM (FIX-2) and never blocks; a delaying creature takes this path (Q7).
+      if (isSpell || isConsumable) {
+        const _castWhat = isConsumable ? 'consumable' : 'spell';
+        const ownForCast = _getCombatantForActor(actor);
+        if (!ownForCast) {
+          _debugLog(`auto-spend: off-turn ${_castWhat} "${item.name}" but "${actor.name}" is not in this combat — no spend`);
+          _chargeDecision = { kind: 'none', reason: 'not in this combat' };
+          return;
+        }
+        if (!_canUserControlCombatant(ownForCast)) {
+          _debugLog(`auto-spend: cannot control "${actor.name}" — no reaction spend for ${_castWhat} "${item.name}"`);
+          _chargeDecision = { kind: 'none', reason: 'cannot control this creature' };
+          return;
+        }
+        const res = _baphSpendReactionForSpell(ownForCast, actor, item);
+        _chargeDecision = res.spent === true
+          ? { kind: 'reaction' }
+          : { kind: 'none', reason: res.spent === null ? 'no GM is connected' : (res.reason ?? 'no Reaction left') };
         return;
       }
       const own = _getCombatantForActor(actor);

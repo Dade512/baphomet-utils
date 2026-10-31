@@ -69,6 +69,15 @@ one-off tool, not a runtime-dependency macro, and stays out of scope for this re
   passes the turn. Refuses, with no request and no turn change, a creature that is not in the active combat, is not the
   current combatant, or already Delayed this round. Nothing refreshes when the creature acts later in the round; its
   Frightened and Fleeing countdowns run once, when the delayed turn ends (or at the wrap, if it never acts).
+- `boss-action.js` — **Boss Action** (**GM-only**, token-driven, `GOAL_v2.48.0`). Declares a **Legendary** or **Lair**
+  action for the selected creature (two buttons). Sets `globalThis.baphometBossAction = { actorUuid, kind }`; the
+  creature's **next action use**, on turn or off, charges nothing (no action, no Reaction, no Combat Reflexes pip) and
+  posts one GM card. Legendary warns (never refuses) when the creature cannot act fully or is the current combatant;
+  Lair checks nothing. The declaration is spent on whatever the next use is.
+- `administer-potion.js` — **Administer Potion** (token-driven, every player, `GOAL_v2.48.0`). The selected token is the
+  giver: on its own turn, with three normal actions free, it uses one of its potions or oils at a cost of **3 actions**
+  (draw, kneel, administer) and posts one chat line that this provokes. Off turn, or with fewer than 3 normal actions,
+  it refuses and nothing is used or charged. The intent (`globalThis.baphometAdminister`) lives only inside the use.
 
 The three token-driven declare-macros (`vital-strike.js`, `charge.js`, `cleave.js`), the
 GM-only `haste-bonus-action.js`, and the three `GOAL_v2.37.8` declare-macros (`ready.js`,
@@ -96,6 +105,8 @@ Foundry does not auto-create world Macro documents from a module's shipped files
 | `total-defense.js` | Total Defense |
 | `withdraw.js` | Withdraw |
 | `delay.js` | Delay |
+| `boss-action.js` | Boss Action |
+| `administer-potion.js` | Administer Potion |
 
 **TWF is per-character**: copy `twf-tier-aware.js`'s contents per dual-wielder, edit the actor
 name and the two weapon item IDs near the top, and create a separate in-world macro for each.
@@ -114,6 +125,14 @@ name and the two weapon item IDs near the top, and create a separate in-world ma
    const norm = s => s.replace(/\r\n/g, '\n').trim();
    console.log(norm(repo) === norm(world) ? 'TWF macro: IN SYNC' : 'TWF macro: DRIFT — world ≠ repo');
    ```
+
+### v2.48.0 sync note — paste two
+
+`boss-action.js` and `administer-potion.js` are new in v2.48.0 (`SYNC_STAMP` `2026-10-28`). After updating the module,
+**create two new world macros** (Type: Script) and paste each complete file into it: **"Boss Action"** — GM-only, so
+leave it GM-executable only — and **"Administer Potion"**, which every player who may carry a potion needs to execute.
+No other macro changed, so nothing is re-pasted. Run the drift check above for each (`boss-action.js` / `Boss Action`,
+`administer-potion.js` / `Administer Potion`).
 
 ### v2.47.0 sync note — re-paste four
 
@@ -153,6 +172,9 @@ edit. A future deployment/sync mechanism is out of scope for this milestone.
 
 ## History
 
+- **v2.48.0** — New `boss-action.js` (GM-only) and `administer-potion.js` (`GOAL_v2.48.0_OFF_TURN_CASTING` FIX-3,
+  FIX-4): Boss Action declares a Legendary or Lair action whose next use charges nothing; Administer Potion charges
+  the giver 3 actions on its own turn. Both `SYNC_STAMP` `2026-10-28`. Paste two new world macros; no other macro changed.
 - **v2.47.0** — `withdraw.js`, `delay.js`, `ready.js` and `total-defense.js` (`GOAL_v2.47.0_REACTION_GATE` FIX-5,
   FIX-10): Withdraw needs a normal action (the Haste pip alone refuses) and says nothing on a no-GM `null`; Delay,
   Ready and Total Defense stay silent when no GM is connected. All four `SYNC_STAMP`s set to `2026-10-24`;

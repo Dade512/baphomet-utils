@@ -3,19 +3,20 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.47.1 — *The Turn After*
+**Current Version:** 2.48.0 — *Out of Turn*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**The turn after.** A Frightened or Fleeing you gain on your own turn waits a turn: it first counts down at the end of
-your next turn, not this one. The ∞ button on Fleeing holds a morale Fleeing with no countdown until the GM clears it or the
-creature rallies. Stunned shows what is left (on the token, the sheet and the panel) with a chat line each time it pays down,
-and an adjust corrects that number without restarting the stun. A Hasted creature loses its Haste action last, and a big
-stun eats it (Stunned 4 with Haste is the whole turn). A fear the translator made from a pf1 condition ends when that
-condition ends, unless the GM raised it, and pf1's own Shaken icon goes when the Frightened it made runs out. No macro
-changes; nothing to re-paste. See the [changelog](#changelog).
+**Out of turn.** Off your turn, every spell and every consumable now spends your Reaction — a counterspell or a readied
+spell included, and a potion, scroll or wand too. With no Reaction left the use is warned and the GM gets a card; it is
+never blocked, and the GM rules. A boss's Legendary or Lair action costs nothing: the GM declares it with the new **Boss
+Action** macro. A contingency or a Legacy ability's spell is exempt through the `reactionFree` flag on the item (the
+sheet's Advanced tab, Boolean Flags). **Administer Potion** charges the giver three actions on their own turn for feeding a
+potion to a creature that cannot drink it. Table note: an off-turn scroll is legal only if it was already in hand — the
+module charges the Reaction, the GM rules. **Two macros to paste** (Boss Action, GM-only; Administer Potion, every player);
+nothing to re-paste. See the [changelog](#changelog).
 
 ---
 
@@ -54,6 +55,8 @@ documents from a module's files. You must place each one manually:
 | `total-defense.js` | Total Defense |
 | `withdraw.js` | Withdraw |
 | `delay.js` | Delay |
+| `boss-action.js` | Boss Action (GM-only) |
+| `administer-potion.js` | Administer Potion |
 
 **Two-Weapon Fighting is per-character**: `twf-tier-aware.js` hardcodes an actor name and two
 weapon item IDs near the top of the file. Copy the file's contents per dual-wielding character,
@@ -187,6 +190,38 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.48.0 — Out of Turn
+
+TD-98 (off-turn casting, items 1 to 5) with R-2 and rider r1. No canon change: Michael's off-turn policy of 2026-10-11
+reaches the one branch of the spend hook that still said "not charged". **Two world macros to paste:** Boss Action
+(GM-only) and Administer Potion (every player); nothing is re-pasted (see the v2.48.0 sync note in `macros/README.md`,
+`SYNC_STAMP` `2026-10-28`).
+
+- **One off-turn cast rule (TD-98 items 1 to 3, F-A-16, A6, A7).** Off turn, every spell that is not already an immediate
+  spell, and every consumable (potion, scroll, wand, staff, poison, drug, rod, other), spends the general Reaction and no
+  action — never a Combat Reflexes pip. A counterspell is an off-turn cast, so it is covered with no Ready tracking. With
+  no Reaction left the use is warned and carded and never blocked; a successful spend posts nothing. A creature that is
+  Delaying is off turn and pays the Reaction like any other.
+- **A refusal says so to the GM (R-2, Q5).** Every refusal where the Reaction was asked for and was not there — an off-turn
+  spell or consumable, an immediate spell on turn or off — toasts the caster as before (a consumable "use" instead of
+  "cast") and posts one GM-whispered card naming the item and why (the gate's reason, else "none left"). No card while no GM
+  is connected.
+- **Boss Action (TD-98 item 4, R-3a).** The GM-only macro declares a Legendary or Lair action for the selected creature; its
+  next action use, on turn or off, charges nothing (no action, no Reaction, no Combat Reflexes pip) and cards the GM. The
+  declaration is spent on whatever the next use is. Legendary warns, and never refuses, when the creature cannot act fully or
+  is on its own turn; Lair checks nothing.
+- **The `reactionFree` item flag (TD-98 item 4, R-3b).** A GM-set boolean flag on a spell or consumable (sheet: Advanced,
+  Boolean Flags): the item never spends the Reaction. Off turn its use charges nothing and cards the GM; on its own turn an
+  immediate spell carrying it charges nothing and cards the GM too, while any other use still costs its actions. For a
+  contingency or a Legacy ability's spell.
+- **Administer Potion (TD-98 item 5, R-4, Q6).** The giver uses a potion or oil on its own turn at a cost of three actions
+  (draw, kneel, administer), with three normal actions free (the Haste action does not count); the chat says so and that it
+  provokes. Off turn or short of actions it refuses and nothing is used or charged.
+- **Table note (Q2).** An off-turn scroll is legal only if it was already in hand; the module charges the Reaction either
+  way and the GM rules.
+- **Two stale lines corrected (r1).** The v2.37.7 entry's "off-turn consumable use is still not charged" and the v2.41.0
+  entry's "Fleeing is not automated" each gain a closing note pointing at what changed.
 
 ### v2.47.1 — The Turn After
 
@@ -630,7 +665,7 @@ appears on an actor, the module applies the Ledger condition canon assigns it, o
 - **Not yet (1.7c).** *Panicked* gives Frightened 3 but **Fleeing is not automated** — the card and a GM
   whisper say so, and it is adjudicated by hand. Off-Guard is not yet derived from pf1's own statuses
   (Flat-Footed, Paralyzed, Cowering, Pinned), and Deaf, Dazzled and every other status pf1 keeps are not
-  translated.
+  translated. *(Since v2.42.0 Fleeing and Off-Guard are automated; see v2.42.0.)*
 - **Ledger Paralyzed and Deafened set pf1's own status.** Their own Dex −20 and initiative −4 are retired
   as second writers; applying either from the panel or the API now also sets pf1's `paralyzed` (Dex 0,
   Str 0) or `deaf` (initiative −4) when it is not already set, and removing the Ledger condition clears
@@ -835,7 +870,7 @@ anyone ever having to edit a second table. Before this release all three cost no
 item was really consumed; a consumable subtype the module doesn't recognize warns once and charges
 the standard 2 rather than staying silent, the same disposition an unrecognized spell casting time
 already gets. Off-turn consumable use is still not charged, as before -- only debug text, mirroring
-how an off-turn spell has always been handled.
+how an off-turn spell has always been handled. *(Changed in v2.48.0: off turn, a consumable spends the Reaction.)*
 
 **Twelve more skills are auto-spendable in combat**: Climb, Swim, Fly, Escape Artist, Ride, Handle
 Animal, Sense Motive, Spellcraft, Survival, Perform, Lore, and Artistry, each 1 action, joining the
