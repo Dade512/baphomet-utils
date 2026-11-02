@@ -2,7 +2,7 @@
  * baphomet-utils — PF1.5 BOSS ACTION declare macro (GM-only, token-driven)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/boss-action.js
- *   SYNC_STAMP: 2026-10-28
+ *   SYNC_STAMP: 2026-11-01
  *   The in-world Foundry macro "Boss Action" must be kept byte-identical to this
  *   file. After editing either copy, sync the other and bump SYNC_STAMP. Drift
  *   check: see README.md here.
@@ -14,10 +14,13 @@
  *   posts one GM-whispered card naming the item. The module charges an off-turn
  *   spell or consumable the Reaction; a boss's Legendary or Lair action does not
  *   owe it, and the module cannot tell the two apart without this declaration.
- *   It sets globalThis.baphometBossAction = { actorUuid, kind } (kind
- *   'legendary' or 'lair'); the tracker consumes it at the next use, whatever
- *   that use is. There is no finally: a declaration nobody uses stays until the
- *   next use or the next declaration (which replaces it) or a page reload.
+ *   It sets globalThis.baphometBossAction = { actorUuid, kind, combatId, round }
+ *   (kind 'legendary' or 'lair'; combatId and round are the active combat's id
+ *   and round, or null outside combat); the tracker consumes it at the next use,
+ *   whatever that use is. A declaration is spent on the next use, dropped
+ *   silently when stale (from another combat, or more than one round old), and
+ *   cleared at the boss's own turn start (v2.48.1); a replacement declaration
+ *   or a page reload also clears it.
  *
  * WARNS (never refuses - the GM rules, H:512 / H:509): Legendary only - when the
  *   creature cannot act fully (Stunned, a no-action state, Nauseated) or when it
@@ -75,7 +78,9 @@
   }
 
   // 5) declare (replaces any earlier declaration); the action tracker consumes it at the next use
-  globalThis.baphometBossAction = { actorUuid: actor.uuid, kind };
+  //    v2.48.1: the declaration carries the combat and round it was made in, so a stale one can expire.
+  const active = game.combats?.active ?? null;
+  globalThis.baphometBossAction = { actorUuid: actor.uuid, kind, combatId: active?.id ?? null, round: active?.round ?? null };
   const label = kind === 'legendary' ? 'Legendary' : 'Lair';
   ui.notifications.info(`Boss Action: ${label} action declared for ${actor.name} — its next action use charges nothing.`);
 })();

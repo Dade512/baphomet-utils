@@ -1171,6 +1171,7 @@ async function applyCondition(actor, condKey, tier, options = {}) {
     if (!existing.system.active) {
       await existing.setActive(true);
     }
+    await _baphSyncBuffEffectName(existing);
     await _stampChangesAt(existing); // v2.43.0 FIX-10 (B-1): the last write to the buff
   } else {
     const changes = cond.buildChanges(tier);
@@ -1313,11 +1314,28 @@ async function removeCondition(actor, condKey) {
 // and tier flag at `value`. Stunned writes no `system.changes` (`buildChanges` returns []), so no `_stampChangesAt`
 // is owed. It never writes `stunnedAppliedAt`.
 async function _baphStunnedShow(buff, value) {
-  return buff.update({
+  const updated = await buff.update({
     name: _buffName('stunned', value),
     'system.description.value': _conditionCardHtml(CONDITIONS.stunned, value),
     [`flags.${MODULE_ID}.tier`]: value,
   });
+  await _baphSyncBuffEffectName(buff); // v2.48.1 FIX-4 (TD-108 (i); R-4): the token tooltip follows the buff
+  return updated;
+}
+
+// v2.48.1 FIX-4 (TD-108 (i), F-AT-1; R-4, Q6; T-9, T-10): pf1 names a buff's tracking ActiveEffect from the Item when it
+// creates it and refreshes it only when `system.active` changes, so an Item rename never reaches the effect and the
+// token tooltip keeps the first name. This renames the effect to the buff's current name - name only, `img` is never
+// written. `buff.effect` is absent while the buff is inactive (the guard). The effect is the buff's own embedded
+// document, so whoever may update the buff may rename it; a name-only effect update fires no `pf1ToggleActorBuff`.
+// A failed cosmetic rename warns and never throws, so it cannot stop `applyCondition` or the engine's pay-down.
+async function _baphSyncBuffEffectName(buff) {
+  try {
+    const eff = buff?.effect;
+    if (eff && eff.name !== buff.name) await eff.update({ name: buff.name });
+  } catch (e) {
+    console.warn(`${MODULE_ID} | could not rename the tracking effect of "${buff?.name}":`, e);
+  }
 }
 
 // v2.47.1 FIX-4 (F-C-05; R-3, Q3, trap T-2): an adjust of Stunned corrects the countdown in place — it never goes
@@ -1484,6 +1502,7 @@ function _buildTieredRow(actor, key, cond) {
     if (currentTier === 0) btnHold.classList.add('disabled');
     btnHold.addEventListener('click', async (e) => {
       e.stopPropagation();
+      if (currentTier === 0) return; // v2.48.1 FIX-6 (r2): no Fleeing, nothing to hold
       await setConditionHold(actor, 'fleeing', !holdOn);
       _refreshPanel(e.target);
     });
@@ -2642,9 +2661,6 @@ const _TRANSLATOR_PF1_NAMES = Object.freeze({
   shaken: 'Shaken', frightened: 'Frightened', panicked: 'Panicked', sickened: 'Sickened',
   stunned: 'Stunned', blind: 'Blind', staggered: 'Staggered', disabled: 'Disabled', nauseated: 'Nauseated',
 });
-
-// Ledger conditions that count themselves down: R-B never releases these.
-const _TRANSLATOR_SELF_DECREMENTING = Object.freeze(['frightened', 'stunned', 'fleeing']);
 
 const _TRANSLATOR_LOG_MAX = 50;
 
