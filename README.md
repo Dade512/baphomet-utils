@@ -3,20 +3,18 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.48.0 — *Out of Turn*
+**Current Version:** 2.48.1 — *Spell It Out*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Out of turn.** Off your turn, every spell and every consumable now spends your Reaction — a counterspell or a readied
-spell included, and a potion, scroll or wand too. With no Reaction left the use is warned and the GM gets a card; it is
-never blocked, and the GM rules. A boss's Legendary or Lair action costs nothing: the GM declares it with the new **Boss
-Action** macro. A contingency or a Legacy ability's spell is exempt through the `reactionFree` flag on the item (the
-sheet's Advanced tab, Boolean Flags). **Administer Potion** charges the giver three actions on their own turn for feeding a
-potion to a creature that cannot drink it. Table note: an off-turn scroll is legal only if it was already in hand — the
-module charges the Reaction, the GM rules. **Two macros to paste** (Boss Action, GM-only; Administer Potion, every player);
-nothing to re-paste. See the [changelog](#changelog).
+**Spell it out.** A creature that cannot act — Paralyzed, Dazed, unconscious and the rest — is now told why when it tries to
+attack, cast or use an item on its turn, and the GM gets one card naming the condition; nothing is charged and the GM
+rules. Withdraw refuses such a creature and leaves its pips alone, and every Withdraw refusal is explained once, by the
+module. A Hasted creature that starts its turn unable to act loses the Haste action for that turn, even if the condition
+ends. The token's status tooltip follows a Ledger condition's current number, and a Boss Action nobody used expires.
+**Two macros to re-paste** (Withdraw, every player; Boss Action, GM-only). See the [changelog](#changelog).
 
 ---
 
@@ -190,6 +188,32 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.48.1 — Spell It Out
+
+TD-108 (a), (b), (c), (h), (i) with riders r1 and r2. No canon change: every refusal the GM meets now says why. **Two world
+macros to re-paste:** Withdraw (every player) and Boss Action (GM-only) — open the existing macro, replace its command, keep
+its id and owner (see the v2.48.1 sync note in `macros/README.md`, `SYNC_STAMP` `2026-11-01`).
+
+- **A creature that cannot act is told so (TD-108 (a)).** On its own turn, a Paralyzed, Dazed, unconscious or otherwise
+  no-action creature's attack, spell or consumable is toasted with the condition ("cannot act"), the GM gets one card naming
+  it, nothing is charged and the roll is never blocked; the GM rules. It is checked before Nauseated, so a creature both
+  Paralyzed and Nauseated is carded once, as Paralyzed. The §14 card reads "Not charged (Paralyzed)", and the action panel's
+  Spend buttons name the same condition. A creature merely out of actions still hears "no actions left".
+- **Withdraw refuses such a creature (TD-108 (b)).** A creature that cannot act at all, even one stricken mid-turn, is
+  refused with its condition named; nothing changes and its pips stay for the GM.
+- **One voice (TD-108 (c)).** The module explains every Withdraw refusal once: the condition, "needs at least one normal
+  action; you may Move", or "had no remaining actions to spend — nothing changed". The macro no longer adds its own line.
+- **A Haste action lost at the turn start stays lost (TD-108 (h)).** A Hasted creature that starts its turn unable to act
+  loses the Haste action with the rest; if the condition ends mid-turn the action is not handed back (the pip reads "lost
+  (incapacitated at turn start)"). The next turn start gives it back. A condition that lands mid-turn still only suppresses.
+- **The token tooltip follows the buff (TD-108 (i)).** A Ledger condition's tracking effect is renamed with the buff on
+  every Stunned pay-down or adjust and every tier change, so the tooltip shows "Stunned 12" where the sheet does. A buff
+  already stale keeps its old name until its next change.
+- **A forgotten Boss Action expires (r1).** The declaration now carries its combat and round. An unused one is dropped,
+  silently, after more than a round or in another combat, and is cleared at the boss's own turn start. A comment and the
+  v2.48.0 development note were corrected, an unreferenced constant was removed, and the Fleeing hold button does nothing
+  on a creature with no Fleeing (r2).
 
 ### v2.48.0 — Out of Turn
 

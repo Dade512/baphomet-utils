@@ -63,17 +63,20 @@ one-off tool, not a runtime-dependency macro, and stays out of scope for this re
 - `withdraw.js` — **Withdraw** (token-driven, no feat gate — universal, `GOAL_v2.37.8`).
   Declares Withdraw and zeroes **all remaining actions**, including a live Haste bonus pip,
   via `game.baphometActions.endTurnActions`. Refuses outright, with no spend, on a creature
-  carrying an active Fleeing marker buff.
+  carrying an active Fleeing marker buff. Since v2.48.1 the macro says nothing of its own on a refusal: the module
+  refuses a creature that cannot act (Paralyzed, Dazed, …) with the condition named, and explains the Haste-pip-only
+  and nothing-left refusals itself.
 - `delay.js` — **Delay** (token-driven, no feat gate — universal, `GOAL_v2.46.1`). Declares Delay: asks the module
   (`game.baphometActions.declareDelay`, relayed through the GM from a player) to mark the creature as delaying, then
   passes the turn. Refuses, with no request and no turn change, a creature that is not in the active combat, is not the
   current combatant, or already Delayed this round. Nothing refreshes when the creature acts later in the round; its
   Frightened and Fleeing countdowns run once, when the delayed turn ends (or at the wrap, if it never acts).
 - `boss-action.js` — **Boss Action** (**GM-only**, token-driven, `GOAL_v2.48.0`). Declares a **Legendary** or **Lair**
-  action for the selected creature (two buttons). Sets `globalThis.baphometBossAction = { actorUuid, kind }`; the
-  creature's **next action use**, on turn or off, charges nothing (no action, no Reaction, no Combat Reflexes pip) and
-  posts one GM card. Legendary warns (never refuses) when the creature cannot act fully or is the current combatant;
-  Lair checks nothing. The declaration is spent on whatever the next use is.
+  action for the selected creature (two buttons). Sets `globalThis.baphometBossAction = { actorUuid, kind, combatId,
+  round }` (v2.48.1 added the last two); the creature's **next action use**, on turn or off, charges nothing (no action, no
+  Reaction, no Combat Reflexes pip) and posts one GM card. Legendary warns (never refuses) when the creature cannot act
+  fully or is the current combatant; Lair checks nothing. The declaration is spent on whatever the next use is; one
+  unused expires silently after the next round or in another combat, and is cleared at the boss's own turn start.
 - `administer-potion.js` — **Administer Potion** (token-driven, every player, `GOAL_v2.48.0`). The selected token is the
   giver: on its own turn, with three normal actions free, it uses one of its potions or oils at a cost of **3 actions**
   (draw, kneel, administer) and posts one chat line that this provokes. Off turn, or with fewer than 3 normal actions,
@@ -126,6 +129,18 @@ name and the two weapon item IDs near the top, and create a separate in-world ma
    console.log(norm(repo) === norm(world) ? 'TWF macro: IN SYNC' : 'TWF macro: DRIFT — world ≠ repo');
    ```
 
+### v2.48.1 sync note — re-paste two
+
+`withdraw.js` and `boss-action.js` changed in v2.48.1 (`SYNC_STAMP` `2026-11-01`). Withdraw no longer warns on its own: the
+module explains every refusal once. A creature that cannot act at all (Paralyzed, Dazed, unconscious and the rest) is refused
+with its condition named and nothing changes. Boss Action now stamps the active combat's id and round on its declaration, so
+a declaration nobody used expires after the next round, in another combat, or at the boss's own turn start. After updating the
+module, **re-paste each of the two world macros in place** (open the existing macro and replace its command; keep its id and
+owner — **Withdraw** is run by every player, **Boss Action** is GM-only), then run the drift check above for each
+(`withdraw.js` / `Withdraw`, `boss-action.js` / `Boss Action`). A world macro that is not re-pasted keeps working: an old
+Withdraw adds its own "had no remaining actions to spend" line beside the module's, and an old Boss Action declaration (no
+combat or round) is honoured as before, without the expiry.
+
 ### v2.48.0 sync note — paste two
 
 `boss-action.js` and `administer-potion.js` are new in v2.48.0 (`SYNC_STAMP` `2026-10-28`). After updating the module,
@@ -172,6 +187,10 @@ edit. A future deployment/sync mechanism is out of scope for this milestone.
 
 ## History
 
+- **v2.48.1** — `withdraw.js` and `boss-action.js` (`GOAL_v2.48.1_SPELL_IT_OUT` FIX-2, FIX-5): Withdraw calls
+  `endTurnActions` and says nothing itself, because the module now explains every refusal (a creature that cannot act, "needs
+  at least one normal action", "had no remaining actions to spend"); Boss Action stamps the combat and round on its
+  declaration so a stale one expires. Both `SYNC_STAMP` `2026-11-01`. Re-paste two world macros (see the v2.48.1 sync note above).
 - **v2.48.0** — New `boss-action.js` (GM-only) and `administer-potion.js` (`GOAL_v2.48.0_OFF_TURN_CASTING` FIX-3,
   FIX-4): Boss Action declares a Legendary or Lair action whose next use charges nothing; Administer Potion charges
   the giver 3 actions on its own turn. Both `SYNC_STAMP` `2026-10-28`. Paste two new world macros; no other macro changed.

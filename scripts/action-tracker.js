@@ -1440,6 +1440,15 @@ function _applyConditionLocks(combatantId, actor) {
     state.reaction = [false];
     state.reflexPip = state.reflexPip.map(() => false);
     state.conditionLocked = 3;
+    // v2.48.1 FIX-3 (TD-108 (h); R-3, Q5; T-7, T-8): a Hasted creature incapacitated at its turn start loses the
+    // Haste action with the rest, and it stays lost for the turn when the condition ends (as Stunned's does; the
+    // pip is never re-granted in the turn, `_reconcileBonusPip`). The pip's value changes, never the array's
+    // length, so the turn start's `available` is unchanged (ruling 3). A condition landing mid-turn does not come
+    // through here: it only suppresses the pip at use.
+    if (Array.isArray(state.bonusPip) && state.bonusPip.length > 0) {
+      state.bonusPip = [false];
+      state.bonusLocked = true;
+    }
     return;
   }
 
@@ -1728,6 +1737,14 @@ async function _baphEngineTurnStart(combat, combatantId, at, seq) {
       // v2.47.0 FIX-5 (R-4): a new turn clears the Haste pip's spent-this-turn mark. Here, after the body and
       // before the flag write below, never inside the protected body.
       state.bonusSpentThisTurn = false;
+      // v2.48.1 FIX-5 (r1; R-5, Q4): the boss's own turn start forgets its Boss Action declaration (a Legendary
+      // action never falls on the boss's own turn; a Lair action declared and unused is forgotten). Here, after
+      // the body, never inside the protected body; this runs on the active GM's page, where the GM-only macro
+      // sets the global.
+      if (_baphIntentMatches(globalThis.baphometBossAction, combatant.actor)) {
+        globalThis.baphometBossAction = null;
+        _debugLog(`turn start: Boss Action declaration for "${combatant.actor.name}" cleared at its own turn start`);
+      }
       _stampActiveCombatantBreadcrumb(combat, combatantId, at);
       _refreshPipRow(combatantId);
 
@@ -2280,9 +2297,12 @@ function _buildPipRow(combatantId, isOwner) {
         pip.classList.add('condition-locked');
         pip.title = 'Bonus action — suppressed (incapacitated)';
       } else if (state.bonusLocked === true) {
-        // v2.47.1 FIX-5: a Stunned loss above 3 took the Haste action last.
+        // v2.47.1 FIX-5: a Stunned loss above 3 took the Haste action last. v2.48.1 FIX-3 (Q5): or the creature
+        // was incapacitated at its turn start - one boolean, two titles, read live from the Stunned countdown.
         pip.classList.add('condition-locked');
-        pip.title = 'Bonus action — lost (Stunned)';
+        pip.title = _baphStunnedCountdownOf(_bonusActor) > 0
+          ? 'Bonus action — lost (Stunned)'
+          : 'Bonus action — lost (incapacitated at turn start)';
       } else if (!available) {
         pip.classList.add('spent');
       }
@@ -2727,7 +2747,8 @@ Hooks.once('ready', () => {
         // neither the engine combat nor the viewed one). The fields above keep reporting the raw pools.
         reactionGate:          _baphGateReasonFor(combatantId, 'reaction'),
         reflexGate:            _baphGateReasonFor(combatantId, 'reflex'),
-        // GOAL_v2.47.1 FIX-5: read-only. True while a Stunned loss above 3 holds the Haste pip locked this turn.
+        // GOAL_v2.47.1 FIX-5: read-only. True while the Haste pip is held locked this turn. v2.48.1 FIX-3: covers both
+        // causes - a Stunned loss above 3, and incapacitation at the turn start.
         bonusLocked:           state.bonusLocked === true
       };
     },
@@ -3797,6 +3818,21 @@ function _endTurnActionsCore(combatantId) {
   const state = _getState(combatantId);
   if (!state) return false;
 
+  // v2.48.1 FIX-2 (TD-108 (b), (c); R-2, T-5): the three resolution lines moved up, unchanged, so the refusal
+  // below runs before any read of state.actions.
+  const reqCombat = _baphEngineCombat();
+  const withdrawCombatant = reqCombat?.combatants?.get(combatantId);
+  const actor = withdrawCombatant?.actor;
+
+  // v2.48.1 FIX-2 (R-2, Q2; T-5): a creature that cannot act at all (the no-action set) cannot Withdraw. Refused
+  // with the condition named, before any mutation and before the no-GM check (there is nothing to relay); the
+  // pips stay for the GM.
+  const _wdWhy = _baphNoActionReason(actor);
+  if (_wdWhy) {
+    ui.notifications?.warn?.(`${withdrawCombatant?.name ?? actor?.name ?? 'This creature'}: ${_wdWhy} — cannot Withdraw; nothing changed.`);
+    return false;
+  }
+
   const normalIdxs = [];
   for (let i = 0; i < 3; i++) {
     if (state.actions[i] && i >= state.conditionLocked) normalIdxs.push(i);
@@ -3807,17 +3843,18 @@ function _endTurnActionsCore(combatantId) {
   // never mutate bonusPip. Derive incap the same way _spendActionCore
   // already does at its own call site (:2578-2579); do not invent a new
   // reader.
-  const reqCombat = _baphEngineCombat();
-  const withdrawCombatant = reqCombat?.combatants?.get(combatantId);
-  const actor = withdrawCombatant?.actor;
   const incap = !!_readConditionActionLoss(actor).fullyIncapacitated;
   const bonusAvail = !incap && Array.isArray(state.bonusPip) && state.bonusPip[0] === true;
   if (normalIdxs.length === 0) {
     // v2.47.0 FIX-5 (R-4, A3, Q6): Withdraw needs at least one NORMAL action; the Haste pip alone does not
-    // pay for it. Nothing is spent. With the Haste pip live one warning says why; with nothing at all the
-    // caller (the macro) says so.
+    // pay for it. Nothing is spent. v2.48.1 FIX-2 (R-2, Q3): the module explains both refusals itself - with the
+    // Haste pip live, why a normal action is needed; with nothing at all, that nothing was left. The macro says
+    // nothing on a `false`.
+    const _wdWho = withdrawCombatant?.name ?? actor?.name ?? 'This creature';
     if (bonusAvail) {
-      ui.notifications?.warn?.(`${withdrawCombatant?.name ?? actor?.name ?? 'This creature'}: Withdraw needs at least one normal action; you may Move.`);
+      ui.notifications?.warn?.(`${_wdWho}: Withdraw needs at least one normal action; you may Move.`);
+    } else {
+      ui.notifications?.warn?.(`${_wdWho} had no remaining actions to spend — nothing changed.`);
     }
     return false;
   }
@@ -5496,6 +5533,35 @@ function _baphNauseatedUse(actor, item, isCast) {
   }
 }
 
+// v2.48.1 FIX-1 (TD-108 (a); R-1): a creature in the no-action set (`_baphNoActionReason`) may not act on its own
+// turn. Same shape as `_baphNauseatedUse`: the use charges nothing, toasts the user's seat with the condition, and
+// posts one GM-whispered card (none while no GM is connected); the roll is never blocked - the GM rules, including
+// voiding the result. `why` is the label `_baphNoActionReason` returned ('Paralyzed', 'Dazed', …).
+function _baphNoActionUse(actor, item, why) {
+  try {
+    ui.notifications?.warn?.(`${actor.name}: ${why} — cannot act — ${item.name} not charged. The GM rules.`);
+    if (!game.users?.activeGM) return;
+    const safeActorName = foundry.utils.escapeHTML(actor.name);
+    const safeItemName = foundry.utils.escapeHTML(String(item.name));
+    const safeWhy = foundry.utils.escapeHTML(String(why));
+    ChatMessage.create({
+      content:
+        `<p><strong>${safeWhy} — cannot act:</strong> ${safeActorName} used ${safeItemName} while ${safeWhy} `
+        + `— not charged. The GM rules, including voiding the result.</p>`,
+      speaker: ChatMessage.getSpeaker({ actor }),
+      whisper: ChatMessage.getWhisperRecipients('GM'),
+      flags: { 'baphomet-utils': { noActionUse: true } }
+    }).catch((err) => {
+      console.warn(
+        `baphomet-utils | no-action card failed to post for "${actor.name}" — `
+        + `handled here, not thrown. Nothing was charged and the roll was never blocked.`, err
+      );
+    });
+  } catch (e) {
+    console.warn('baphomet-utils | no-action notice failed:', e);
+  }
+}
+
 // v2.47.0 FIX-8 (r1; R-8, Q10): the §14 skip-dialog escape card, posted from the handler's finally AFTER the
 // charge decision, so its bold sentence says what was actually charged. `card` is { swingCount, onTurn };
 // `decision` is { kind: 'action' | 'jade' | 'reaction' | 'none', reason? }. Not posted while no GM is connected.
@@ -5809,6 +5875,19 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // next action use by that actor, on turn or off, charges nothing: no action, no Reaction, no jade. Spent on the
     // next use whatever it is (the card names that item). Placed after the dedupe (T-2), the AoO intent's
     // consumption and the unstarted-combat gate, before the on/off-turn branch.
+    // v2.48.1 FIX-5 (r1; R-5, Q4; T-11): a stale declaration is dropped silently (no toast, no card) and the use
+    // is charged as usual - it is from another combat, or more than one round old. `round + 1` tolerates a
+    // declaration made in the previous round. An intent with no `combatId` key (a world macro not yet re-pasted)
+    // is honoured as before (design call 3).
+    {
+      const _staleBoss = globalThis.baphometBossAction;
+      if (_staleBoss && _baphIntentMatches(_staleBoss, actor) && Object.prototype.hasOwnProperty.call(_staleBoss, 'combatId')
+        && (_staleBoss.combatId !== _engineCombatNow?.id
+          || (Number(_engineCombatNow?.round) || 0) > (Number(_staleBoss.round) || 0) + 1)) {
+        globalThis.baphometBossAction = null;
+        _debugLog(`auto-spend: stale Boss Action declaration for "${actor.name}" dropped — not honoured`);
+      }
+    }
     const _bossIntent = globalThis.baphometBossAction;
     if (_baphIntentMatches(_bossIntent, actor) && (_bossIntent.kind === 'legendary' || _bossIntent.kind === 'lair')) {
       const _bossKind = _bossIntent.kind;
@@ -5824,6 +5903,19 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       if (!_canUserControlCombatant(activeCombatant)) {
         _debugLog(`auto-spend: user cannot control "${actor.name}" — no spend`);
         _chargeDecision = { kind: 'none', reason: 'cannot control this creature' };
+        return;
+      }
+      // v2.48.1 FIX-1 (TD-108 (a); R-1, Q8; T-1, T-4): a creature in the no-action set cannot act on its own turn.
+      // Its attack, spell or consumable is toasted and carded with the condition, charges nothing and is never
+      // blocked. Placed before the Nauseated refusal (a creature both Paralyzed and Nauseated is carded once, as
+      // Paralyzed) and so before the immediate-spell carve-outs below. `_chargeDecision` carries the condition so
+      // the §14 card names it (T-4). A routine use still marks the routine paid, as a refused spend does.
+      const _noActionWhy = _baphNoActionReason(actor);
+      if (_noActionWhy) {
+        _baphNoActionUse(actor, item, _noActionWhy);
+        if (_routineUse && _routineState) _routineState.routinePaid = true;
+        _debugLog(`auto-spend: "${actor.name}" cannot act (${_noActionWhy}) — "${item.name}" warned, carded, not charged`);
+        _chargeDecision = { kind: 'none', reason: _noActionWhy };
         return;
       }
       // v2.47.0 FIX-3 (TD-96 item 3; A1, Q3, F-3): a Nauseated creature's attack, spell, or scroll / wand /
@@ -5899,9 +5991,10 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       // spends the Reaction here too — the archetypal immediate-action spell
       // use (Feather Fall, a readied counterspell) is off-turn. Self-
       // contained: resolved and RETURNS here, before the shared attack/AoO
-      // path below — that path never sees a spell. Any other spell is still
-      // not charged, as before; this narrows the old !isAttack early return
-      // rather than removing it.
+      // path below — that path never sees a spell. Since v2.48.0 FIX-1 every
+      // other spell and consumable spends the Reaction too (the block below);
+      // the reaction-cost spell is carved out first because the same carve-out
+      // applies on turn (v2.48.1 FIX-6).
       if (isSpell && _isReactionCostSpell(actionUse)) {
         const ownForSpell = _getCombatantForActor(actor);
         if (!ownForSpell) {
@@ -6192,7 +6285,11 @@ function _buildActionSpendButton(cost, label, hint, reason) {
 
     if (!spent) {
       _debugLog(`Action panel: failed — not enough actions for ${active.name}, needed ${cost}`);
-      ui.notifications?.warn?.(`${active.name} does not have enough actions.`);
+      // v2.48.1 FIX-1 (TD-108 (a); R-1): a creature that cannot act at all hears the condition, not a shortfall.
+      const _panelWhy = _baphNoActionReason(active.actor);
+      ui.notifications?.warn?.(_panelWhy
+        ? `${active.name}: ${_panelWhy} — cannot act; nothing spent.`
+        : `${active.name} does not have enough actions.`);
       _refreshPipRow(active.id);
       return;
     }
