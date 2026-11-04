@@ -2,7 +2,7 @@
  * baphomet-utils — PF1.5 CHARGE declare macro (token-driven)
  * ----------------------------------------------------------------------------
  * CANONICAL SOURCE OF TRUTH: macros/charge.js
- *   SYNC_STAMP: 2026-10-15
+ *   SYNC_STAMP: 2026-11-02
  *   The in-world Foundry macro "Charge" must be kept byte-identical to this file.
  *   After editing either copy, sync the other and bump SYNC_STAMP. Drift check:
  *   see README.md here.
@@ -36,6 +36,16 @@
  *   intent names the actor by uuid ({ actorUuid }). After updating the module, re-paste this file
  *   into the world macro in place (keep its id and owner) and run the drift check in
  *   macros/README.md.
+ *
+ * v2.48.2 — POUNCE (GOAL_v2.48.2 FIX-3, Q4): when the charging creature carries a feat named
+ *   "Pounce", the intent also carries `pounce: true` and the macro posts one notice. The module then
+ *   lets a routine-member weapon or natural attack roll its WHOLE listed line with pf1's `2[Charge]`
+ *   on every attack of that use, for 2 actions in all. The Pounce pays the creature's routine for
+ *   the turn and leaves it open: the creature's other routine attacks follow free, with no MAP, and
+ *   the GM adds the Charge's +2 by hand to the attacks of a split line (claws, bite, rakes as
+ *   separate items) that the Charge's own use did not roll. A creature without the feat charges
+ *   as before - one attack. The -2 AC buff below is unchanged. Re-paste this file into the world
+ *   macro in place and run the drift check in macros/README.md.
  *
  * TOKEN-DRIVEN: operates on the one selected token, so a single button serves
  *   every character. A Charge is a melee Strike preceded by movement — move the
@@ -85,8 +95,15 @@
     weapon = actor.items.get(chosenId) ?? weapon;
   }
 
+  // 3b) Pounce (GOAL_v2.48.2 FIX-3; Q4 (i)): a feat named /pounce/i - the same name test
+  //     vital-strike.js applies to /vital\s*strike/i. No feat -> today's one-attack Charge.
+  const pounce = actor.items.some((i) => i.type === "feat" && /pounce/i.test(i.name));
+  if (pounce) {
+    ui.notifications.info(`Charge: ${actor.name} pounces — the routine as a Charge (2 actions).`);
+  }
+
   // 4) declare intent (actor-scoped, per-invocation) -> roll -> clear by identity
-  const intent = { actorUuid: actor.uuid };
+  const intent = { actorUuid: actor.uuid, pounce };
   globalThis.baphometCharge = intent;
   let r;
   try {

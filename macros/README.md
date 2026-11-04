@@ -41,7 +41,13 @@ one-off tool, not a runtime-dependency macro, and stays out of scope for this re
   sets pf1's own `charge` option, so the attack reads **`2[Charge]`** (v2.46.0; it replaces the
   old `secondaryPenalty` +2) and rolls **one attack** at any base attack bonus; on a confirmed
   swing only, applies a **−2 AC** buff Item that auto-expires at the start of the actor's next
-  turn.
+  turn. **Pounce (v2.48.2):** when the charging creature carries a feat named *Pounce*, the intent
+  also carries `pounce: true` and the macro posts one notice; with a routine-member attack item the
+  Charge then rolls that item's **whole listed line** with pf1's `2[Charge]` on every attack of that
+  use, for 2 actions in all, and **pays the creature's routine for the turn without closing it** —
+  its other routine attacks follow free, with no MAP. The `2[Charge]` rides the charged use only:
+  when the line is split across items (claws, bite, rakes as separate items) the **GM adds the +2
+  by hand** to the others. No feat → one attack, as before.
 - `cleave.js` — **Cleave** (token-driven, post-kill, feat-gated `/cleave/i`). Sets
   `globalThis.baphometCleave = { actorUuid }` so `action-tracker.js` **skips** the action spend
   (0 actions, 0 swings, no MAP advance). From v2.46.0 it rolls **one attack**, carries the
@@ -129,6 +135,17 @@ name and the two weapon item IDs near the top, and create a separate in-world ma
    console.log(norm(repo) === norm(world) ? 'TWF macro: IN SYNC' : 'TWF macro: DRIFT — world ≠ repo');
    ```
 
+### v2.48.2 sync note — re-paste one
+
+`charge.js` changed in v2.48.2 (`SYNC_STAMP` `2026-11-02`). It now notices a feat named *Pounce* on the charging creature: the
+intent carries `pounce: true` and the macro posts one notice ("Charge: <name> pounces — the routine as a Charge (2 actions)."),
+so the module rolls a routine member's whole line on the Charge, pays the routine and leaves it open (the rest of a split line
+is free; the GM adds the Charge's +2 by hand to the attacks the Charge's own use did not roll). Nothing else in the macro
+changed — the −2 AC buff, the picker and the one-attack Charge for a creature without the feat are as before. After updating
+the module, **re-paste the world macro in place** (open the existing **Charge** macro and replace its command; keep its id and
+owner), then run the drift check above (`charge.js` / `Charge`). A world Charge that is not re-pasted keeps working as a
+one-attack Charge for everyone, a pouncer included: the old intent carries no `pounce` field, so no Pounce is declared.
+
 ### v2.48.1 sync note — re-paste two
 
 `withdraw.js` and `boss-action.js` changed in v2.48.1 (`SYNC_STAMP` `2026-11-01`). Withdraw no longer warns on its own: the
@@ -187,6 +204,9 @@ edit. A future deployment/sync mechanism is out of scope for this milestone.
 
 ## History
 
+- **v2.48.2** — `charge.js` (`GOAL_v2.48.2_WHAT_THE_LINE_LISTS` FIX-3): detects a feat named *Pounce* and declares it in the
+  intent (`pounce: true`) with one notice, so a pouncer's Charge rolls a routine member's whole line and pays the routine.
+  `SYNC_STAMP` `2026-11-02`. Re-paste one world macro (see the v2.48.2 sync note above).
 - **v2.48.1** — `withdraw.js` and `boss-action.js` (`GOAL_v2.48.1_SPELL_IT_OUT` FIX-2, FIX-5): Withdraw calls
   `endTurnActions` and says nothing itself, because the module now explains every refusal (a creature that cannot act, "needs
   at least one normal action", "had no remaining actions to spend"); Boss Action stamps the combat and round on its

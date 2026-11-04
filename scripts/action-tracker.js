@@ -818,6 +818,10 @@ function _baphIntentMatches(intent, actor, isTwf = false) {
 // to 0 on every roll as soon as the actor is known and overwrites it only with a penalty it adds; the
 // pf1PreActionUse record step reads it (a missing value reads as 0) and clears it.
 const _baphMapAdded = new Map();     // actorUuid -> number (0 or negative)
+// v2.48.2 FIX-1 (R-2): the use-level routine tally. The MAP hook (per roll) classifies every on-turn roll of a routine
+// member and counts it here under its class; pf1PreActionUse (once per use, after every roll) reads and deletes it for
+// every attack use, whatever path the use takes. actorUuid -> { itemId, routine, repeat, after, declared, pounce }.
+const _baphRoutineUseTally = new Map();
 // FIX-4: the cleaver's most recent attack use - { combatId, mapPenalty, powerAttack, charge }. Cleared at
 // that actor's own turn start (the turn engine's turn start). A record from another combat reads as none.
 const _baphCleaveRecord = new Map(); // actorUuid -> record
@@ -894,6 +898,127 @@ function _baphReflexPips(reflexCount, reflexSpent, locked) {
   const n = Number.isFinite(Number(reflexCount)) ? Math.max(0, Math.floor(Number(reflexCount))) : 0;
   const spent = locked ? n : Math.min(Math.max(0, Math.floor(Number(reflexSpent) || 0)), n);
   return Array.from({ length: n }, (_, i) => i < n - spent);
+}
+
+/* ----------------------------------------------------------
+   v2.48.2 FIX-4 / FIX-6 (TD-99 (e), (g); R-4, R-7): the MAP and routine records
+   ride the pip flag. The GM is the only writer of the flag (T-4); a player's
+   records travel in the 'action' relay's `map` field or a 'mapRecord' relay.
+   Collections are stored as ARRAYS only (T-2): Foundry's document update merges
+   a nested object into the stored one, so an object keyed by item id would keep a
+   key a later write omits; an array replaces. A record is dated by `mapAt` (the
+   round it belongs to); `mapRev` is bumped only by the GM when it lowers or
+   clears the records (a manual refill, setSwings). See _baphMapMerge.
+   ---------------------------------------------------------- */
+
+// Whole number >= 0.
+function _baphMapWhole(v) { return Number.isInteger(v) && v >= 0; }
+
+// The records as the flag and the relay carry them. Arrays only (T-2).
+function _baphMapPack(state) {
+  const closed = state?.routineClosed;
+  return {
+    mapAt: _baphMapWhole(state?.mapAt) ? state.mapAt : null,
+    mapRev: _baphMapWhole(state?.mapRev) ? state.mapRev : 0,
+    swingsTaken: Math.max(0, Math.floor(Number(state?.swingsTaken) || 0)),
+    routineDone: Array.from(state?.routineDone ?? []).map((id) => String(id)),
+    routinePaid: state?.routinePaid === true,
+    routineClosed: closed
+      ? { id: String(closed.id ?? ''), name: String(closed.name ?? ''), why: closed.why === 'repeat' ? 'repeat' : 'weapon' }
+      : null,
+    routineRolls: Array.from(state?.routineRolls ?? [])
+      .filter(([id, n]) => id !== undefined && id !== null && _baphMapWhole(n))
+      .map(([id, n]) => [String(id), n]),
+  };
+}
+
+// Merges saved records (the flag, or a relay's `map`) into a state. Every saved field is type-checked and an
+// invalid field is ignored. A saved `mapAt` newer than the local one (or the local one null) adopts the saved
+// records whole; an older one is ignored; at an equal `mapAt` a higher saved `mapRev` adopts whole, a lower
+// one is ignored, and an equal one UNIONS (T-3): the larger swing count, the union of `routineDone`, `routinePaid`
+// either, `routineClosed` the local one else the saved one, `routineRolls` per item the larger - so a stale echo of
+// an earlier write never lowers a count inside a turn; only a newer `mapRev` may. Returns true when it changed
+// anything it was handed to look at.
+function _baphMapMerge(state, saved) {
+  if (!state || !saved || typeof saved !== 'object') return false;
+  const sAt = _baphMapWhole(saved.mapAt) ? saved.mapAt : null;
+  const sRev = _baphMapWhole(saved.mapRev) ? saved.mapRev : 0;
+  const lAt = _baphMapWhole(state.mapAt) ? state.mapAt : null;
+  const lRev = _baphMapWhole(state.mapRev) ? state.mapRev : 0;
+  // FIX-4 (round 2): a local `mapAt` of null adopts the saved records whole, whatever the saved `mapAt` (null included);
+  // otherwise an undated or older saved record is ignored, a newer one adopts, and an equal one goes by `mapRev`.
+  let mode;
+  if (lAt === null) mode = 'adopt';
+  else if (sAt === null || sAt < lAt) return false;
+  else if (sAt > lAt) mode = 'adopt';
+  else mode = sRev > lRev ? 'adopt' : (sRev < lRev ? 'ignore' : 'union');
+  if (mode === 'ignore') return false;
+
+  const sSwings = _baphMapWhole(saved.swingsTaken) ? saved.swingsTaken : null;
+  const sDone = Array.isArray(saved.routineDone)
+    ? saved.routineDone.filter((id) => typeof id === 'string' && id.length > 0) : null;
+  const sPaid = typeof saved.routinePaid === 'boolean' ? saved.routinePaid : null;
+  let sClosed; // undefined = the field is absent or invalid, null = a valid "open"
+  if (saved.routineClosed === null) sClosed = null;
+  else if (saved.routineClosed && typeof saved.routineClosed === 'object'
+           && typeof saved.routineClosed.id === 'string' && typeof saved.routineClosed.name === 'string'
+           && typeof saved.routineClosed.why === 'string') {
+    sClosed = { id: saved.routineClosed.id, name: saved.routineClosed.name, why: saved.routineClosed.why };
+  }
+  const sRolls = Array.isArray(saved.routineRolls)
+    ? saved.routineRolls.filter((e) => Array.isArray(e) && typeof e[0] === 'string' && e[0].length > 0 && _baphMapWhole(e[1]))
+        .map((e) => [e[0], e[1]])
+    : null;
+
+  if (!(state.routineDone instanceof Set)) state.routineDone = new Set();
+  if (!(state.routineRolls instanceof Map)) state.routineRolls = new Map();
+
+  if (mode === 'adopt') {
+    state.mapAt = sAt; // the saved value, null included
+    state.mapRev = sRev;
+    if (sSwings !== null) state.swingsTaken = sSwings;
+    if (sDone !== null) { state.routineDone.clear(); for (const id of sDone) state.routineDone.add(id); }
+    if (sPaid !== null) state.routinePaid = sPaid;
+    if (sClosed !== undefined) state.routineClosed = sClosed;
+    if (sRolls !== null) { state.routineRolls.clear(); for (const [id, n] of sRolls) state.routineRolls.set(id, n); }
+    return true;
+  }
+  // union (equal mapAt, equal mapRev)
+  if (sSwings !== null) state.swingsTaken = Math.max(Number(state.swingsTaken) || 0, sSwings);
+  if (sDone !== null) for (const id of sDone) state.routineDone.add(id);
+  if (sPaid === true) state.routinePaid = true;
+  if (!state.routineClosed && sClosed) state.routineClosed = sClosed;
+  if (sRolls !== null) {
+    for (const [id, n] of sRolls) state.routineRolls.set(id, Math.max(Number(state.routineRolls.get(id)) || 0, n));
+  }
+  return true;
+}
+
+// v2.48.2 FIX-6 (R-7): the records belong to a round (`mapAt`). When the engine combat's round is not the one the
+// state's records belong to, they are an earlier turn's - clear them (no `mapRev` bump) and date them to this round.
+// Called by the MAP hook before it counts an on-turn roll, so a roll made after nextTurn() and before the turn start
+// lands takes no previous-turn MAP and is counted in the new turn.
+function _baphMapSyncRound(state) {
+  const round = Number(_baphEngineCombat()?.round);
+  if (!state || !Number.isInteger(round)) return;
+  if (state.mapAt === round) return;
+  state.swingsTaken = 0;
+  if (state.routineDone instanceof Set) state.routineDone.clear(); else state.routineDone = new Set();
+  if (state.routineRolls instanceof Map) state.routineRolls.clear(); else state.routineRolls = new Map();
+  state.routinePaid = false;
+  state.routineClosed = null;
+  state.mapAt = round;
+}
+
+// v2.48.2 FIX-5: the GM-only swing readout on the action panel shows the active combatant's `swingsTaken`; this
+// refreshes its badge in place when the panel shows that combatant. Never throws.
+function _baphRefreshSwingReadout(combatantId) {
+  try {
+    const el = document.querySelector('.baph-action-panel [data-baph-swings]');
+    if (!el || el.getAttribute('data-baph-swings') !== combatantId) return;
+    const badge = el.querySelector('.baph-action-spend-cost');
+    if (badge) badge.textContent = String(Math.max(0, Math.floor(Number(_getState(combatantId)?.swingsTaken) || 0)));
+  } catch (e) { /* the readout is cosmetic */ }
 }
 
 function _initState(combatantId, combatArg) {
@@ -973,23 +1098,31 @@ function _initState(combatantId, combatArg) {
     // _resetForTurn pair — see THE TURN ENGINE and the STATE
     // MANAGEMENT comment block above.
     _resetForSeq:    saved?.resetForSeq ?? null,
-    // v2.30.0 MAP swing counter — in-memory ONLY, never flag-persisted (sidesteps R6 P-8).
+    // v2.30.0 MAP swing counter. Since v2.48.2 (FIX-4, TD-99 (e)) the MAP and routine records ride the pip
+    // flag (the R6 P-8 "in-memory ONLY" note is retired): the GM writes them, a player's travel in the spend
+    // relay, and a reload hydrates them below (_baphMapMerge). One client rolls an actor's attacks, so
+    // alternation between two clients inside one turn stays the documented limitation.
     swingsTaken:     0,
     // GOAL_v2.38.0 FIX-1 ("What the Routine Counts"): per-turn record of routine-member item
-    // ids that have completed a monster's natural-attack routine this turn — in-memory ONLY,
-    // same non-persistence rationale as swingsTaken above. Read by FIX-1 (pf1PreAttackRoll),
-    // written by FIX-2 (pf1PreActionUse), cleared everywhere swingsTaken is (FIX-4).
+    // ids that have used up their listed count this turn (v2.48.2: written by the MAP hook).
+    // Persisted in the pip flag as an array since v2.48.2; cleared everywhere swingsTaken is.
     routineDone:     new Set(),
     // GOAL_v2.38.1 FIX-1 ("What the Routine Costs"): whether this turn's routine has already
-    // been charged its one action, across every member item — in-memory ONLY, same
-    // non-persistence rationale as swingsTaken/routineDone above. Read+written by FIX-1
-    // (pf1PreActionUse spend decision), cleared at the same three points as routineDone.
+    // been charged its one action, across every member item. Persisted in the pip flag since v2.48.2.
+    // Read+written by the pf1PreActionUse spend decision, cleared at the same points as routineDone.
     routinePaid:     false,
-    // GOAL_v2.38.1 FIX-1 ruling A, GOAL_v2.39.0 FIX-3: the item that closed the routine this
-    // turn (an object holding at least its id and name), or null while the routine is open —
-    // in-memory ONLY. Read by the MAP handler and the pf1PreActionUse close block (every read
-    // treats "not null" as closed); written by the close block; cleared alongside routineDone.
+    // GOAL_v2.38.1 FIX-1 ruling A, GOAL_v2.39.0 FIX-3, v2.48.2 FIX-1: the item that closed the routine this
+    // turn - { id, name, why } with `why` 'weapon' (a non-member weapon Strike) or 'repeat' (a roll beyond the
+    // listed count) - or null while the routine is open. Persisted in the pip flag since v2.48.2. Read by the
+    // MAP handler and the pf1PreActionUse close block (every read treats "not null" as closed).
     routineClosed:   null,
+    // v2.48.2 FIX-1 (R-1): rolls made this turn per routine-member item (item id -> rolls), the tally the
+    // listed count is tested against. Cleared with routineDone; persisted in the pip flag as [[id, n], ...].
+    routineRolls:    new Map(),
+    // v2.48.2 FIX-4: the round the records above belong to (null at first) and the revision the GM bumps
+    // when it lowers or clears them.
+    mapAt:           null,
+    mapRev:          0,
     // v2.30.0 TWF off-hand budget — persisted via the isolated OFF_BUDGET_FLAG_KEY flag.
     offHandUsed,
     offSeq,
@@ -1001,13 +1134,19 @@ function _initState(combatantId, combatArg) {
     // local revert clobbering a local newer write, never a cross-client compare.
     pipSeq: 0,
   });
+  // v2.48.2 FIX-4: the MAP and routine records come back with the flag (a GM reload mid-turn keeps them).
+  if (saved) _baphMapMerge(pipState.get(combatantId), saved);
 }
 
 function _getState(combatantId) {
   return pipState.get(combatantId) ?? null;
 }
 
-function _resetState(combatantId) {
+// v2.48.2 FIX-5 (R-5; H:350): with `keepMap` the refill leaves the MAP and routine records (swingsTaken, routineDone,
+// routinePaid, routineClosed, routineRolls) and the crit stashes alone - a GM adjusting actions mid-turn does not
+// reset MAP. Without it (the combat-start refill) they clear as before and `mapRev` is bumped, so no stale echo of an
+// earlier record can bring them back.
+function _resetState(combatantId, { keepMap = false } = {}) {
   const state = _getState(combatantId);
   if (!state) return;
   state.actions = [true, true, true];
@@ -1022,15 +1161,19 @@ function _resetState(combatantId) {
   state.bonusPip = (state.bonusManual || state.bonusAuto) ? [true] : [];
   state.bonusSpentThisTurn = false; // v2.47.0 FIX-5: a refill is a new turn's worth of Haste
   state.bonusLocked = false; // v2.47.1 FIX-5: a reset is a refill, as it clears conditionLocked
-  // v2.30.0: clear the per-turn MAP counter + TWF off-hand budget on a manual reset too.
-  state.swingsTaken = 0;
-  // GOAL_v2.38.0 FIX-4: clear the routine record wherever swingsTaken clears — a record that
-  // outlived its turn would turn the next turn's routine into ordinary follow-up Strikes.
-  state.routineDone.clear();
-  // GOAL_v2.38.1 FIX-1: clear the routine paid/closed records at the same boundary.
-  // GOAL_v2.39.0 FIX-3: routineClosed is a record (or null), not a boolean.
-  state.routinePaid = false;
-  state.routineClosed = null;
+  // v2.30.0: clear the per-turn MAP counter + TWF off-hand budget (v2.48.2: the MAP counter only without keepMap).
+  if (!keepMap) {
+    state.swingsTaken = 0;
+    // GOAL_v2.38.0 FIX-4: clear the routine record wherever swingsTaken clears — a record that
+    // outlived its turn would turn the next turn's routine into ordinary follow-up Strikes.
+    state.routineDone.clear();
+    if (state.routineRolls instanceof Map) state.routineRolls.clear(); // v2.48.2 FIX-1
+    // GOAL_v2.38.1 FIX-1: clear the routine paid/closed records at the same boundary.
+    // GOAL_v2.39.0 FIX-3: routineClosed is a record (or null), not a boolean.
+    state.routinePaid = false;
+    state.routineClosed = null;
+    state.mapRev = (Number(state.mapRev) || 0) + 1; // v2.48.2 FIX-5: a clear is a revision
+  }
   state.offHandUsed = 0;
   state.offSeq = (Number(state.offSeq) || 0) + 1;
   // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): bump pipSeq here too —
@@ -1038,7 +1181,7 @@ function _resetState(combatantId) {
   // revert captured BEFORE this call must never clobber it (Trap 3).
   state.pipSeq = (Number(state.pipSeq) || 0) + 1;
   const _rsActor = _baphEngineCombat()?.combatants?.get(combatantId)?.actor;
-  if (_rsActor) { _mapArmCrit.delete(_rsActor.uuid); _mapPendingConfirm.delete(_rsActor.uuid); }
+  if (_rsActor && !keepMap) { _mapArmCrit.delete(_rsActor.uuid); _mapPendingConfirm.delete(_rsActor.uuid); }
   // _resetForSeq is metadata, not pip state — DO NOT touch it here.
   // It's owned by the turn engine's turn start (_baphEngineApplyBody).
 }
@@ -1073,6 +1216,7 @@ function _writePipFlag(combatantId, combatArg) {
     bonusSpentThisTurn: state.bonusSpentThisTurn === true, // v2.47.0 FIX-5: the Haste pip was spent this turn
     bonusLocked:  state.bonusLocked === true, // v2.47.1 FIX-5: the Haste pip was lost to a Stunned above 3
     resetForSeq:  state._resetForSeq, // v1.27 round-02 — bookkeeping since v2.46.1 (the turn ledger's seq)
+    ..._baphMapPack(state), // v2.48.2 FIX-4: the MAP and routine records (arrays only, T-2)
   }).catch(err => console.error(`baphomet-utils | _writePipFlag error: ${err}`));
 }
 
@@ -1731,7 +1875,16 @@ async function _baphEngineTurnStart(combat, combatantId, at, seq) {
     if (!_getState(combatantId)) _initState(combatantId, combat);
     const state = _getState(combatantId);
     if (state) {
+      // v2.48.2 FIX-6 (R-7, TD-99 (g); T-1): a Strike rolled after nextTurn() and before this start landed was
+      // counted in THIS round by the MAP hook (the records are dated `mapAt`). The body below clears the MAP and
+      // routine records, so when they already belong to this turn's round they are packed before the body and put
+      // back after it - around the protected body, never inside it. Either way they are dated to this round.
+      const keptMap = (Number.isInteger(at?.round) && state.mapAt === at.round) ? _baphMapPack(state) : null;
       _baphEngineApplyBody(combat, combatantId, combatant, seq);
+      // The body clears the swing count and the routine records it knows; the per-item tally clears here with them.
+      if (state.routineRolls instanceof Map) state.routineRolls.clear();
+      if (keptMap) _baphMapMerge(state, keptMap);
+      if (Number.isInteger(at?.round)) state.mapAt = at.round;
       // The lock writes the Haste pip's value, never the array's length, so this is the count present at the start.
       available = 3 + (Array.isArray(state.bonusPip) ? state.bonusPip.length : 0);
       // v2.47.0 FIX-5 (R-4): a new turn clears the Haste pip's spent-this-turn mark. Here, after the body and
@@ -2118,7 +2271,14 @@ function _baphEngineFollow(combat) {
     if (!combatant?.actor) continue;
     if (!_getState(s.combatantId)) _initState(s.combatantId, combat);
     if (!_getState(s.combatantId)) continue;
+    // v2.48.2 FIX-6 (R-7; T-1): keep a roll made in this turn's round before the start landed - pack before the
+    // protected body, put back after it, date to this round either way.
+    const followState = _getState(s.combatantId);
+    const keptMap = (Number.isInteger(s.round) && followState.mapAt === s.round) ? _baphMapPack(followState) : null;
     _baphEngineApplyBody(combat, s.combatantId, combatant, s.seq);
+    if (followState.routineRolls instanceof Map) followState.routineRolls.clear(); // the body does not know the tally
+    if (keptMap) _baphMapMerge(followState, keptMap);
+    if (Number.isInteger(s.round)) followState.mapAt = s.round;
     _refreshPipRow(s.combatantId);
   }
 }
@@ -2759,7 +2919,7 @@ Hooks.once('ready', () => {
       const actor = game.actors.get(actorId) ?? null;
       const item = actor?.items?.get(itemId) ?? null;
       if (!actor || !item) {
-        return { found: false, actorType: null, itemType: null, itemSubType: null, extraType: null, qualifies: false };
+        return { found: false, actorType: null, itemType: null, itemSubType: null, extraType: null, qualifies: false, keepsFullAttack: false };
       }
       const action = item.system?.actions?.[actionIndex] ?? null;
       return {
@@ -2768,7 +2928,11 @@ Hooks.once('ready', () => {
         itemType: item.type ?? null,
         itemSubType: item.system?.subType ?? null,
         extraType: action?.extraAttacks?.type ?? null,
-        qualifies: _isQualifyingBundle(actor, item, action)
+        qualifies: _isQualifyingBundle(actor, item, action),
+        // GOAL_v2.48.2 FIX-7 (r1, F-B-07): appended. `qualifies` keeps _isQualifyingBundle's answer (v2.37.9's
+        // meaning); this is the AttackDialog's real decision (_keepsFullAttackControl, v2.39.0 / v2.39.1), which
+        // also refuses a natural whose extra attacks are BAB iteratives.
+        keepsFullAttack: _keepsFullAttackControl(actor, item, action)
       };
     },
     // GOAL_v2.39.0 FIX-1 (D1): the GM-only routine-membership store. Marks/unmarks an item
@@ -2776,6 +2940,63 @@ Hooks.once('ready', () => {
     // nothing) for anyone else. See _setRoutineMember for the marking type-refusal and the
     // serialised write queue.
     setRoutineMember: (itemUuid, isMember) => _setRoutineMember(itemUuid, isMember),
+    // GOAL_v2.48.2 FIX-1 (R-1, Q2): the GM's listed-count override for a routine member. GM-only; resolves
+    // false (writing nothing) for anyone else, an item that is not a markable item on an actor, or an `n` that is
+    // neither a whole number >= 1 nor null. `n` writes { member: true, count: n }; `null` removes the override
+    // (the item stays a member). Resolves true once the store matches.
+    setRoutineCount: (itemUuid, n) => _setRoutineCount(itemUuid, n),
+    // GOAL_v2.48.2 FIX-1: read-only. The item's listed count (>= 1), or null when the UUID does not resolve
+    // to an item on an actor. Synchronous.
+    routineListed: (itemUuid) => {
+      try {
+        const item = fromUuidSync(itemUuid);
+        if (!item || item.documentName !== 'Item') return null;
+        const actor = item.actor ?? item.parent ?? null;
+        if (!actor) return null;
+        return _baphRoutineListed(actor, item, null);
+      } catch (e) { return null; }
+    },
+    // GOAL_v2.48.2 FIX-4: read-only. A deep copy of a combatant's MAP and routine records, or null when this
+    // client holds no state for it. Synchronous.
+    routineState: (combatantId) => {
+      const state = _getState(combatantId);
+      if (!state) return null;
+      const pack = _baphMapPack(state);
+      return {
+        at: pack.mapAt,
+        rev: pack.mapRev,
+        swings: pack.swingsTaken,
+        done: [...pack.routineDone],
+        paid: pack.routinePaid,
+        closed: pack.routineClosed ? { ...pack.routineClosed } : null,
+        rolls: Object.fromEntries(pack.routineRolls)
+      };
+    },
+    // GOAL_v2.48.2 FIX-5 (R-6, Q7): the GM's correction path for a miscounted swing count. GM-only: anyone else
+    // gets one warning and `false`. `n` a whole number >= 0 and a state for the combatant, else `false` and one
+    // console warning. Otherwise sets the count, bumps `mapRev` (the only way a count is lowered), writes the flag,
+    // refreshes the pip row and the panel's readout and returns true. Synchronous.
+    setSwings: (combatantId, n) => {
+      if (!game.user?.isGM) {
+        ui.notifications?.warn?.('Only the GM can set the swing count.');
+        return false;
+      }
+      const state = _getState(combatantId);
+      if (!Number.isInteger(n) || n < 0 || !state) {
+        console.warn(`${AT_MODULE_ID} | setSwings refused: ${state ? `${String(n)} is not a whole number >= 0` : `no state for combatant "${String(combatantId)}"`}`);
+        return false;
+      }
+      // For the creature whose turn it is, records dated to an earlier round are cleared first, so the count the GM
+      // sets is dated to this turn (FIX-6).
+      if (_baphEngineCombat()?.combatant?.id === combatantId) _baphMapSyncRound(state);
+      state.swingsTaken = n;
+      state.mapRev = (Number(state.mapRev) || 0) + 1;
+      _writePipFlag(combatantId);
+      _refreshPipRow(combatantId);
+      _baphRefreshSwingReadout(combatantId);
+      _debugLog(`setSwings: ${combatantId} set to ${n} (mapRev ${state.mapRev})`);
+      return true;
+    },
     // GOAL_v2.39.0 FIX-1 (D3): the GM's one-step polymorph/wild-shape marking call. Marks
     // every natural-attack item on the given actor, in one setting write. Returns null for a
     // non-GM or unknown actor.
@@ -2798,7 +3019,9 @@ Hooks.once('ready', () => {
     // relays the request ('delay') through the pip relay, which re-checks sender and ownership.
     declareDelay: (combatantId) => _baphEngineDeclareDelay(combatantId),
     reset: (combatantId) => {
-      _resetState(combatantId);
+      // GOAL_v2.48.2 FIX-5 (R-5; H:350): a manual reset refills the pips and keeps MAP and the routine records - a GM
+      // adjusting actions mid-turn does not reset MAP.
+      _resetState(combatantId, { keepMap: true });
       _refreshPipRow(combatantId);
       // v2.37.0 (GOAL_v2.37.0_PIP_AUTHORITY / FD-06): same reasoning as
       // the turn engine's turn start — reset is not player-specific, the GM's own
@@ -2991,15 +3214,11 @@ Hooks.once('ready', () => {
       });
       return true;
     },
-    // v2.30.0 named bridge for settings.js: clear the in-memory MAP swing counter (and the
-    // crit-confirm guards) on toggle-off. Does NOT touch the TWF off-hand budget (separate
-    // concern). Mirrors the Phase-5 reconcileAllBonusAuto bridge.
+    // v2.30.0 named bridge for settings.js: clear the crit-confirm guards on toggle-off. Does NOT touch the TWF
+    // off-hand budget (separate concern). Mirrors the Phase-5 reconcileAllBonusAuto bridge.
+    // GOAL_v2.48.2 FIX-5 (R-5, Q6): the swing count and the routine records stay - toggling mapTracking off and on
+    // mid-turn changes nothing (the toggle only stops the penalty's injection; counting runs either way, T-5).
     resetMapCounters: () => {
-      // GOAL_v2.38.0 FIX-4: mapTracking toggled off clears the routine record too, beside
-      // swingsTaken — the third of the three reset points FIX-4 requires.
-      // GOAL_v2.38.1 FIX-1: same bridge clears the paid/closed records too.
-      // GOAL_v2.39.0 FIX-3: routineClosed is a record (or null), not a boolean.
-      for (const [, st] of pipState) { if (st) { st.swingsTaken = 0; st.routineDone.clear(); st.routinePaid = false; st.routineClosed = null; } }
       _mapArmCrit.clear();
       _mapPendingConfirm.clear();
     }
@@ -3153,7 +3372,7 @@ function _baphActionApplyPipValue(state, type, index, value) {
  * bespoke response path for that case, by design).
  *
  * @param {string} combatantId
- * @param {'reaction'|'combatReflex'|'action'|'offHandReserve'|'offHandRollback'|'toggle'|'endTurn'} kind
+ * @param {'reaction'|'combatReflex'|'action'|'offHandReserve'|'offHandRollback'|'toggle'|'endTurn'|'mapRecord'} kind
  * @param {object} extra           - kind-specific payload fields (count/tier/toggleType/toggleIndex)
  * @param {() => void} onFailure   - reverts the optimistic mutation; must itself
  *                                   re-check supersession (Trap 3) before acting
@@ -3291,8 +3510,28 @@ async function _baphSocketPipSpendRelay(payload = {}) {
 
   if (!_getState(combatantId)) _initState(combatantId, combat);
 
+  // v2.48.2 FIX-4 (R-4, T-4): a player's MAP and routine records ride this relay (the 'action' payload's `map`, or a
+  // record-only 'mapRecord') - the GM merges them into its own state BEFORE the kind's work, after the sender and
+  // ownership checks above (Trap 1, unchanged), so the GM's write that follows carries them. The player never
+  // writes the pip flag. The merge type-checks every field and never lowers a count inside a turn (T-3).
+  const mapPayload = payload?.map;
+  if (mapPayload && typeof mapPayload === 'object' && !Array.isArray(mapPayload)) {
+    try {
+      _baphMapMerge(_getState(combatantId), mapPayload);
+      _baphRefreshSwingReadout(combatantId);
+    } catch (mapErr) {
+      _debugLog(`pipSpendRelay: map merge failed (${mapErr?.message ?? mapErr})`);
+    }
+  }
+
   let ok = false;
   switch (kind) {
+    case 'mapRecord': {
+      // A record-only relay (a use that cost nothing, or whose spend was refused): the GM writes the flag.
+      await _writePipFlag(combatantId, combat);
+      ok = true;
+      break;
+    }
     case 'reaction':       ok = game.baphometActions.spendReaction(combatantId); break;
     case 'combatReflex':   ok = game.baphometActions.spendCombatReflex(combatantId); break;
     // FIX-3 (GOAL_v2.37.8_DECLARE_AND_WITHDRAW): Withdraw's endTurnActions relay branch.
@@ -3759,7 +3998,9 @@ function _spendActionCore(combatantId, count = 1, allowBonus = false) {
   // requires its own authoritative `state.bonusPip[0] === true` in
   // `bonusUsable` above (unweakened) — `allowBonus` only selects which
   // already-granted pool the GM is allowed to draw the spend from.
-  _baphActionEmitPipRelay(combatantId, 'action', { count, allowBonus }, () => {
+  // v2.48.2 FIX-4 (R-4, T-4): the player's MAP and routine records ride this spend (`map`); the GM merges them
+  // before it replays the spend, and its own write carries them. A player never writes the pip flag.
+  _baphActionEmitPipRelay(combatantId, 'action', { count, allowBonus, map: _baphMapPack(state) }, () => {
     if (state.pipSeq !== seq) return; // superseded by a newer local write — Trap 3
     if ((reqCombat?.round ?? 0) !== capturedRound || _currentActiveCombatantId(reqCombat) !== capturedActiveId) return; // this combatant's turn has since ended — Trap 3/FIX-2
     state.actions  = priorActions;
@@ -4897,11 +5138,22 @@ Hooks.on('pf1CreateActionUse', (actionUse) => {
     const original = actionUse.alterRollData;
     if (typeof original !== 'function') return;
     if (isCharge && actionUse.shared?.useOptions) actionUse.shared.useOptions.charge = true;
+    // GOAL_v2.48.2 FIX-3 (TD-99 (d); R-3, Q4): a pouncer's Charge (the macro's intent carries `pounce: true`) with a
+    // routine member keeps pf1's full attack - the member's whole listed line rolls, each attack with pf1's own
+    // `2[Charge]` (set above, the use-level bonus every attack of the use rolls with). A Pounce with a non-member
+    // weapon, or a use that is also a Vital Strike, Cleave or TWF press, is the ordinary one-attack Charge.
+    let keepFullAttack = false;
+    try {
+      keepFullAttack = isCharge && !isCleave && globalThis.baphometCharge?.pounce === true
+        && !_baphIntentMatches(globalThis.baphometVitalStrike, actor)
+        && !(twf?.active === true && _baphIntentMatches(twf, actor, true))
+        && _isRoutineMemberItem(actor, actionUse.item, actionUse.action);
+    } catch (e) { keepFullAttack = false; }
     actionUse.alterRollData = function (...args) {
       try {
         const fd = args[0];
         if (fd && typeof fd === 'object') {
-          fd.fullAttack = false;
+          if (!keepFullAttack) fd.fullAttack = false;
           if (isCleave) {
             const rec = _baphCleaveRecordFor(actor);
             if (rec) {
@@ -5092,8 +5344,9 @@ function _isQualifyingBundle(actor, item, action) {
    GM-ONLY ROUTINE-MEMBERSHIP STORE — GOAL_v2.39.0_ROUTINE_MEMBERS FIX-1 (D1, D3)
    ══════════════════════════════════════════════════════════
    A world setting (routineMembers, registered in scripts/settings.js) holding
-   { [itemUuid]: true }. Nothing but the three functions below (exposed as
-   game.baphometActions.setRoutineMember / markNaturalAttacks / isRoutineMember) writes it.
+   { [itemUuid]: true }, or since v2.48.2 { [itemUuid]: { member: true, count: n } } for a member
+   with a listed-count override (every reader accepts both). Nothing but the functions below (exposed as
+   game.baphometActions.setRoutineMember / setRoutineCount / markNaturalAttacks / isRoutineMember) writes it.
    Writes are serialised through _routineMemberWriteChain, one promise chain, so two marks
    in quick succession cannot overwrite each other.
    ============================================================ */
@@ -5143,19 +5396,59 @@ function _resolveRoutineMemberItem(itemUuid) {
 // Read-only membership test (isRoutineMember, D1's inheritance clause): true when the store
 // holds itemUuid directly, or when itemUuid resolves to an item on an unlinked token's
 // synthetic actor and the same-id item on its base actor is in the store. Writes nothing.
-function _isRoutineMemberStore(itemUuid) {
-  if (!itemUuid) return false;
+// GOAL_v2.48.2 FIX-1 (R-1): a store entry is `true` (a member) or `{ member: true, count: n }` (a member with a
+// listed-count override). Every reader accepts both.
+function _baphStoreMember(entry) {
+  return entry === true || (!!entry && typeof entry === 'object' && entry.member === true);
+}
+
+// The store entry that makes this item a member - its own, else (an unlinked token's synthetic actor) the same-id
+// item on the base actor's - or undefined. Reads only.
+function _baphStoreEntry(itemUuid) {
+  if (!itemUuid) return undefined;
   const store = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
-  if (store[itemUuid] === true) return true;
+  if (_baphStoreMember(store[itemUuid])) return store[itemUuid];
   try {
     const item = fromUuidSync(itemUuid);
     const actor = item?.actor ?? item?.parent ?? null;
     if (actor?.isToken && actor.token?.baseActor) {
       const baseItem = actor.token.baseActor.items?.get(item.id);
-      if (baseItem && store[baseItem.uuid] === true) return true;
+      if (baseItem && _baphStoreMember(store[baseItem.uuid])) return store[baseItem.uuid];
     }
   } catch (e) { /* unresolved UUID — not a member */ }
-  return false;
+  return undefined;
+}
+
+function _isRoutineMemberStore(itemUuid) {
+  return _baphStoreEntry(itemUuid) !== undefined;
+}
+
+// GOAL_v2.48.2 FIX-1 (R-1, Q2; T-9, T-10): the number of rolls an item's line LISTS, an integer >= 1. The GM's
+// override on the store (with the unlinked-token inheritance) when it holds one; else pf1's own full-attack count
+// (`getAttacks({ full: true, resolve: true }).length`) minus the BAB iteratives when the extra-attack type has them
+// (`standard` and `advanced` count them; `custom` does not), floored at 1. Anything unreadable, or a throw, is 1.
+// The action is `attackData.action` when it has getAttacks, else `attackData` itself when it has, else the item's
+// first action. No `ItemAction.data` read (TD-104(a)).
+function _baphRoutineListed(actor, item, attackData) {
+  try {
+    if (!item) return 1;
+    const entry = _baphStoreEntry(item.uuid);
+    if (entry && typeof entry === 'object' && Number.isInteger(entry.count) && entry.count >= 1) return entry.count;
+    const action = (typeof attackData?.action?.getAttacks === 'function') ? attackData.action
+      : (typeof attackData?.getAttacks === 'function') ? attackData
+      : (item.actions?.contents?.[0] ?? null);
+    if (!action || typeof action.getAttacks !== 'function') return 1;
+    const list = action.getAttacks({ full: true, resolve: true });
+    let n = Number(list?.length);
+    if (!Number.isFinite(n)) return 1;
+    if (pf1.config?.extraAttacks?.[action.extraAttacks?.type]?.iteratives === true) {
+      const bab = Number(actor?.system?.attributes?.bab?.total) || 0;
+      n -= Math.max(0, Math.min(3, Math.ceil(bab / 5) - 1));
+    }
+    return Math.max(1, Math.floor(n));
+  } catch (e) {
+    return 1;
+  }
 }
 
 // game.baphometActions.setRoutineMember (FIX-1). GM-only; refuses (resolves false, writes
@@ -5166,11 +5459,32 @@ function _setRoutineMember(itemUuid, isMember) {
   if (!game.user?.isGM) return Promise.resolve(false);
   if (isMember && !_resolveRoutineMemberItem(itemUuid)) return Promise.resolve(false);
   return _enqueueRoutineMemberWrite((store) => {
-    if (isMember) store[itemUuid] = true; else delete store[itemUuid];
+    // v2.48.2 FIX-1: marking writes `true` only when the key is not already a member (an existing listed-count
+    // override is kept); unmarking deletes the key, as before.
+    if (isMember) { if (!_baphStoreMember(store[itemUuid])) store[itemUuid] = true; } else delete store[itemUuid];
     return store;
   }).then(() => {
     const cur = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
-    return isMember ? cur[itemUuid] === true : cur[itemUuid] !== true;
+    return isMember ? _baphStoreMember(cur[itemUuid]) : !_baphStoreMember(cur[itemUuid]);
+  });
+}
+
+// game.baphometActions.setRoutineCount (GOAL_v2.48.2 FIX-1, R-1, Q2). GM-only (resolves false, writing nothing,
+// for anyone else). The item must resolve and be eligible (_resolveRoutineMemberItem) or this resolves false; `n` a
+// whole number >= 1 writes { member: true, count: n }, `null` writes `true` (the override removed, the item still a
+// member), anything else resolves false. Resolves true once the store matches.
+function _setRoutineCount(itemUuid, n) {
+  if (!game.user?.isGM) return Promise.resolve(false);
+  if (!_resolveRoutineMemberItem(itemUuid)) return Promise.resolve(false);
+  const clear = n === null;
+  if (!clear && !(Number.isInteger(n) && n >= 1)) return Promise.resolve(false);
+  return _enqueueRoutineMemberWrite((store) => {
+    store[itemUuid] = clear ? true : { member: true, count: n };
+    return store;
+  }).then(() => {
+    const cur = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
+    const e = cur[itemUuid];
+    return clear ? e === true : (!!e && typeof e === 'object' && e.member === true && e.count === n);
   });
 }
 
@@ -5186,11 +5500,11 @@ function _markNaturalAttacks(actorId) {
     .map((i) => i.uuid);
   if (uuids.length === 0) return Promise.resolve([]);
   return _enqueueRoutineMemberWrite((store) => {
-    for (const u of uuids) store[u] = true;
+    for (const u of uuids) { if (!_baphStoreMember(store[u])) store[u] = true; } // never replaces an object entry
     return store;
   }).then(() => {
     const cur = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
-    return uuids.filter((u) => cur[u] === true);
+    return uuids.filter((u) => _baphStoreMember(cur[u]));
   });
 }
 
@@ -5202,7 +5516,7 @@ Hooks.on('deleteItem', (item) => {
   const uuid = item?.uuid;
   if (!uuid) return;
   const store = game.settings.get(AT_MODULE_ID, 'routineMembers') ?? {};
-  if (store[uuid] !== true) return;
+  if (!_baphStoreMember(store[uuid])) return; // v2.48.2 FIX-1: an entry is `true` or { member: true, count }
   _enqueueRoutineMemberWrite((s) => { delete s[uuid]; return s; });
 });
 
@@ -5280,7 +5594,10 @@ function _mapPenaltyForPrior(prior) {
 Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
   try {
     if (!_baphEngineCombat()?.active) return;
-    if (!game.settings.get(AT_MODULE_ID, 'mapTracking')) return;
+    // GOAL_v2.48.2 FIX-1 (T-5; Q6): counting, tallying and closing run whatever mapTracking says - the setting only
+    // gates the INJECTION of the penalty. A penalty is added to rollConfig.secondaryPenalty only when `mapOn`, and
+    // `_baphMapAdded` and the crit arm record the penalty actually added (0 when off).
+    const mapOn = !!game.settings.get(AT_MODULE_ID, 'mapTracking');
     const actor = attackData?.actor;
     if (!actor) return;
 
@@ -5289,14 +5606,14 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
     // can leave a stale value for the record step). A crit confirmation adds its threat's stashed
     // penalty, so it starts at that same penalty - read here without deleting it; the guard owns that.
     const _recPending = _mapPendingConfirm.get(actor.uuid);
-    _baphMapAdded.set(actor.uuid, (_recPending && _recPending.penalty < 0) ? _recPending.penalty : 0);
+    _baphMapAdded.set(actor.uuid, (mapOn && _recPending && _recPending.penalty < 0) ? _recPending.penalty : 0);
 
     // Crit-confirmation guard: a confirmation pre reuses the threat swing's MAP and does NOT
     // advance the counter (canon: same swing's MAP). Armed at the threat's pf1AttackRoll below.
     const pending = _mapPendingConfirm.get(actor.uuid);
     if (pending) {
       _mapPendingConfirm.delete(actor.uuid);
-      if (pending.penalty < 0) {
+      if (mapOn && pending.penalty < 0) {
         rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + pending.penalty);
       }
       return; // confirmation roll — do NOT advance
@@ -5316,12 +5633,12 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
     // intent is matched to this actor by uuid (legacy actorId second).
     if (_baphIntentMatches(globalThis.baphometCleave, actor)) {
       const carried = _baphCleaveRecordFor(actor)?.mapPenalty ?? 0;
-      if (carried < 0) {
+      if (mapOn && carried < 0) {
         rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + carried);
         _baphMapAdded.set(actor.uuid, carried);
       }
-      _mapArmCrit.set(actor.uuid, { penalty: carried < 0 ? carried : 0 });
-      return; // not a swing: swingsTaken is never advanced
+      _mapArmCrit.set(actor.uuid, { penalty: (mapOn && carried < 0) ? carried : 0 });
+      return; // not a swing: swingsTaken is never advanced (GOAL_v2.48.2 T-6: no tally, no close either)
     }
 
     // GOAL_v2.38.0 FIX-1 ("What the Routine Counts", canon :132-133): a monster's natural-attack
@@ -5339,29 +5656,55 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
         let routineState = _getState(activeCombatant.id);
         if (!routineState) { _initState(activeCombatant.id); routineState = _getState(activeCombatant.id); }
         if (routineState) {
-          // GOAL_v2.38.1 FIX-1 ruling A: once the routine is closed for the turn, every member
-          // item is a follow-up Strike, whether or not IT has individually completed its own
-          // routine yet — the test becomes "not done for this item AND not closed."
-          if (!routineState.routineDone.has(routineItem.id) && !routineState.routineClosed) {
-            // First use this turn of this routine-member item: a routine roll. No MAP is
-            // injected — rollConfig.secondaryPenalty is left exactly as pf1 set it — and the
-            // crit arm is set with penalty 0, so a confirmation roll inside the routine neither
-            // advances the count nor takes a penalty (the existing guard above does the rest).
+          // GOAL_v2.48.2 FIX-6 (R-7): records dated to an earlier round are an earlier turn's - clear them first.
+          _baphMapSyncRound(routineState);
+          // GOAL_v2.48.2 FIX-1 (R-1, R-2; Q2, Q3): the per-roll classification. A member's rolls up to the count its
+          // line LISTS are its routine; every roll beyond is a repeat Strike, and the first one closes the routine
+          // (ruling #1). k = this roll's place in the item's tally this turn.
+          const listed = _baphRoutineListed(actor, routineItem, attackData);
+          const k = (Number(routineState.routineRolls.get(routineItem.id)) || 0) + 1;
+          routineState.routineRolls.set(routineItem.id, k);
+          if (k >= listed) routineState.routineDone.add(routineItem.id);
+          const wasOpen = !routineState.routineClosed;
+          // GOAL_v2.48.2 FIX-2 / FIX-3: a declared Vital Strike, or a declared Charge that is not a Pounce, is a
+          // Strike; a Pounce is not a declared Strike (its rolls are classified like any undeclared roll).
+          const vsDeclared = _baphIntentMatches(globalThis.baphometVitalStrike, actor);
+          const chargeDeclared = _baphIntentMatches(globalThis.baphometCharge, actor);
+          const isPounce = chargeDeclared && !vsDeclared && globalThis.baphometCharge?.pounce === true;
+          const isDeclaredStrike = vsDeclared || (chargeDeclared && !isPounce);
+          let cls;
+          if (isDeclaredStrike) cls = 'declared';
+          else if (wasOpen && k <= listed) cls = isPounce ? 'pounce' : 'routine';
+          else cls = k > listed ? 'repeat' : 'after';
+          const isStrike = cls !== 'routine' && cls !== 'pounce';
+          // The first roll beyond the listed count while the routine is open closes it (Q3, ruling #1) - a repeat, a
+          // declared Strike that uses up its entry, or a Pounce past its count alike.
+          if (wasOpen && k > listed) {
+            routineState.routineClosed = { id: routineItem.id, name: routineItem.name, why: 'repeat' };
+          }
+          let tally = _baphRoutineUseTally.get(actor.uuid);
+          if (!tally || tally.itemId !== routineItem.id) {
+            tally = { itemId: routineItem.id, routine: 0, repeat: 0, after: 0, declared: 0, pounce: 0 };
+            _baphRoutineUseTally.set(actor.uuid, tally);
+          }
+          tally[cls] += 1;
+          if (!isStrike) {
+            // A routine roll: no MAP is injected — rollConfig.secondaryPenalty is left exactly as pf1 set it — and
+            // the crit arm is set with penalty 0, so a confirmation roll inside the routine neither advances the
+            // count nor takes a penalty (the existing guard above does the rest).
             routineState.swingsTaken = (Number(routineState.swingsTaken) || 0) + 1;
             _mapArmCrit.set(actor.uuid, { penalty: 0 });
             return;
           }
-          // FIX-2/D3 (canon :133): this item already completed its routine this turn (closed by
-          // the pf1PreActionUse handler below) — every further roll with it is a follow-up
-          // Strike and takes MAP exactly as an eligible weapon swing does, even though
-          // _isEligibleSwing itself would still say no for an npc natural.
+          // A Strike (a repeat, an after-close roll, or a declared Vital Strike / Charge): takes MAP exactly as an
+          // eligible weapon swing does, even though _isEligibleSwing itself would still say no for an npc natural.
           const routinePenalty = _mapPenaltyForPrior(routineState.swingsTaken);
-          if (routinePenalty < 0) {
+          if (mapOn && routinePenalty < 0) {
             rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + routinePenalty);
           }
           routineState.swingsTaken = (Number(routineState.swingsTaken) || 0) + 1;
-          _mapArmCrit.set(actor.uuid, { penalty: routinePenalty });
-          _baphMapAdded.set(actor.uuid, routinePenalty < 0 ? routinePenalty : 0); // GOAL_v2.46.0 FIX-4
+          _mapArmCrit.set(actor.uuid, { penalty: mapOn ? routinePenalty : 0 });
+          _baphMapAdded.set(actor.uuid, (mapOn && routinePenalty < 0) ? routinePenalty : 0); // GOAL_v2.46.0 FIX-4
           return;
         }
       }
@@ -5373,13 +5716,14 @@ Hooks.on('pf1PreAttackRoll', (attackData, rollConfig) => {
     if (!state) { _initState(activeCombatant.id); state = _getState(activeCombatant.id); }
     if (!state) return;
 
+    _baphMapSyncRound(state); // GOAL_v2.48.2 FIX-6 (R-7): an earlier turn's records are cleared before this roll counts
     const penalty = _mapPenaltyForPrior(state.swingsTaken); // prior count → this swing's MAP
-    if (penalty < 0) {
+    if (mapOn && penalty < 0) {
       rollConfig.secondaryPenalty = String((Number(rollConfig.secondaryPenalty) || 0) + penalty); // additive; stacks with TWF
     }
     state.swingsTaken = (Number(state.swingsTaken) || 0) + 1; // advance: this swing is now counted
-    _mapArmCrit.set(actor.uuid, { penalty });                 // candidate; promoted at atk iff crit threat
-    _baphMapAdded.set(actor.uuid, penalty < 0 ? penalty : 0); // GOAL_v2.46.0 FIX-4: the MAP this roll took
+    _mapArmCrit.set(actor.uuid, { penalty: mapOn ? penalty : 0 });                 // candidate; promoted at atk iff crit threat
+    _baphMapAdded.set(actor.uuid, (mapOn && penalty < 0) ? penalty : 0); // GOAL_v2.46.0 FIX-4: the MAP this roll took
   } catch (e) {
     _debugLog('MAP pf1PreAttackRoll error: ' + e.message);
   }
@@ -5407,6 +5751,29 @@ Hooks.on('pf1AttackRoll', (action, roll) => {
     }
   } catch (e) {
     _debugLog('MAP pf1AttackRoll (crit-arm) error: ' + e.message);
+  }
+});
+
+// v2.48.2 FIX-R2-1 (T-12, T-5): the off-mode twin of the crit arm above. While `mapTracking` is OFF the hook above returns
+// at once, so the pre hook's armed record (penalty 0) was never promoted and the confirmation roll was read as a fresh
+// swing and counted. While off, promote the arm with penalty 0 under the identical four conditions; while on, return at
+// once and the hook above alone acts.
+Hooks.on('pf1AttackRoll', (action, roll) => {
+  try {
+    if (!_baphEngineCombat()?.active) return;
+    if (game.settings.get(AT_MODULE_ID, 'mapTracking')) return;
+    const actor = action?.actor ?? action?.item?.actor ?? action?.parent?.actor;
+    if (!actor) return;
+    const armed = _mapArmCrit.get(actor.uuid);
+    _mapArmCrit.delete(actor.uuid);
+    if (armed && roll?.isCrit === true
+        && action?.isCombatManeuver !== true
+        && (Number(action?.ability?.critMult ?? 1) || 1) > 1
+        && game.settings.get('pf1', 'critConfirm') === true) {
+      _mapPendingConfirm.set(actor.uuid, { penalty: 0 });
+    }
+  } catch (e) {
+    _debugLog('MAP pf1AttackRoll (crit-arm, mapTracking off) error: ' + e.message);
   }
 });
 
@@ -5647,6 +6014,14 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     let _routineSwingCount = 0;   // actionUse.shared.attacks.length, read once
     let _routineMapCounted = false;
     let _routineActionsCharged = false;
+    // GOAL_v2.48.2 FIX-1 / FIX-3 / FIX-4: rolls beyond the listed count (repeat + after-close) this use is charged
+    // one action each for; a Pounce use (FIX-3: 2 actions flat, pays the routine, leaves it open); the combatant the
+    // close block found (the records are published for it at the use boundary); whether the spend's own write or
+    // relay already carried the records.
+    let _routineBeyond = 0;
+    let _pounceUse = false;
+    let _publishCombatant = null;
+    let _recordsCarried = false;
 
     // FIX-1 / FIX-2 / FIX-3 (GOAL_v2.38.1/v2.39.0, D1/D2/D3, ruling A as amended): the routine
     // closes, and a routine-member item's per-turn record is written, HERE, when its use ends.
@@ -5663,6 +6038,11 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // membership (FIX-1's GM-only store, or an npc's qualifying natural, D-1/D-2) decides who
     // is in it, not actor.type.
     if (isAttack) {
+      // GOAL_v2.48.2 FIX-1 (R-2): the use-level tally the MAP hook kept for this use's rolls - read and deleted
+      // here for every attack use, whatever path the use takes below (it is also dropped for an off-turn or Cleave
+      // use, which never record one).
+      const _useTally = _baphRoutineUseTally.get(actor.uuid) ?? null;
+      _baphRoutineUseTally.delete(actor.uuid);
       const routineCombatant = _getActiveCombatantForActor(actor);
       const isCleaveUse = _baphIntentMatches(globalThis.baphometCleave, actor); // v2.46.0 FIX-3
       if (routineCombatant && !isCleaveUse) {
@@ -5670,13 +6050,17 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
         if (!routineState) { _initState(routineCombatant.id); routineState = _getState(routineCombatant.id); }
         if (routineState) {
           _routineState = routineState;
+          _publishCombatant = routineCombatant;
           _routineMapCounted = game.settings.get(AT_MODULE_ID, 'mapTracking') === true;
           // A declared Vital Strike or Charge keeps its own cost (_deriveActionUseCost) and is
-          // not a routine charge. HI-1: it still marks its item done, as v2.38.0 did, but never
-          // marks the routine paid and never becomes a per-roll repeat charge or repeat card.
+          // not a routine charge. HI-1: it never marks the routine paid and never becomes a per-roll
+          // repeat charge or repeat card (v2.48.2: the MAP hook, not this block, marks its item done).
           // v2.46.0 FIX-3: matched by uuid (legacy actorId second), not by actor.id alone.
-          const hasDeclaredCostOverride = _baphIntentMatches(globalThis.baphometVitalStrike, actor)
-                                          || _baphIntentMatches(globalThis.baphometCharge, actor);
+          const _vsIntent = _baphIntentMatches(globalThis.baphometVitalStrike, actor);
+          const _chargeIntent = _baphIntentMatches(globalThis.baphometCharge, actor);
+          const hasDeclaredCostOverride = _vsIntent || _chargeIntent;
+          // GOAL_v2.48.2 FIX-3: a Charge whose intent carries `pounce: true` (not also a Vital Strike).
+          const isPounceIntent = _chargeIntent && !_vsIntent && globalThis.baphometCharge?.pounce === true;
           // GOAL_v2.39.0 FIX-2: membership (FIX-1's store, or an npc's qualifying natural) is
           // the single source of truth for every path below — decided once by
           // _isRoutineMemberItem and nothing else.
@@ -5687,27 +6071,31 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
           // classified exactly as a member natural instead (D2) — see the isMember branch.
           const isWeaponStrike = item.type === 'weapon' || (item.type === 'attack' && item.system?.subType === 'weapon');
           if (isMember) {
-            if (hasDeclaredCostOverride) {
+            if (isPounceIntent) {
+              // GOAL_v2.48.2 FIX-3 (R-3, Q4 as amended): a Pounce use costs _deriveActionUseCost's 2 flat - no
+              // routine action and no per-roll charge on top - and PAYS the routine (set before the spend call
+              // below, T-8). `routineClosed` is not touched: the routine stays open, and the MAP hook has already
+              // run every roll's tally (a roll beyond the count closes it, as any repeat does).
+              _pounceUse = true;
+            } else if (hasDeclaredCostOverride) {
               // HI-1: own cost via _deriveActionUseCost below, not a routine charge, never marks
-              // paid — but marks its item done, as v2.38.0 did.
-              routineState.routineDone.add(item.id);
+              // paid (T-11). GOAL_v2.48.2 FIX-2: its roll took MAP at its position and was tallied by the hook.
             } else {
+              // GOAL_v2.48.2 FIX-1 (R-2): the use is priced from what the MAP hook recorded for it. No tally for
+              // this item (a use that rolled nothing) reads as today's first use: a routine use.
               _routineSwingCount = actionUse?.shared?.attacks?.length ?? 0;
-              if (routineState.routineDone.has(item.id)) {
-                _routineRepeat = true; // FIX-2/D3: charged per roll below
-              } else if (routineState.routineClosed !== null) {
-                // GOAL_v2.39.0 FIX-3 (TD-61 extended): this item never made its own routine
-                // this turn, and the routine is already closed — an after-close use.
-                _routineAfterClose = true;
-              } else {
-                _routineUse = true; // FIX-1: charged the routine's one action below (0 if paid)
-                routineState.routineDone.add(item.id); // this item's routine is closed for the turn
-              }
+              const t = (_useTally && _useTally.itemId === item.id) ? _useTally : null;
+              _routineUse = t ? t.routine > 0 : true;             // FIX-1: charged the routine's one action below (0 if paid)
+              _routineRepeat = t ? t.repeat > 0 : false;          // FIX-2/D3: charged per roll below
+              // GOAL_v2.39.0 FIX-3 (TD-61 extended): rolls within the count after the routine closed.
+              _routineAfterClose = t ? (t.after > 0 && t.repeat === 0) : false;
+              _routineBeyond = t ? (t.repeat + t.after) : 0;
             }
           } else if (isWeaponStrike && routineState.routineClosed === null) {
             // GOAL_v2.39.0 FIX-3: the closed record remembers what closed it — the first
             // non-member weapon Strike this turn, read back by the routine-closed card below.
-            routineState.routineClosed = { id: item.id, name: item.name };
+            // GOAL_v2.48.2 FIX-1: `why` 'weapon' (a roll beyond the listed count is 'repeat').
+            routineState.routineClosed = { id: item.id, name: item.name, why: 'weapon' };
           }
         }
       }
@@ -5781,7 +6169,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // client setting is no longer the only trigger (actionUse.shared.skipDialog is true for either).
     if (isAttack && actor?.type === 'character'
         && (game.settings.get('pf1', 'skipActionDialogs') || actionUse?.shared?.skipDialog === true)
-        && !_routineUse && !_routineRepeat && !_routineAfterClose) {
+        && !_routineUse && !_routineRepeat && !_routineAfterClose && !_pounceUse) { // v2.48.2 FIX-3: a Pounce is priced here too
       const swingCount = actionUse?.shared?.attacks?.length ?? 0;
       if (swingCount > 1) {
         // v2.47.0 FIX-8 (r1): the card is no longer posted here, before any charge. The condition and the swing
@@ -5842,9 +6230,12 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     // action per attack rolled. GOAL_v2.39.0 FIX-3: an after-close use (never done this turn,
     // routine already closed) is charged exactly the same way as a repeat. Neither overrides a
     // consumable's own cost.
+    // GOAL_v2.48.2 FIX-1 (R-2): a member use is priced from the MAP hook's tally - the routine's one action (0 if
+    // already paid) for its rolls within the listed count, plus one action per roll beyond it (a repeat, or an
+    // after-close roll). A Pounce use falls through to _deriveActionUseCost's 2 (the declared Charge), flat.
     const cost = isConsumable ? _deriveConsumableActionCost(actionUse)
-      : (_routineRepeat || _routineAfterClose) ? _routineSwingCount
-      : _routineUse ? (_routineState.routinePaid ? 0 : 1)
+      : (_routineUse || _routineBeyond > 0)
+        ? ((_routineUse && !_routineState.routinePaid) ? 1 : 0) + _routineBeyond
       : _deriveActionUseCost(actionUse);
     const activeCombatant = _getActiveCombatantForActor(actor);
 
@@ -5951,14 +6342,18 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       // a per-roll routine-repeat (or after-close) Strike charge, letting the Haste bonus pip
       // cover one roll even when count > 1.
       const _spendReason = isSpell ? `spell-${item.name}` : isAttack ? `attack-${item.name}` : `consumable-${item.name}`;
-      const _perRollSpend = _routineRepeat || _routineAfterClose;
-      const spent = _spendActionForCombatant(activeCombatant.id, cost, _spendReason, _perRollSpend);
+      const _perRollSpend = _routineBeyond > 0;
       // GOAL_v2.38.1 FIX-1: the paid mark is set on the first routine use that reaches this
       // spend decision, whether the spend succeeded or was refused — the routine is one
-      // action, asked for once.
-      if (_routineUse && _routineState) {
+      // action, asked for once. GOAL_v2.48.2 FIX-4 (T-8): set BEFORE the spend call, so the spend's own
+      // flag write or relay carries it; a Pounce pays the routine the same way (FIX-3).
+      if ((_routineUse || _pounceUse) && _routineState) {
         _routineState.routinePaid = true;
       }
+      const spent = _spendActionForCombatant(activeCombatant.id, cost, _spendReason, _perRollSpend);
+      // GOAL_v2.48.2 FIX-4: the spend's own write (the GM) or relay (a player) carried the records when it spent
+      // something; the use boundary publishes them otherwise.
+      _recordsCarried = spent === true && cost > 0;
       if (_routineRepeat || _routineAfterClose) {
         _routineActionsCharged = spent === true;
       }
@@ -6081,6 +6476,22 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       }
     }
     } finally {
+      // GOAL_v2.48.2 FIX-4 (R-4, Q5): one publish per attack use, at the use boundary and whatever gate above
+      // returned first - the MAP and routine records go to the pip flag. Skipped when the spend's own write or relay
+      // already carried them. The GM writes the flag; a player seat, with a GM connected, sends a record-only
+      // 'mapRecord' relay (T-4: a player never writes the flag). Never throws.
+      try {
+        if (_publishCombatant && _routineState && !_recordsCarried) {
+          if (game.user?.isGM) {
+            _writePipFlag(_publishCombatant.id);
+          } else if (game.users?.activeGM) {
+            _baphActionEmitPipRelay(_publishCombatant.id, 'mapRecord', { map: _baphMapPack(_routineState) }, () => {});
+          }
+        }
+        if (_publishCombatant) _baphRefreshSwingReadout(_publishCombatant.id);
+      } catch (publishErr) {
+        _debugLog('MAP record publish error: ' + (publishErr?.message ?? publishErr));
+      }
       // v2.47.0 FIX-8 (r1): the §14 card, posted after the charge decision with what was actually charged -
       // whatever gate above returned early first - and only while a GM is connected (FIX-10).
       if (_swingCard && game.users?.activeGM) {
@@ -6141,12 +6552,34 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
               routineClosedCard: true,
               mapCounted: _routineMapCounted,
               actionsCharged: _routineActionsCharged,
-              closedByItemId: _routineState?.routineClosed?.id ?? null
+              closedByItemId: _routineState?.routineClosed?.id ?? null,
+              closedWhy: _routineState?.routineClosed?.why ?? null // GOAL_v2.48.2 FIX-1
             }
           }
         }).catch((err) => {
           console.warn(
             `baphomet-utils | FIX-4 routine-closed card failed to post for "${actor.name}" — `
+            + `handled here, not thrown. The attacks still resolved and were never blocked.`, err
+          );
+        });
+      }
+      // GOAL_v2.48.2 FIX-3 (TD-99 (d); R-3, Q4 as amended): the Pounce card - one GM whisper per Pounce use, none
+      // while no GM is connected. The Charge's pf1 `2[Charge]` rode the charged use only; the card tells the GM to
+      // add the +2 by hand to the rest of a split line.
+      if (_pounceUse && game.users?.activeGM) {
+        const safePounceActor = foundry.utils.escapeHTML(actor.name);
+        const safePounceItem  = foundry.utils.escapeHTML(item.name);
+        ChatMessage.create({
+          content:
+            `<p><strong>Pounce — the routine as a Charge (2 actions):</strong> ${safePounceActor} charged with `
+            + `${safePounceItem}; its routine is paid for this turn. Its other routine attacks this turn take `
+            + `the Charge's +2 by hand.</p>`,
+          speaker: ChatMessage.getSpeaker({ actor }),
+          whisper: ChatMessage.getWhisperRecipients('GM'),
+          flags: { 'baphomet-utils': { pounce: true } }
+        }).catch((err) => {
+          console.warn(
+            `baphomet-utils | FIX-3 Pounce card failed to post for "${actor.name}" — `
             + `handled here, not thrown. The attacks still resolved and were never blocked.`, err
           );
         });
@@ -6303,6 +6736,78 @@ function _buildActionSpendButton(cost, label, hint, reason) {
 }
 
 /**
+ * GOAL_v2.48.2 FIX-5 (R-6, Q7): the GM-only swing readout on the action panel - the active combatant's
+ * `swingsTaken`, click to correct. Built by its OWN builder, never _buildActionSpendButton (whose click handler
+ * spends). It wears the spend buttons' classes for their look only (no styles/ change): a
+ * `baph-action-spend-cost` badge holding the count and a `baph-action-spend-label` reading "Swings". Its click
+ * opens a DialogV2 with one number input and Set / Cancel; Set calls setSwings with the input's whole number and
+ * nothing else. The badge is refreshed in place by _baphRefreshSwingReadout.
+ *
+ * @param {Combatant} combatant  the active combatant the panel is drawn for
+ * @returns {HTMLButtonElement}
+ */
+function _baphBuildSwingReadout(combatant) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.classList.add('baph-action-spend-btn');
+  btn.setAttribute('data-baph-swings', combatant.id);
+  btn.title = 'Swings taken this turn — click to correct (GM)';
+
+  const countBadge = document.createElement('span');
+  countBadge.classList.add('baph-action-spend-cost');
+  countBadge.textContent = String(Math.max(0, Math.floor(Number(_getState(combatant.id)?.swingsTaken) || 0)));
+
+  const labelEl = document.createElement('span');
+  labelEl.classList.add('baph-action-spend-label');
+  labelEl.textContent = 'Swings';
+
+  btn.appendChild(countBadge);
+  btn.appendChild(labelEl);
+
+  btn.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    // Re-validate at click time, as the spend buttons do.
+    const active = game.combat?.combatant;
+    if (!game.user?.isGM || !active) return;
+    const current = Math.max(0, Math.floor(Number(_getState(active.id)?.swingsTaken) || 0));
+    let answer = null;
+    try {
+      answer = await foundry.applications.api.DialogV2.wait({
+        window: { title: `Swings — ${active.name}` },
+        content: `<p>Swings taken this turn (sets the Multiple Attack Penalty position):</p>`
+          + `<input type="number" name="swings" min="0" step="1" value="${current}" autofocus>`,
+        buttons: [
+          {
+            action: 'set',
+            label: 'Set',
+            default: true,
+            callback: (ev, button, dialog) => {
+              const input = button?.form?.elements?.swings ?? dialog?.element?.querySelector?.('input[name="swings"]');
+              return input ? String(input.value) : null;
+            }
+          },
+          { action: 'cancel', label: 'Cancel', callback: () => null }
+        ],
+        rejectClose: false
+      });
+    } catch (e) {
+      _debugLog('Swing readout dialog error: ' + (e?.message ?? e));
+      return;
+    }
+    if (answer === null || answer === undefined || answer === 'cancel') return;
+    const n = Number(answer);
+    if (answer === '' || !Number.isInteger(n) || n < 0) {
+      ui.notifications?.warn?.('Swings must be a whole number, 0 or more.');
+      return;
+    }
+    game.baphometActions?.setSwings?.(active.id, n);
+  });
+
+  return btn;
+}
+
+/**
  * Remove any existing action panel and, if the user should see
  * one, inject a fresh panel into document.body.
  *
@@ -6333,6 +6838,8 @@ function _renderActionPanel() {
   panel.appendChild(_buildActionSpendButton(1, 'Swing / Move',   'Spend 1 action',  'manual-1'));
   panel.appendChild(_buildActionSpendButton(2, 'Cast / Ready',   'Spend 2 actions', 'manual-2'));
   panel.appendChild(_buildActionSpendButton(3, 'F.Cast / Run',    'Spend 3 actions', 'manual-3'));
+  // GOAL_v2.48.2 FIX-5 (Q7): the GM's swing readout - a fourth button of its own builder; a player's panel has none.
+  if (game.user?.isGM) panel.appendChild(_baphBuildSwingReadout(combatant));
 
   document.body.appendChild(panel);
 }
@@ -7061,6 +7568,10 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   if (typeof saved.bonusSpentThisTurn === 'boolean') existing.bonusSpentThisTurn = saved.bonusSpentThisTurn; // v2.47.0 FIX-5
   if (typeof saved.bonusLocked === 'boolean') existing.bonusLocked = saved.bonusLocked; // v2.47.1 FIX-5
   if ('resetForSeq' in saved) existing._resetForSeq = saved.resetForSeq; // v1.27 round-02
+  // v2.48.2 FIX-4 (T-3): the MAP and routine records merge by their own rule - a newer round or revision adopts, an
+  // equal one unions (the larger count) - so a stale echo of an earlier write never lowers a count inside a turn.
+  _baphMapMerge(existing, saved);
+  _baphRefreshSwingReadout(combatant.id);
 
   // v2.37.0 round-02 (GOAL_v2.37.0_PIP_AUTHORITY FIX-2): this hook fires for
   // EVERY authoritative pip-flag write this client observes — the requester's

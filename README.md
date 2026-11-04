@@ -3,18 +3,20 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.48.1 — *Spell It Out*
+**Current Version:** 2.48.2 — *What the Line Lists*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**Spell it out.** A creature that cannot act — Paralyzed, Dazed, unconscious and the rest — is now told why when it tries to
-attack, cast or use an item on its turn, and the GM gets one card naming the condition; nothing is charged and the GM
-rules. Withdraw refuses such a creature and leaves its pips alone, and every Withdraw refusal is explained once, by the
-module. A Hasted creature that starts its turn unable to act loses the Haste action for that turn, even if the condition
-ends. The token's status tooltip follows a Ledger condition's current number, and a Boss Action nobody used expires.
-**Two macros to re-paste** (Withdraw, every player; Boss Action, GM-only). See the [changelog](#changelog).
+**What the line lists.** A monster's routine is its stat-block line, counted per attack: a "2 claws" item rolls its two
+claws as the routine, and the first attack beyond what the line lists costs an action, takes the Multiple Attack Penalty
+and ends the routine — after that every natural attack is a Strike. A Vital Strike or a Charge with a natural attack takes
+MAP at its place in the turn. A creature with Pounce that charges with a natural attack rolls that attack's whole line, +2
+on each, for 2 actions, and that pays its routine for the turn: its other natural attacks follow free and without MAP, and
+the GM adds the Charge's +2 by hand to the attacks the Charge itself did not roll. The swing count and the routine survive
+a GM reload, a GM's pip reset and switching MAP tracking off and on, and the GM can see and correct the swing count on the
+action panel. **One macro to re-paste** (Charge). See the [changelog](#changelog).
 
 ---
 
@@ -188,6 +190,40 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.48.2 — What the Line Lists
+
+TD-99 (a) to (g) with rider r1 (QA fix series 8 of 10). No canon change: ruling #1 (a repeat is any roll beyond an item's
+listed count, costs one action with MAP and ends the routine) has been in canon since 2026-10-11. **One world macro to
+re-paste:** Charge — open the existing macro, replace its command, keep its id and owner (see the v2.48.2 sync note in
+`macros/README.md`, `SYNC_STAMP` `2026-11-02`).
+
+- **A monster's routine is what its line lists (TD-99 (a), (b)).** Each routine-member item has a listed count: pf1's own
+  full-attack count (a "2 claws" `custom` item lists 2, a bite 1; the BAB iteratives are subtracted for a `standard` or
+  `advanced` item), or the GM's override. The module counts rolls per item: rolls up to the listed count are the routine
+  (one action for the whole routine, no MAP); every roll beyond is a repeat Strike at one action with MAP, and the first
+  one ends the routine, so every member used after it is a Strike with MAP. A "repeat" is no longer "the item was used
+  before": a two-claw item rolled in two uses is not a repeat, and a mis-built three-for-one item is not a free routine.
+  A use that straddles the count is priced roll by roll. The GM sets a count with `game.baphometActions.setRoutineCount(itemUuid,
+  n)` (pf-content familiars' "Claws" list 1 in their data; `null` removes the override) and reads one with `routineListed`.
+- **Vital Strike and Charge on a natural take MAP (TD-99 (c)).** A declared Vital Strike or Charge on a routine member is a
+  Strike at its position in the turn (it used to take none), counts as a swing, and uses up one roll of its item's entry;
+  it still costs 2 actions and never pays the routine.
+- **Pounce (TD-99 (d)).** The Charge macro now notices a feat named *Pounce*. A pouncer's Charge with a routine member rolls
+  that item's whole line, +2 on every attack of that use, for 2 actions in all, and pays the routine for the turn without
+  closing it: the rest of its attacks this turn are free routine rolls with no MAP. The +2 belongs to the Charge's own use
+  only — when the line is split across items (claws, bite, rakes as separate items), the GM adds the +2 by hand to the
+  others, and the GM card says so. A creature without the feat charges as before: one attack.
+- **The swing count and the routine survive (TD-99 (e), (f)).** They ride the pip flag now: a GM reload mid-turn keeps the
+  swing count, the paid routine, a closed routine and each item's rolls; a player's records reach the GM with the player's
+  spend, or alone when the use cost nothing. A GM's manual pip reset keeps MAP and the routine (a GM adjusting actions
+  does not reset MAP), and switching MAP tracking off and on changes nothing — the count keeps running, only the penalty
+  stops. The GM sees the swing count on the action panel (a "Swings" button, GM only), clicks it to correct it, or calls
+  `game.baphometActions.setSwings(combatantId, n)`; `routineState(combatantId)` reads the records.
+- **A Strike before the turn start lands (TD-99 (g)).** An attack rolled right after Next Turn, before the module has started
+  the turn, no longer takes the previous turn's MAP and is no longer dropped from the new turn's count.
+- **The accessor tells the truth (r1).** `isQualifyingBundle` gains `keepsFullAttack`, the Full Attack dialog's real decision
+  (a natural with BAB-iterative extras says `qualifies: true` but keeps no Full Attack button); `qualifies` is unchanged.
 
 ### v2.48.1 — Spell It Out
 
