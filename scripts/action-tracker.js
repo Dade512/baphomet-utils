@@ -6283,7 +6283,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
     if (_baphIntentMatches(_bossIntent, actor) && (_bossIntent.kind === 'legendary' || _bossIntent.kind === 'lair')) {
       const _bossKind = _bossIntent.kind;
       globalThis.baphometBossAction = null;
-      if (_routineUse && _routineState) _routineState.routinePaid = true;
+      if ((_routineUse || _pounceUse) && _routineState) _routineState.routinePaid = true; // v2.49.0 FIX-5 (TD-110 (a))
       _baphExemptUse(actor, item, _bossKind);
       _chargeDecision = { kind: 'none', reason: _bossKind === 'legendary' ? 'Legendary action' : 'Lair action' };
       return;
@@ -6304,7 +6304,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       const _noActionWhy = _baphNoActionReason(actor);
       if (_noActionWhy) {
         _baphNoActionUse(actor, item, _noActionWhy);
-        if (_routineUse && _routineState) _routineState.routinePaid = true;
+        if ((_routineUse || _pounceUse) && _routineState) _routineState.routinePaid = true; // v2.49.0 FIX-5 (TD-110 (a))
         _debugLog(`auto-spend: "${actor.name}" cannot act (${_noActionWhy}) — "${item.name}" warned, carded, not charged`);
         _chargeDecision = { kind: 'none', reason: _noActionWhy };
         return;
@@ -6316,7 +6316,7 @@ Hooks.on('pf1PreActionUse', (actionUse) => {
       const _nauseatedCast = isSpell || (isConsumable && ['scroll', 'wand', 'staff'].includes(item.system?.subType));
       if ((isAttack || _nauseatedCast) && _baphLedgerActive(actor, 'nauseated')) {
         _baphNauseatedUse(actor, item, _nauseatedCast);
-        if (_routineUse && _routineState) _routineState.routinePaid = true;
+        if ((_routineUse || _pounceUse) && _routineState) _routineState.routinePaid = true; // v2.49.0 FIX-5 (TD-110 (a))
         _debugLog(`auto-spend: Nauseated "${actor.name}" ${_nauseatedCast ? 'cast' : 'attack'} with "${item.name}" — warned, carded, not charged`);
         _chargeDecision = { kind: 'none', reason: 'Nauseated' };
         return;

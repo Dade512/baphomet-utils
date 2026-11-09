@@ -460,7 +460,7 @@ const CONDITIONS = {
     icon: 'icons/svg/unconscious.svg',
     maxTier: 1,
     type: 'toggle',
-    description: 'PF1 Fatigued: –2 to Strength and Dexterity (pf1\'s own Fatigued status applies them; this condition adds none of its own). Cannot run or charge. Fatigue on fatigue: anything that would normally fatigue you again makes you Exhausted unless the source says otherwise — the GM decides per source (table-adjudicated, not enforced). On an Exhausted creature a Ledger Fatigued adds nothing and is not applied. Ends after 8 hours of complete rest.',
+    description: 'PF1 Fatigued: –2 to Strength and Dexterity (pf1\'s own Fatigued status applies them; this condition adds none of its own). Cannot run or charge. Fatigue on fatigue: anything that would normally fatigue you again makes you Exhausted unless the source says otherwise — applying Fatigued to a creature already Fatigued asks the GM, defaulting to Exhausted (never automatic). On an Exhausted creature a Ledger Fatigued adds nothing and is not applied. Ends after 8 hours of complete rest.',
     autoDecrement: false,
     buildChanges() {
       // v2.43.0 FIX-3 (R-2): pf1's own `fatigued` status carries -2 Str / -2 Dex and is the only
@@ -498,7 +498,7 @@ const CONDITIONS = {
     type: 'toggle',
     // v2.45.2 (canon 2026-10-11): Blinded writes no changes; its only enforced effect is Off-Guard,
     // derived by _syncOffGuard; the −4 AC (v1.5 rule) is retired; the rebuild drops it from existing buffs.
-    description: 'Cannot see. Off-Guard (–2 AC and CMD, precision target), applied while Blinded lasts. Your attacks have a 50% miss chance — every creature has total concealment against you — so you must pinpoint a target\'s square to attack it and cannot make attacks of opportunity against it. All terrain is difficult terrain for you, so you cannot take a 5-foot step. Sight-based checks automatically fail; other Perception checks take –4. Blind-Fight rerolls the miss chance once in melee and ignores the difficult terrain. All of this but Off-Guard is table-adjudicated, not enforced. Overrides Dazzled (not yet enforced — the GM applies it).',
+    description: 'Cannot see. Off-Guard (–2 AC and CMD, precision target), applied while Blinded lasts. Your attacks have a 50% miss chance — every creature has total concealment against you — so you must pinpoint a target\'s square to attack it and cannot make attacks of opportunity against it. All terrain is difficult terrain for you, so you cannot take a 5-foot step. Sight-based checks automatically fail; other Perception checks take –4. Blind-Fight rerolls the miss chance once in melee and ignores the difficult terrain. All of this but Off-Guard is table-adjudicated, not enforced. Overrides Dazzled: Dazzled\'s –1 on attack rolls is suppressed while this lasts and returns when it ends; its –1 on sight-based Perception is the GM\'s.',
     autoDecrement: false,
     buildChanges() {
       return [];
@@ -987,6 +987,59 @@ function _pf1StatusToClear(buff, condKey) {
 }
 
 /* ----------------------------------------------------------
+   v2.49.0 FIX-3 (TD-100 (c), F-C-04 / A5; H:905, MR:271) — fatigue on fatigue
+
+   A Ledger Fatigued applied to a creature already carrying pf1's `fatigued` asks the GM, defaulting to
+   Exhausted, and never escalates by itself. Called from `applyCondition` after the v2.45.2 Exhausted guard.
+   Non-GM: a notice, nothing written ('refused'). GM: a DialogV2 — Exhausted (default) or Leave Fatigued; any
+   other answer (or a closed dialog, or a throw) is Leave ('leave'). Exhausted: pf1's own `exhausted` status
+   (its lethargy track removes `fatigued`), the Ledger Fatigued buff — if any — deleted DIRECTLY (never through
+   `removeCondition`, whose setPf1Status clear would call setCondition('fatigued', false) after pf1 already
+   moved the creature to Exhausted, T-5), one public chat line ('exhausted'). No Off-Guard sync, no translator
+   call, no setPf1Status flag.
+   ---------------------------------------------------------- */
+
+async function _baphFatigueOnFatigue(actor) {
+  if (!game.user?.isGM) {
+    ui.notifications?.info?.(`${actor.name} is already Fatigued — the GM decides whether it becomes Exhausted.`);
+    return 'refused';
+  }
+
+  const safeName = foundry.utils.escapeHTML(actor.name);
+  let answer = null;
+  try {
+    answer = await foundry.applications.api.DialogV2.wait({
+      window: { title: `Fatigue on fatigue — ${actor.name}` },
+      content: `<p>${safeName} is already Fatigued. Anything that would fatigue it again makes it Exhausted — unless the source says otherwise (<em>touch of fatigue</em> does nothing). Escalate?</p>`,
+      buttons: [
+        { action: 'exhausted', label: 'Exhausted', default: true },
+        { action: 'leave', label: 'Leave Fatigued' }
+      ],
+      rejectClose: false
+    });
+  } catch (e) {
+    answer = null;
+  }
+
+  if (answer !== 'exhausted') {
+    ui.notifications?.info?.(`${actor.name} stays Fatigued — nothing changed.`);
+    return 'leave';
+  }
+
+  await actor.setCondition('exhausted', true);
+  const buff = _findExistingBuff(actor, 'fatigued');
+  if (buff) await buff.delete();
+
+  ChatMessage.create({
+    content: `<div style="font-family: var(--baph-font-heading, 'Courier Prime', monospace); text-transform: uppercase; letter-spacing: 0.05em; color: var(--baph-gold, #b8943e); font-size: 13px;">${safeName} — Exhausted (fatigue on fatigue)</div>`,
+    speaker: ChatMessage.getSpeaker({ actor }),
+    flags: { [MODULE_ID]: { fatigueOnFatigue: true } }
+  }).catch(err => console.warn(`${MODULE_ID} | fatigue-on-fatigue chat failed`, err));
+
+  return 'exhausted';
+}
+
+/* ----------------------------------------------------------
    v2.44.0 FIX-3 — the Stunned reaction lock
 
    While `stunnedCountdown` is above 0 a creature cannot take reactions. The pips live in
@@ -1138,6 +1191,13 @@ async function applyCondition(actor, condKey, tier, options = {}) {
   // downgrade. Before any buff write: a notice, no buff, no chat line, no pf1 write. Tier 0 (removal) is above.
   if (condKey === 'fatigued' && actor.statuses?.has('exhausted')) {
     ui.notifications?.info?.(`${actor.name} is already Exhausted — Fatigued adds nothing.`);
+    return;
+  }
+
+  // v2.49.0 FIX-3 (TD-100 (c); H:905, MR:271): fatigue on fatigue. A creature already carrying pf1's `fatigued` makes the
+  // GM decide (default Exhausted); anyone else is told so. Never automatic; nothing below runs on this path.
+  if (condKey === 'fatigued' && actor.statuses?.has('fatigued')) {
+    await _baphFatigueOnFatigue(actor);
     return;
   }
 
@@ -1891,6 +1951,49 @@ function _baphConditionRegistryCanary() {
 }
 
 /* ----------------------------------------------------------
+   v2.49.0 FIX-4 (TD-100 (d); H:734-735, MR:518) — Dazzled is suppressed while Blinded
+
+   Canon: Blinded overrides Dazzled. pf1's `dazzled` keeps its own `attack:-1` change (the kept set, the registry
+   untouched, the FROZEN six untouched). `prepareConditions()` rebuilds `system.conditions` from `statuses` every
+   prep, before `_prepareChanges()`; a `pf1AddDefaultChanges` listener that sets `system.conditions.dazzled = false`
+   makes pf1 omit that one change for that preparation. Nothing is persisted: `statuses`, the icon and the source
+   stay, and the next prep without the blindness restores the penalty. Blinded is either spelling: pf1 `blind` in
+   `actor.statuses`, or an active Ledger Blinded buff. The listener runs inside every actor's preparation on every
+   client — it reads and sets derived data only, never awaits, never writes a document and never throws (T-1); it
+   is registered at load and always on, no setting (T-2). Dazzled's -1 on sight-based Perception stays the GM's.
+   `_baphDazzledCanary()` is read-only: it warns, never fixes.
+   ---------------------------------------------------------- */
+
+function _baphSuppressDazzled(actor) {
+  try {
+    const conds = actor?.system?.conditions;
+    if (!conds || typeof conds !== 'object' || conds.dazzled !== true) return;
+    if (actor.statuses?.has('blind') || _findActiveBuff(actor, 'blinded')) conds.dazzled = false;
+  } catch (e) { /* never throw inside an actor's preparation */ }
+}
+
+Hooks.on('pf1AddDefaultChanges', (actor) => _baphSuppressDazzled(actor));
+
+/**
+ * Read-only canary for the Dazzled suppression (v2.49.0). Warns nowhere by itself; the ready block warns.
+ * @returns {{ ok: boolean, failures: Array<{ id: string, problem: string }> }}
+ */
+function _baphDazzledCanary() {
+  const failures = [];
+  const entry = globalThis.pf1?.registry?.conditions?.get?.('dazzled');
+  if (!entry) {
+    failures.push({ id: 'dazzled', problem: 'missing' });
+  } else if (_baphEntryChangeSigs(entry).join('|') !== ['attack:-1:untyped:add:0'].join('|')) {
+    failures.push({ id: 'dazzled', problem: 'kept-changes-differ' });
+  }
+  const probe = Array.from(game.actors ?? []).find(a => a.system?.skills && typeof a.system.skills === 'object');
+  if (probe && !(probe.system.conditions && typeof probe.system.conditions === 'object')) {
+    failures.push({ id: 'system.conditions', problem: 'absent' });
+  }
+  return { ok: failures.length === 0, failures };
+}
+
+/* ----------------------------------------------------------
    THE LOAD REBUILD AND THE ORPHAN AUDIT — v2.43.0 (GOAL_v2.43.0, FIX-7; P-6, P-7)
 
    A Ledger buff stores its changes, name and card text when it is created, so a condition already on
@@ -2081,6 +2184,10 @@ Hooks.once('ready', () => {
     registryCanary() {
       return _baphConditionRegistryCanary();
     },
+    // v2.49.0 FIX-4 — read-only; { ok, failures } for the Dazzled-under-Blinded suppression.
+    dazzledCanary() {
+      return _baphDazzledCanary();
+    },
     neutralizeState() {
       if (!_baphNeutralizeState) return null;
       return {
@@ -2142,6 +2249,12 @@ Hooks.once('ready', () => {
   };
 
   _baphConditionRegistryCanary();
+
+  // v2.49.0 FIX-4: warn only; never fixes.
+  const dazzledCanary = _baphDazzledCanary();
+  if (!dazzledCanary.ok) {
+    console.warn(`baphomet-utils | Dazzled suppression canary: ${dazzledCanary.failures.map(f => f.id + ' ' + f.problem).join(', ')} — Dazzled may keep its −1 under Blinded; nothing was changed.`);
+  }
 
   // v2.42.0 (P-h, FIX-4): once per load, from the active GM's client — the drift whisper when the
   // recorded set differs from the pinned ten (the pass already warned in the console on a recorded

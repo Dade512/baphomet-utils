@@ -3,20 +3,19 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.48.2 — *What the Line Lists*
+**Current Version:** 2.49.0 — *What the Roll Carries*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**What the line lists.** A monster's routine is its stat-block line, counted per attack: a "2 claws" item rolls its two
-claws as the routine, and the first attack beyond what the line lists costs an action, takes the Multiple Attack Penalty
-and ends the routine — after that every natural attack is a Strike. A Vital Strike or a Charge with a natural attack takes
-MAP at its place in the turn. A creature with Pounce that charges with a natural attack rolls that attack's whole line, +2
-on each, for 2 actions, and that pays its routine for the turn: its other natural attacks follow free and without MAP, and
-the GM adds the Charge's +2 by hand to the attacks the Charge itself did not roll. The swing count and the routine survive
-a GM reload, a GM's pip reset and switching MAP tracking off and on, and the GM can see and correct the swing count on the
-action panel. **One macro to re-paste** (Charge). See the [changelog](#changelog).
+**What the roll carries.** The Perception class-skill setting now puts its +3 on the roll itself — pf1's own
+"Class Skill" bonus, for every creature with at least one rank, characters and monsters alike — instead of only on the
+sheet's number; its hint and the audit say what it does. A Fatigued applied to a creature that is already Fatigued asks
+the GM, Exhausted by default, and never escalates by itself. A Blinded creature's Dazzled no longer costs it −1 on attacks
+for as long as the blindness lasts (the status and its icon stay). A Pounce that goes through a Boss Action, a Nauseated
+or a no-action refusal now leaves the creature's routine paid, as its card says. **No macro to re-paste.** See the
+[changelog](#changelog).
 
 ---
 
@@ -82,7 +81,7 @@ version-history / SYNC_STAMP notes if you suspect drift.
 - **Custom XP Progression** — Campaign-specific modified slow track overriding PF1e's "Fast" track; integrates organically with character sheet level-up, skill points, feats, and class features
 - **Weather Engine** — Seeded RNG weather generation with 8 Golarion climate zones, integrated with Simple Calendar Reborn; posts daily weather to chat in Croaker's Ledger style
 - **Weather Config UI** — GM-facing weather panel accessible from Scene Controls; change climate zones, toggle auto-posting, reroll weather — no console commands needed
-- **Perception Class-Skill Toggle** — Optional GM world setting (default off) that makes Perception a class skill for every character regardless of class; the standard +3 applies once they have at least 1 rank. Derived-only override — never writes actor data
+- **Perception Class-Skill Toggle** — Optional GM world setting (default off) that makes Perception a class skill for every creature (characters, NPCs and monsters) regardless of class; the standard +3 applies once it has at least 1 rank, and since v2.49.0 the +3 reaches the roll (pf1's own `+3[Class Skill]`), not just the sheet. Derived-only override — never writes actor data
 
 ---
 
@@ -190,6 +189,32 @@ What that exposure does *not* grant: a player cannot read the hidden DC or hidde
 ---
 
 ## Changelog
+
+### v2.49.0 — What the Roll Carries
+
+TD-100 (a) to (d) with rider TD-110 (a) (QA fix series 9 of 10). No canon change: the rules were already written
+(Perception is a class skill for everyone, fatigue on fatigue makes Exhausted, Blinded overrides Dazzled). **No macro to
+re-paste.**
+
+- **The Perception +3 reaches the roll (TD-100 (a), F-D-01).** With the setting on, a creature with at least one Perception
+  rank now rolls pf1's own `+3[Class Skill]`, and its sheet, `getSkillInfo` and roll data agree with the roll. It applies to
+  every creature, characters, NPCs and monsters alike; a creature with 0 ranks gains nothing, and one already class-skilled
+  keeps its single +3. The setting is a hook on `pf1AddDefaultChanges` now, so turning it on needs no reload.
+- **The hint and the audit (TD-100 (b), F-D-16).** The setting's hint says "every creature". `game.baphometSkills.auditPerception()`
+  lists the characters whose own class, race or feat items do not grant Perception, whatever the setting says, and its card
+  begins with the setting's state (it also returns `settingOn`). It stays read-only and GM-only.
+- **Fatigue on fatigue asks the GM (TD-100 (c), F-C-04).** Applying a Ledger Fatigued to a creature already carrying pf1's
+  Fatigued opens a dialog for the GM, **Exhausted** by default or **Leave Fatigued**. Exhausted sets pf1's own Exhausted,
+  removes the Ledger Fatigued buff and posts one line; Leave changes nothing; a player is told the GM decides. Never
+  automatic. The v2.45.2 refusal on an Exhausted creature stands. A new fatigue *source* arriving through a buff or effect is
+  not prompted (docketed).
+- **Dazzled stops costing −1 on attacks while Blinded (TD-100 (d)).** A creature with pf1's Blind or the Ledger's Blinded
+  does not take Dazzled's −1 on attack rolls for as long as the blindness lasts; the Dazzled status, its icon and its source
+  stay, and the penalty returns when the blindness ends. Dazzled's −1 on sight-based Perception stays the GM's.
+  `game.baphometConditions.dazzledCanary()` reports whether the suppression can work; it never fixes anything.
+- **A Pounce through a gate leaves the routine paid (TD-110 (a)).** A Pounce that passes the Boss Action, Nauseated or
+  no-action gate no longer leaves the creature's routine unpaid, so its next member use is a free routine roll, as the
+  Pounce card says.
 
 ### v2.48.2 — What the Line Lists
 
@@ -489,7 +514,8 @@ card text. Nothing structural.
 - **Fleeing takes the longest panicked source (F-C-11, TD-71 (e)).** Panicked buffs of different lengths give the
   longest, and a Panicked condition toggle with a duration sets Fleeing's length too.
 - **Fatigued never downgrades Exhausted (F-C-04).** A Ledger Fatigued on an Exhausted creature is refused with a
-  notice and writes nothing, so Exhausted stays on.
+  notice and writes nothing, so Exhausted stays on. *(Since v2.49.0, a Fatigued applied to a creature already Fatigued
+  asks the GM instead, Exhausted by default; see v2.49.0.)*
 - **Card and label text (F-C-13).** "1 action" and "lose 3 actions … the other 4 carry over" read correctly; the
   Confused, Deafened and Stunned texts and the Stunned registry label are corrected; a resolved Panicked card names
   Panicked once; and an unmarked Frightened's kept-removal log gives the right reason.
@@ -724,7 +750,7 @@ appears on an actor, the module applies the Ledger condition canon assigns it, o
   applied or changed is never taken away.
 - **Not yet (1.7c).** *Panicked* gives Frightened 3 but **Fleeing is not automated** — the card and a GM
   whisper say so, and it is adjudicated by hand. Off-Guard is not yet derived from pf1's own statuses
-  (Flat-Footed, Paralyzed, Cowering, Pinned), and Deaf, Dazzled and every other status pf1 keeps are not
+  (Flat-Footed, Paralyzed, Cowering, Pinned), and Deaf, Dazzled — suppressed under Blinded since v2.49.0 — and every other status pf1 keeps are not
   translated. *(Since v2.42.0 Fleeing and Off-Guard are automated; see v2.42.0.)*
 - **Ledger Paralyzed and Deafened set pf1's own status.** Their own Dex −20 and initiative −4 are retired
   as second writers; applying either from the panel or the API now also sets pf1's `paralyzed` (Dex 0,
@@ -750,7 +776,7 @@ Ledger's Frightened from the panel applied its own on top. This release makes th
   as the relabelled icon says: *Shaken → Frightened 1 (Ledger)*, *Frightened → Frightened 2
   (Ledger)*, *Panicked → Frightened 3 + Fleeing (Ledger)*, *Sickened → Sickened 2 (Ledger)*,
   *Stunned → Stunned 1 (Ledger)*, *Blind → Blinded (Ledger)*. Nothing reads these statuses yet.
-- **Every other pf1 condition is untouched** and keeps its mechanics (Dazzled, Paralyzed, Flat-Footed
+- **Every other pf1 condition is untouched** and keeps its mechanics (Dazzled — suppressed under Blinded, Paralyzed, Flat-Footed
   and the rest).
 - **The pass** runs on pf1's `pf1RegisterConditions` hook, before pf1 builds the token HUD's status
   list and before Foundry prepares any world document, so a saved actor is prepared without pf1's
