@@ -512,19 +512,19 @@ Hooks.once('init', () => {
      PERCEPTION ALWAYS A CLASS SKILL — v2.27.0
 
      World toggle. When ON, scripts/perception-class-skill.js treats
-     Perception as a class skill for every actor regardless of class. It
-     runs in pf1PrepareDerivedActorData (after pf1's own class-skill
-     aggregation, which would otherwise force cs=false on classed actors)
-     and sets skills.per.cs = true, adding the standard +3 to skills.per.mod
-     when the skill was not already a class skill and the actor has >=1 rank.
-     This does NOT grant ranks, adds no bonus to 0-rank actors, does not
-     double for actors who already have Perception, and never writes actor
-     documents (recomputed each prep). onChange re-preps world actors so the
-     toggle applies live.
+     Perception as a class skill for every creature regardless of class
+     (v2.49.0). It listens on pf1AddDefaultChanges (after pf1's own
+     class-skill aggregation, before pf1 builds its type changes) and sets
+     skills.per.cs = true; pf1 then builds its own +3[Class Skill] change at
+     rank >= 1, so the +3 reaches the roll, the sheet and the roll data.
+     This does NOT grant ranks, adds no bonus at 0 ranks, does not double for
+     creatures who already have Perception, and never writes actor documents
+     (recomputed each prep). onChange re-preps world actors so the toggle
+     applies live.
      ---------------------------------------------------------- */
   game.settings.register(SETTINGS_MODULE_ID, 'perceptionAlwaysClassSkill', {
     name: 'Perception Is Always a Class Skill',
-    hint: 'When enabled, Perception counts as a class skill for every character regardless of class — the standard +3 applies once they have at least 1 rank. Does not grant ranks; no effect on actors with 0 Perception ranks or those who already have it as a class skill. Default OFF.',
+    hint: 'When enabled, Perception counts as a class skill for every creature — characters, NPCs and monsters alike — and the standard +3 applies once it has at least 1 rank. Does not grant ranks; no effect at 0 ranks or where Perception is already a class skill. Default OFF.',
     scope: 'world',
     config: true,
     type: Boolean,
