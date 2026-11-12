@@ -325,3 +325,5 @@
 .baph-condition-panel::-webkit-scrollbar-thumb {
   background: var(--baph-leather-mid, #8a7b66);
 }
+
+.condition a.checkbox.baph-suppressed { opacity: 0.6; outline: 1px dashed var(--baph-ink-faint, #8a7b6e); outline-offset: 1px; }

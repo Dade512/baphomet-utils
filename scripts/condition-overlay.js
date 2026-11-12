@@ -997,7 +997,45 @@ function _pf1StatusToClear(buff, condKey) {
    `removeCondition`, whose setPf1Status clear would call setCondition('fatigued', false) after pf1 already
    moved the creature to Exhausted, T-5), one public chat line ('exhausted'). No Off-Guard sync, no translator
    call, no setPf1Status flag.
+
+   v2.49.1 FIX-9 (TD-111 (5), (6), (7); T-10):
+   (6) One prompt per creature: `_baphFatiguePromptOpen` (keyed by actor.uuid, checked and set before the first
+       `await`) makes a second apply while a dialog is open return 'open' at once - no second dialog, no notice.
+   (7) The write block (`setCondition('exhausted', true)` and the buff deletion) runs in a try: a creature deleted
+       while its dialog was open, or a write that fails, gives one notice, a console warning and 'failed' - no
+       chat line, nothing thrown.
+   (5) pf1's lethargy track clears only an actor-level `fatigued`; an item whose `system.conditions` lists
+       `fatigued` (or whose enabled effect carries the status) keeps it. After the write `_baphFatigueCarriers`
+       names those items; the chat line gains the suffix and one GM whisper ('fatigueCarrier') says to remove it
+       by hand. Nothing is deleted automatically.
    ---------------------------------------------------------- */
+
+const _baphFatiguePromptOpen = new Set();
+
+// v2.49.1 FIX-9 (5): the names, de-duplicated, of every ACTIVE buff whose `system.conditions` includes
+// `fatigued` and of the parent Item of every non-disabled effect on the actor or one of its items carrying the
+// `fatigued` status (the `_translatorSource` precedent). [] when the creature no longer has the status.
+// Read-only; never throws.
+function _baphFatigueCarriers(actor) {
+  try {
+    if (!actor?.statuses?.has?.('fatigued')) return [];
+    const names = [];
+    const add = (n) => { const s = String(n ?? '').trim(); if (s && !names.includes(s)) names.push(s); };
+    for (const item of Array.from(actor.items ?? [])) {
+      if (item.type !== 'buff' || item.system?.active !== true) continue;
+      if (Array.from(item.system?.conditions ?? []).includes('fatigued')) add(item.name);
+    }
+    const effects = [...Array.from(actor.effects ?? []), ...Array.from(actor.items ?? []).flatMap(i => Array.from(i.effects ?? []))];
+    for (const effect of effects) {
+      if (effect.disabled || !effect.statuses?.has?.('fatigued')) continue;
+      const parent = effect.parent;
+      if (parent && parent !== actor && parent.documentName === 'Item') add(parent.name);
+    }
+    return names;
+  } catch (e) {
+    return [];
+  }
+}
 
 async function _baphFatigueOnFatigue(actor) {
   if (!game.user?.isGM) {
@@ -1005,38 +1043,64 @@ async function _baphFatigueOnFatigue(actor) {
     return 'refused';
   }
 
-  const safeName = foundry.utils.escapeHTML(actor.name);
-  let answer = null;
+  // v2.49.1 FIX-9 (6; T-7 shape): checked and set before the first `await`.
+  if (_baphFatiguePromptOpen.has(actor.uuid)) return 'open';
+  _baphFatiguePromptOpen.add(actor.uuid);
   try {
-    answer = await foundry.applications.api.DialogV2.wait({
-      window: { title: `Fatigue on fatigue — ${actor.name}` },
-      content: `<p>${safeName} is already Fatigued. Anything that would fatigue it again makes it Exhausted — unless the source says otherwise (<em>touch of fatigue</em> does nothing). Escalate?</p>`,
-      buttons: [
-        { action: 'exhausted', label: 'Exhausted', default: true },
-        { action: 'leave', label: 'Leave Fatigued' }
-      ],
-      rejectClose: false
-    });
-  } catch (e) {
-    answer = null;
+    const safeName = foundry.utils.escapeHTML(actor.name);
+    let answer = null;
+    try {
+      answer = await foundry.applications.api.DialogV2.wait({
+        window: { title: `Fatigue on fatigue — ${actor.name}` },
+        content: `<p>${safeName} is already Fatigued. Anything that would fatigue it again makes it Exhausted — unless the source says otherwise (<em>touch of fatigue</em> does nothing). Escalate?</p>`,
+        buttons: [
+          { action: 'exhausted', label: 'Exhausted', default: true },
+          { action: 'leave', label: 'Leave Fatigued' }
+        ],
+        rejectClose: false
+      });
+    } catch (e) {
+      answer = null;
+    }
+
+    if (answer !== 'exhausted') {
+      ui.notifications?.info?.(`${actor.name} stays Fatigued — nothing changed.`);
+      return 'leave';
+    }
+
+    // v2.49.1 FIX-9 (7): the write block in a try.
+    try {
+      await actor.setCondition('exhausted', true);
+      const buff = _findExistingBuff(actor, 'fatigued');
+      if (buff) await buff.delete();
+    } catch (err) {
+      ui.notifications?.warn?.(`Exhausted was not applied to ${actor.name} — the creature is gone or could not be written.`);
+      console.warn(`${MODULE_ID} | fatigue-on-fatigue write failed`, err);
+      return 'failed';
+    }
+
+    // v2.49.1 FIX-9 (5): name any item still carrying Fatigued. Nothing is deleted automatically (T-10).
+    const carriers = _baphFatigueCarriers(actor);
+    const names = carriers.map(n => foundry.utils.escapeHTML(n)).join(', ');
+    const suffix = carriers.length ? ` (Fatigued still carried by ${names})` : '';
+
+    ChatMessage.create({
+      content: `<div style="font-family: var(--baph-font-heading, 'Courier Prime', monospace); text-transform: uppercase; letter-spacing: 0.05em; color: var(--baph-gold, #b8943e); font-size: 13px;">${safeName} — Exhausted (fatigue on fatigue)${suffix}</div>`,
+      speaker: ChatMessage.getSpeaker({ actor }),
+      flags: { [MODULE_ID]: { fatigueOnFatigue: true } }
+    }).catch(err => console.warn(`${MODULE_ID} | fatigue-on-fatigue chat failed`, err));
+
+    if (carriers.length) {
+      _baphGmWhisper(
+        `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;"><p>${safeName}: Fatigued is still carried by ${names} — remove it by hand.</p></div>`,
+        'fatigueCarrier'
+      ).catch(err => console.warn(`${MODULE_ID} | fatigue-carrier whisper failed`, err));
+    }
+
+    return 'exhausted';
+  } finally {
+    _baphFatiguePromptOpen.delete(actor.uuid);
   }
-
-  if (answer !== 'exhausted') {
-    ui.notifications?.info?.(`${actor.name} stays Fatigued — nothing changed.`);
-    return 'leave';
-  }
-
-  await actor.setCondition('exhausted', true);
-  const buff = _findExistingBuff(actor, 'fatigued');
-  if (buff) await buff.delete();
-
-  ChatMessage.create({
-    content: `<div style="font-family: var(--baph-font-heading, 'Courier Prime', monospace); text-transform: uppercase; letter-spacing: 0.05em; color: var(--baph-gold, #b8943e); font-size: 13px;">${safeName} — Exhausted (fatigue on fatigue)</div>`,
-    speaker: ChatMessage.getSpeaker({ actor }),
-    flags: { [MODULE_ID]: { fatigueOnFatigue: true } }
-  }).catch(err => console.warn(`${MODULE_ID} | fatigue-on-fatigue chat failed`, err));
-
-  return 'exhausted';
 }
 
 /* ----------------------------------------------------------
@@ -1973,6 +2037,32 @@ function _baphSuppressDazzled(actor) {
 }
 
 Hooks.on('pf1AddDefaultChanges', (actor) => _baphSuppressDazzled(actor));
+
+/* ----------------------------------------------------------
+   v2.49.1 FIX-8 (TD-111 (2), R-8, Q7 (A); T-9) - the sheet's Dazzled box says what a click on it does
+
+   While Blinded holds Dazzled's -1, `_baphSuppressDazzled` makes `system.conditions.dazzled` false for the
+   preparation, so pf1's sheet box (`a.checkbox[data-condition-id="dazzled"]`, `active` from `system.conditions`)
+   reads unchecked - yet its click calls `actor.toggleCondition`, which reads `statuses`, and so removes the real
+   Dazzled. This render hook only DECORATES the box: it re-checks it from `statuses`, and while Blinded marks it
+   `baph-suppressed` with a title. pf1's click handler and its meaning are untouched. The sheet is AppV1, the
+   render element jQuery; never throws.
+   ---------------------------------------------------------- */
+function _baphDazzledSheetBox(sheet, html) {
+  try {
+    const root = html?.[0] ?? html;
+    const actor = sheet?.actor;
+    const el = root?.querySelector?.('a[data-condition-id="dazzled"]');
+    if (!el || !actor?.statuses?.has?.('dazzled')) return;
+    el.classList.add('active');
+    if (actor.statuses.has('blind') || _findActiveBuff(actor, 'blinded')) {
+      el.classList.add('baph-suppressed');
+      el.title = 'Dazzled is suppressed while Blinded (the −1 is held, not removed) — clicking removes it';
+    }
+  } catch (e) { /* decoration only; never throw inside a render */ }
+}
+
+Hooks.on('renderActorSheetPF', (sheet, html) => _baphDazzledSheetBox(sheet, html));
 
 /**
  * Read-only canary for the Dazzled suppression (v2.49.0). Warns nowhere by itself; the ready block warns.
