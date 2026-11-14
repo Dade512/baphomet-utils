@@ -19,11 +19,20 @@
      written to replicated User, Actor, Combatant, Scene, world-setting,
      socket, or ChatMessage surfaces.
 
-     readyToResolve is ONLY set by the GM client that can read hidden
-     data (game.user.isGM and the hiddenData entry exists). Non-GM
-     clients and GM clients missing hidden data must NOT guess
-     completion state. If hidden data is absent at commit time,
-     readyToResolve is left false and a debug warning is logged.
+     v2.49.1 (TD-101 (d)): the GM keeps the record. The hidden entry
+     carries `commits` - the rounds in which the active GM accepted a
+     committed action. A player's Continue is adjudicated by the GM
+     (baphTaskCommitAdjudicate: it spends the action, pushes the round,
+     persists the store and writes the public flag); the player writes and
+     spends nothing. Readiness is DERIVED from the record
+     (_baphTaskIsReady: commits.length >= roundsRequired), never read from
+     the public flag, and the flag's roundsCommitted / readyToResolve are
+     the GM's display of it. A non-GM edit of either field is put back by
+     the active GM (_baphTaskRepairForgedProgress) and whispered once. A
+     client with no hidden entry (a player, or a GM without the store)
+     never guesses: readiness is false there. The retired
+     baphTaskReadinessCheck compared a player-written count with the
+     threshold and is gone.
 
    In-memory cache:
      Map<combatantId, Record<taskId, PublicTaskObject>>
@@ -146,8 +155,9 @@ Hooks.once('socketlib.ready', () => {
   _baphTaskSocket = socketlib.registerModule(BAPH_TASK_MODULE_ID);
   _baphTaskSocket.register('baphTaskResolveAdjudicate', _baphSocketResolveAdjudicate);
   _baphTaskSocket.register('baphTaskAidAdjudicate',     _baphSocketAidAdjudicate);
-  _baphTaskSocket.register('baphTaskReadinessCheck',    _baphSocketReadinessCheck);
-  _baphTaskDebugLog('socketlib: registered resolve/aid/readiness handlers');
+  // v2.49.1 FIX-4 (TD-101 (d)): the commit adjudication replaces the retired readiness check.
+  _baphTaskSocket.register('baphTaskCommitAdjudicate',  _baphSocketCommitAdjudicate);
+  _baphTaskDebugLog('socketlib: registered resolve/aid/commit handlers');
   // v2.39.1 — GOAL_v2.39.1_TASK_REQUEST_AUTH.md FIX-1/FIX-2: the request/
   // response pair, migrated off the raw listener. _baphHandleTaskRequest is
   // declared with `function` in this file and reads the verified sender
@@ -483,6 +493,60 @@ function _baphTaskHasHiddenEntry(taskId) {
   return _baphHiddenTaskMap.has(taskId);
 }
 
+/* ----------------------------------------------------------
+   _baphTaskCommitsOf(taskId, publicTask)   [v2.49.1 FIX-4 — TD-101 (d)]
+
+   The GM's commit record: `commits` on the hidden entry, the rounds in
+   which the GM accepted a committed action. Synchronous and GM only
+   (T-4): it reads _baphHiddenTaskMap, so a caller that must take an
+   in-flight reservation before its first `await` can still read it.
+   Returns the entry's LIVE array (callers that push must persist the
+   hidden store afterwards), or null with no hidden entry / not a GM.
+
+   Legacy: a hidden entry written before 2.49.1 has no `commits` array.
+   `n` = the public roundsCommitted (a whole number, else 0); the record
+   becomes n - 1 nulls followed by lastCommittedRound (when that is a
+   whole number and n >= 1), else n nulls. The adoption is set on the
+   map entry at once and persisted WITHOUT being awaited, so the caller
+   stays synchronous; one console.info line says so.
+   ---------------------------------------------------------- */
+function _baphTaskCommitsOf(taskId, publicTask) {
+  if (!game.user?.isGM) return null;
+  const entry = _baphHiddenTaskMap.get(taskId);
+  if (!entry) return null;
+  if (Array.isArray(entry.commits)) return entry.commits;
+
+  const rc = publicTask?.roundsCommitted;
+  const n = (Number.isInteger(rc) && rc > 0) ? rc : 0;
+  const last = publicTask?.lastCommittedRound;
+  const commits = new Array(n).fill(null);
+  if (n >= 1 && Number.isInteger(last)) commits[n - 1] = last;
+  entry.commits = commits;
+  console.info(
+    `${BAPH_TASK_MODULE_ID} | task-tracker: legacy task "${taskId}" adopted ${n} commit(s) of unknown date`
+  );
+  _baphTaskWriteHiddenAll(_baphTaskReadHiddenAll()).catch((err) => {
+    console.error(`${BAPH_TASK_MODULE_ID} | task-tracker: legacy commit adoption could not be persisted`, err);
+  });
+  return entry.commits;
+}
+
+/* ----------------------------------------------------------
+   _baphTaskIsReady(taskId, publicTask)   [v2.49.1 FIX-4]
+
+   Readiness is derived from the GM's record, never from the public
+   flag: true only when the record exists, roundsRequired is a number
+   and commits.length >= roundsRequired. Synchronous (T-4). Always
+   false on a client with no hidden entry (a player, or a GM without
+   the store) - the GM re-decides at Resolve.
+   ---------------------------------------------------------- */
+function _baphTaskIsReady(taskId, publicTask) {
+  const commits = _baphTaskCommitsOf(taskId, publicTask);
+  if (!Array.isArray(commits)) return false;
+  const required = _baphHiddenTaskMap.get(taskId)?.roundsRequired;
+  return typeof required === 'number' && commits.length >= required;
+}
+
 function _baphTaskAssertNoSecrets(value, label = 'task payload') {
   const forbiddenKeys = new Set(['dc', 'roundsRequired', 'trapName', 'metadataHidden']);
   const found = [];
@@ -692,6 +756,16 @@ async function _baphTaskCreate(combatantOrId, options = {}) {
     return false;
   }
 
+  // v2.49.1 FIX-5 (TD-101 (e), F-D-07; R-5): metadataPublic is published to the actor flag unchecked at 2.49.0 -
+  // a hidden field named in it (a dc, say) would be player-visible. Refuse before anything is written.
+  try {
+    _baphTaskAssertNoSecrets(metadataPublic, 'metadataPublic');
+  } catch (err) {
+    const keys = String(err?.message ?? '').split(': ').pop();
+    ui.notifications?.warn?.(`Baphomet Tasks: metadataPublic carries hidden field(s) (${keys}) — task not created.`);
+    return false;
+  }
+
   // Stable, human-readable task ID.
   const taskId     = `${combatant.id}-${skillKey}-${Date.now()}`;
   const startRound = game.combat?.round ?? 0;
@@ -719,7 +793,9 @@ async function _baphTaskCreate(combatantOrId, options = {}) {
   // ── Hidden task data (client-scope active-GM store — never on actor flags) ──────
   // roundsRequired and metadataHidden are strictly private.
   const hiddenAll = _baphTaskReadHiddenAll();
-  hiddenAll[taskId] = { taskId, roundsRequired, metadataHidden };
+  // v2.49.1 FIX-4: `commits` is the GM's record of the rounds a committed action was accepted - a created task
+  // has committed nothing.
+  hiddenAll[taskId] = { taskId, roundsRequired, metadataHidden, commits: [] };
   const hiddenWritten = await _baphTaskWriteHiddenAll(hiddenAll);
   if (!hiddenWritten) return false;
 
@@ -776,6 +852,8 @@ function _baphTaskGet(combatantOrId, taskId) {
       {
         roundsRequired: hidden.roundsRequired ?? null,
         metadataHidden: hidden.metadataHidden ?? {},
+        // v2.49.1 FIX-4: the GM's commit record (GM-only like roundsRequired); null with no record.
+        commits: Array.isArray(hidden.commits) ? [...hidden.commits] : null,
       }
     );
   }
@@ -835,6 +913,14 @@ function _baphTaskGetAll(combatantOrId) {
    Spend 1 action pip and advance task progress by 1 round.
    Enforces all gates in strict order. Returns boolean.
 
+   v2.49.1 (TD-101 (d)): the GM keeps the record. A task's committed
+   rounds are the `commits` array on its hidden entry, written only by
+   the active GM; the public roundsCommitted / readyToResolve flag
+   fields are a display derived from it. A player's Continue writes
+   nothing and spends nothing: it checks gates 1-8 and a free pip,
+   then asks the GM (baphTaskCommitAdjudicate), which spends, records
+   the round and writes the flag.
+
    Gate order:
      1. Active combat exists (game.combat is truthy)
      2. Combatant resolves and is valid
@@ -844,21 +930,21 @@ function _baphTaskGetAll(combatantOrId) {
      6. Task status is not 'paused'
      7. Task status is not 'resolved' or 'abandoned'
      8. lastCommittedRound !== game.combat.round (same-round guard)
-     9. Spend 1 action via _spendActionForCombatant (from action-tracker.js)
+     9. GM: spend 1 action via _spendActionForCombatant (action-tracker.js).
+        Non-GM: read-only _baphTaskHasAvailableAction, then the request.
 
-   On spend success:
-     - roundsCommitted += 1
+   GM, on spend success:
+     - push game.combat.round onto the hidden entry's commits and persist
+     - roundsCommitted = commits.length
      - lastCommittedRound = game.combat.round
-     - If GM and hidden data present: check roundsCommitted >= roundsRequired;
-       set readyToResolve = true if threshold reached.
-     - If GM but hidden data absent: log warning, leave readyToResolve false.
-     - If non-GM: skip readyToResolve evaluation entirely.
-     - Write updated public state to actor flags.
-     - Update cache.
+     - readyToResolve = _baphTaskIsReady (commits.length >= roundsRequired)
+     - If the hidden entry is absent: log warning, +1, readyToResolve false
+       (fail closed).
+     - Write updated public state to actor flags; update cache.
 
    readyToResolve policy:
-     Only the GM client that holds hidden data may set this true.
-     Non-GM clients read whatever the GM last wrote. Do not guess.
+     Derived from the GM's record, never from the public flag. A flag a
+     player edits by hand is put back (_baphTaskRepairForgedProgress).
 
    @param {Combatant|string} combatant
    @param {string}           taskId
@@ -938,6 +1024,43 @@ async function _baphTaskCommit(combatantOrId, taskId) {
     return false;
   }
 
+  // Gate 9 (non-GM, v2.49.1 FIX-4, T-5): the player's Continue writes nothing and spends nothing. It checks
+  // that a pip is free (read-only), then asks the GM, which spends the action, records the round and writes
+  // the flag; the widget re-renders from the GM's write.
+  if (!game.user.isGM) {
+    if (!_baphTaskHasAvailableAction(combatant.id)) {
+      _baphTaskDebugLog(
+        `commitAction rejected: no action available for "${task.taskName}" ` +
+        `— not enough actions remaining or tracker not ready`
+      );
+      return false;
+    }
+    if (!game.users?.activeGM) {
+      _baphTaskDebugLog(`commitAction: no active GM — progress for "${task.taskName}" cannot be recorded`);
+      ui.notifications?.warn?.("No GM is connected — task progress can't be recorded right now.");
+      return false;
+    }
+    _baphTaskDebugLog(
+      `commitAction: emitting commit-adjudication request — task "${task.taskName}"`
+    );
+    _baphTaskEmitSocket('baphTaskCommitAdjudicate', {
+      combatantId: combatant.id,
+      taskId,
+    });
+    return true;
+  }
+
+  // Gate 8 (GM, v2.49.1 FIX-4): the record is the same-round guard too - a second GM-direct Continue that starts
+  // while the first awaits its persist sees the round already pushed and is refused before any spend.
+  const recordedRounds = _baphTaskCommitsOf(taskId, task);
+  if (Array.isArray(recordedRounds) && recordedRounds.includes(currentRound)) {
+    _baphTaskDebugLog(
+      `commitAction rejected: already committed to "${task.taskName}" ` +
+      `this round (round ${currentRound}) — no double-spend`
+    );
+    return false;
+  }
+
   // Gate 9: spend 1 action
   // _spendActionForCombatant is a global from action-tracker.js (loads before this file).
   // It is all-or-nothing, updates the pip row, and returns boolean.
@@ -951,73 +1074,58 @@ async function _baphTaskCommit(combatantOrId, taskId) {
   }
 
   // ── All gates passed. Advance progress. ──────────────────────────
-  task.roundsCommitted   += 1;
-  task.lastCommittedRound = currentRound;
-
-  // readyToResolve: evaluated only by the GM client that holds hidden data.
-  // Non-GM clients leave this field as-is (already written by the GM client
-  // on a prior commit, or will be set on the next commit by the GM).
-  if (game.user.isGM) {
-    const hiddenAll = _baphTaskReadHiddenAll();
-    const hidden    = hiddenAll[taskId];
-    if (hidden?.roundsRequired != null) {
-      if (task.roundsCommitted >= hidden.roundsRequired) {
-        task.readyToResolve = true;
-        _baphTaskDebugLog(
-          `commitAction: "${task.taskName}" is ready to resolve ` +
-          `(${task.roundsCommitted}/${hidden.roundsRequired} rounds)`
-        );
-        console.debug(
-          `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
-          `"${task.taskName}" is ready to resolve`
-        );
-      }
-    } else {
-      // Hidden data absent for this task on this GM client.
-      // Per design policy: do not guess. Log clearly.
+  // v2.49.1 FIX-4: the GM's record is the progress. Push the round, persist the hidden store, derive the flag
+  // fields from the record. With no hidden entry the old +1 stands and readyToResolve stays false (fail closed).
+  const commits = _baphTaskCommitsOf(taskId, task);
+  if (Array.isArray(commits)) {
+    commits.push(currentRound);
+    const persisted = await _baphTaskWriteHiddenAll(_baphTaskReadHiddenAll());
+    if (!persisted) {
+      // The write failed (it already warned): the map still holds the live array, so take the round back out.
+      const at = commits.lastIndexOf(currentRound);
+      if (at >= 0) commits.splice(at, 1);
+      _baphTaskDebugLog(`commitAction: commit record for "${task.taskName}" could not be persisted — not recorded`);
+      return false;
+    }
+    const recorded = _baphTaskCommitsOf(taskId, task) ?? commits;
+    task.roundsCommitted   = recorded.length;
+    task.lastCommittedRound = currentRound;
+    task.readyToResolve    = _baphTaskIsReady(taskId, task);
+    if (task.readyToResolve) {
       _baphTaskDebugLog(
-        `commitAction WARNING: no hidden data for task "${taskId}" on this GM client. ` +
-        `readyToResolve not evaluated. ` +
-        `Check the active GM client's hiddenTaskStore.`
+        `commitAction: "${task.taskName}" is ready to resolve ` +
+        `(${task.roundsCommitted} recorded round(s))`
       );
-      ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
-      console.warn(
+      console.debug(
         `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
-        `no hidden data found for task "${taskId}" on this GM client. ` +
-        `readyToResolve not evaluated. ` +
-        `Was this task created by a different GM user?`
+        `"${task.taskName}" is ready to resolve`
       );
     }
-  }
-
-  // Write updated public state.
-  tasks[taskId] = task;
-  await _baphTaskWriteActorTasks(combatant.actor, tasks);
-  _baphTaskUpdateCache(combatant.id, tasks);
-
-  // Non-GM: public progress is now written; request GM-side readiness evaluation.
-  // The GM client reads hidden roundsRequired and flips readyToResolve when the
-  // public committed progress meets the threshold.
-  // GM clients skip this — they already evaluated readiness synchronously above.
-  if (!game.user.isGM) {
-    if (!game.users?.activeGM) {
-      _baphTaskDebugLog(
-        `commitAction: no active GM for readiness check — progress saved for "${task.taskName}"`
-      );
-      ui.notifications?.warn?.('Progress saved. Readiness will update when the GM is online.');
-      return true;
-    }
-
+  } else {
+    task.roundsCommitted   += 1;
+    task.lastCommittedRound = currentRound;
+    // Hidden data absent for this task on this GM client.
+    // Per design policy: do not guess. Log clearly.
     _baphTaskDebugLog(
-      `commitAction: emitting readiness-check request — ` +
-      `task "${task.taskName}", roundsCommitted=${task.roundsCommitted}`
+      `commitAction WARNING: no hidden data for task "${taskId}" on this GM client. ` +
+      `readyToResolve not evaluated. ` +
+      `Check the active GM client's hiddenTaskStore.`
     );
-    _baphTaskEmitSocket('baphTaskReadinessCheck', {
-      combatantId:        combatant.id,
-      taskId,
-      roundsCommitted:    task.roundsCommitted,
-    });
+    ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
+    console.warn(
+      `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
+      `no hidden data found for task "${taskId}" on this GM client. ` +
+      `readyToResolve not evaluated. ` +
+      `Was this task created by a different GM user?`
+    );
   }
+
+  // Write updated public state. Re-read: the hidden write above awaited, so a sibling task's change since the
+  // read at gate 5 must not be discarded.
+  const writeTasks = _baphTaskReadActorTasks(combatant.actor);
+  writeTasks[taskId] = task;
+  await _baphTaskWriteActorTasks(combatant.actor, writeTasks);
+  _baphTaskUpdateCache(combatant.id, writeTasks);
 
   _baphTaskDebugLog(
     `commitAction: "${task.taskName}" advanced — ` +
@@ -1424,7 +1532,10 @@ async function _baphTaskResolve(combatantOrId, taskId) {
   }
 
   // Gate 6: task must be ready to resolve
-  if (!task.readyToResolve) {
+  // v2.49.1 FIX-4: on a GM the readiness comes from the GM's commit record, not the flag; on a player the flag is
+  // a pre-check only (the GM re-decides in its resolve handler).
+  const resolveReady = game.user.isGM ? _baphTaskIsReady(taskId, task) : task.readyToResolve === true;
+  if (!resolveReady) {
     _baphTaskDebugLog(
       `resolveTask rejected: task "${task.taskName}" is not ready to resolve`
     );
@@ -2035,7 +2146,8 @@ async function _baphTaskInitiate(combatantOrId, options = {}) {
 
   // Hidden data: roundsRequired and DC never go on actor flags.
   const hiddenAll = _baphTaskReadHiddenAll();
-  hiddenAll[taskId] = { taskId, roundsRequired, metadataHidden: { dc } };
+  // v2.49.1 FIX-4: the initiation action is the first accepted round of the GM's commit record.
+  hiddenAll[taskId] = { taskId, roundsRequired, metadataHidden: { dc }, commits: [startRound] };
   const hiddenWritten = await _baphTaskWriteHiddenAll(hiddenAll);
   if (!hiddenWritten) return false;
 
@@ -2524,7 +2636,9 @@ async function _baphSocketResolveAdjudicate(payload = {}) {
     _baphTaskDebugLog(`socketlib resolveAdjudicate: task "${taskId}" not found on ${combatant.actor.name}`);
     return;
   }
-  if (!task.readyToResolve) {
+  // v2.49.1 FIX-4 (T-4): readiness from the GM's commit record - synchronous, so the in-flight reservation
+  // below is still taken before this handler's first `await`.
+  if (!_baphTaskIsReady(taskId, task)) {
     _baphTaskDebugLog(`socketlib resolveAdjudicate: task "${task.taskName}" is not ready to resolve`);
     return;
   }
@@ -2781,124 +2895,204 @@ async function _baphSocketAidAdjudicate(payload = {}) {
   }
 }
 
-/* ── baphTaskReadinessCheck ──────────────────────────────────────────
-   Player-driven Continue Task committed public progress. GM verifies
-   the caller, re-checks ownership against that verified id, then reads
-   hidden roundsRequired and compares against the authoritative public
-   roundsCommitted from actor flags (never from payload), flipping
-   readyToResolve when the threshold is met. Hidden duration never
-   leaves GM-side storage.
+/* ── baphTaskCommitAdjudicate ─────────────────────────────────────────
+   v2.49.1 FIX-4 (TD-101 (d), F-D-22; R-4): a player's Continue is done
+   by the GM. The player's client sends only { combatantId, taskId }; the
+   GM verifies the caller (this.socketdata.userId, never the payload),
+   re-checks ownership against that verified id, replays the commit gates
+   against its own authoritative state, SPENDS the action, records the
+   round in the hidden entry's `commits`, and writes the public flag.
+   The player writes nothing and spends nothing (T-5).
 
-   No additional gate replay beyond identity (D2 mapping row C4 / C3
-   note, confirmed during implementation against _baphTaskCommit's
-   client gates): this handler can only flip readyToResolve from real,
-   already-persisted, permission-enforced progress — it cannot fabricate
-   roundsCommitted, so a caller who is not the active combatant, or who
-   re-triggers this check redundantly, cannot gain anything a genuinely
-   idempotent recheck wouldn't already show.
+   Replaces the retired baphTaskReadinessCheck, which compared a
+   player-written roundsCommitted with the hidden threshold and so let a
+   hand-edited flag buy progress. Readiness is now derived from the
+   record (_baphTaskIsReady); the flag's roundsCommitted / readyToResolve
+   are the GM's display of it.
+
+   A synchronous in-flight key (combatant + task + round, taken before the
+   first `await`, released in `finally`) refuses a concurrent duplicate, as
+   the resolve handler's _baphResolveInFlight does. Answers { ok, reason }
+   (the player does not wait for it; its widget follows the GM's write).
 ──────────────────────────────────────────────────────────────────────── */
-async function _baphSocketReadinessCheck(payload = {}) {
-  // FIX-02 — activeGM election, mirrors :2788-2789 unchanged. Silent
-  // return by design: this only ever declines traffic a non-active GM
-  // client is correctly ignoring (hidden store is per-GM-client; see
-  // OVERSEER RULING #3 finding 2). Do not use _baphTaskEnsureActiveGMClient
-  // here — it raises ui.notifications warnings, which must not surface to
-  // a non-active GM for traffic it correctly ignores.
+const _baphCommitInFlight = new Set();
+
+async function _baphSocketCommitAdjudicate(payload = {}) {
+  // Silent return by design for a non-active GM (see the resolve handler).
   if (!game.user.isGM) return;
   if (game.user !== game.users?.activeGM) return;
 
-  const requestingUserId = this?.socketdata?.userId;
+  const requestingUserId = this?.socketdata?.userId; // verified sender - NEVER payload
   const { combatantId, taskId } = payload ?? {};
 
   _baphTaskDebugLog(
-    `socketlib: baphTaskReadinessCheck received — ` +
+    `socketlib: baphTaskCommitAdjudicate received — ` +
     `combatant=${combatantId}, task=${taskId}, from=${requestingUserId}`
   );
+  const refuse = (reason) => {
+    _baphTaskDebugLog(`socketlib commitAdjudicate: ${reason} — rejected`);
+    return { ok: false, reason };
+  };
 
-  if (!game.combat) {
-    _baphTaskDebugLog('socketlib readinessCheck: no active combat — rejected');
-    return;
-  }
+  if (!game.combat) return refuse('no active combat');
 
-  const rcCombatant = game.combat.combatants.get(combatantId);
-  if (!rcCombatant?.actor) {
-    _baphTaskDebugLog(`socketlib readinessCheck: combatant "${combatantId}" not found — rejected`);
-    return;
-  }
+  const combatant = game.combat.combatants.get(combatantId);
+  if (!combatant?.actor) return refuse(`combatant "${combatantId}" not found`);
 
-  const rcUser = game.users.get(requestingUserId);
-  if (!rcUser) {
-    _baphTaskDebugLog(`socketlib readinessCheck: user "${requestingUserId}" not found — rejected`);
-    return;
-  }
-  const RC_OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
-  const rcActorOwnership  = rcCombatant.actor.ownership ?? {};
-  const rcUserLevel       = rcActorOwnership[requestingUserId] ?? 0;
-  const rcDefaultLevel    = rcActorOwnership['default'] ?? 0;
-  const rcEffectiveLevel  = Math.max(rcUserLevel, rcDefaultLevel);
-  if (!rcUser.isGM && rcEffectiveLevel < RC_OWNER_LEVEL) {
-    _baphTaskDebugLog(
-      `socketlib readinessCheck: user "${requestingUserId}" cannot control ` +
-      `"${rcCombatant.name}" — rejected`
-    );
-    return;
+  const requestingUser = game.users.get(requestingUserId);
+  if (!requestingUser) return refuse(`requesting user "${requestingUserId}" not found`);
+  const OWNER_LEVEL    = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OWNER ?? 3;
+  const actorOwnership = combatant.actor.ownership ?? {};
+  const userLevel      = actorOwnership[requestingUserId] ?? 0;
+  const defaultLevel   = actorOwnership['default'] ?? 0;
+  const effectiveLevel = Math.max(userLevel, defaultLevel);
+  if (!requestingUser.isGM && effectiveLevel < OWNER_LEVEL) {
+    return refuse(`user "${requestingUserId}" cannot control "${combatant.name}"`);
   }
 
-  // Read authoritative public task state directly from actor flags (not payload).
-  const rcTasks = _baphTaskReadActorTasks(rcCombatant.actor);
-  const rcTask  = rcTasks[taskId];
-  if (!rcTask) {
-    _baphTaskDebugLog(`socketlib readinessCheck: task "${taskId}" not found on ${rcCombatant.actor.name} — rejected`);
-    return;
-  }
-  if (rcTask.status !== 'active') {
-    _baphTaskDebugLog(`socketlib readinessCheck: task "${rcTask.taskName}" is not active (${rcTask.status}) — no-op`);
-    return;
-  }
-  if (rcTask.readyToResolve) {
-    _baphTaskDebugLog(`socketlib readinessCheck: task "${rcTask.taskName}" already readyToResolve — no-op`);
-    return;
+  if (combatant.id !== game.combat.combatant?.id) {
+    return refuse(`"${combatant.name}" is not the active combatant`);
   }
 
-  // Read hidden data from the active GM client store. Hidden duration never leaves GM-side storage.
-  const rcHiddenAll = _baphTaskReadHiddenAll();
-  const rcHidden    = rcHiddenAll[taskId];
-  if (!rcHidden?.roundsRequired) {
-    _baphTaskDebugLog(
-      `socketlib readinessCheck WARNING: no hidden data for task "${taskId}" on this GM client — ` +
-      `readyToResolve not evaluated`
-    );
+  const tasks = _baphTaskReadActorTasks(combatant.actor);
+  const task  = tasks[taskId];
+  if (!task) return refuse(`task "${taskId}" not found on ${combatant.actor.name}`);
+  if (task.status !== 'active') return refuse(`task "${task.taskName}" is not active (${task.status})`);
+
+  if (!_baphTaskHasHiddenEntry(taskId)) {
     ui.notifications?.warn?.(BAPH_TASK_MISSING_HIDDEN_WARNING);
-    console.warn(
-      `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
-      `socketlib readinessCheck — no hidden data for task "${taskId}". ` +
-      `Was this task created by a different GM user?`
-    );
-    return;
+    return refuse(`no hidden data for task "${taskId}" on this GM client`);
   }
 
-  if (rcTask.roundsCommitted >= rcHidden.roundsRequired) {
-    rcTask.readyToResolve = true;
-    rcTasks[taskId] = rcTask;
-    await _baphTaskWriteActorTasks(rcCombatant.actor, rcTasks);
-    _baphTaskUpdateCache(rcCombatant.id, rcTasks);
+  // The record (synchronous; a legacy entry adopts here, once).
+  const commits = _baphTaskCommitsOf(taskId, task);
+  if (!Array.isArray(commits)) return refuse(`no commit record for task "${taskId}"`);
+
+  const currentRound = game.combat.round;
+  if (commits.includes(currentRound) || task.lastCommittedRound === currentRound) {
+    return refuse(`already committed to "${task.taskName}" this round (round ${currentRound})`);
+  }
+
+  // Synchronous check-and-insert reservation, before any `await` in this handler.
+  const reservationKey = `${combatantId}:${taskId}:${currentRound}`;
+  if (_baphCommitInFlight.has(reservationKey)) {
+    return refuse(`duplicate concurrent commit for "${task.taskName}" (key ${reservationKey})`);
+  }
+  _baphCommitInFlight.add(reservationKey);
+
+  try {
+    // The GM performs the spend itself (on the GM it writes the pip flag directly).
+    const spent = _spendActionForCombatant(combatantId, 1, `task-${task.skillKey}`);
+    if (spent !== true) {
+      return refuse(`action spend failed for "${task.taskName}" — not enough actions remaining`);
+    }
+
+    // Record the round, then persist the hidden store.
+    commits.push(currentRound);
+    const persisted = await _baphTaskWriteHiddenAll(_baphTaskReadHiddenAll());
+    if (!persisted) {
+      // The write failed (it already warned); the map still holds the live array, so take the round back out.
+      const at = commits.lastIndexOf(currentRound);
+      if (at >= 0) commits.splice(at, 1);
+      return refuse(`commit record for "${task.taskName}" could not be persisted`);
+    }
+
+    // Derive the public fields from the record and write the flag (fresh read: the awaits above).
+    const recorded  = _baphTaskCommitsOf(taskId, task) ?? commits;
+    const freshTasks = _baphTaskReadActorTasks(combatant.actor);
+    const freshTask  = freshTasks[taskId];
+    if (!freshTask) return refuse(`task "${taskId}" vanished from ${combatant.actor.name} during the commit`);
+    freshTask.roundsCommitted    = recorded.length;
+    freshTask.lastCommittedRound = currentRound;
+    freshTask.readyToResolve     = _baphTaskIsReady(taskId, freshTask);
+    freshTasks[taskId] = freshTask;
+    await _baphTaskWriteActorTasks(combatant.actor, freshTasks);
+    _baphTaskUpdateCache(combatant.id, freshTasks);
 
     _baphTaskDebugLog(
-      `socketlib readinessCheck: "${rcTask.taskName}" is ready to resolve ` +
-      `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
+      `socketlib commitAdjudicate: "${freshTask.taskName}" advanced for ${combatant.actor.name} — ` +
+      `roundsCommitted=${freshTask.roundsCommitted}, round=${currentRound}, readyToResolve=${freshTask.readyToResolve}`
     );
-    console.debug(
-      `${BAPH_TASK_MODULE_ID} | task-tracker: ` +
-      `socketlib readinessCheck — "${rcTask.taskName}" is ready to resolve ` +
-      `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds)`
-    );
-  } else {
-    _baphTaskDebugLog(
-      `socketlib readinessCheck: "${rcTask.taskName}" not yet ready ` +
-      `(${rcTask.roundsCommitted}/${rcHidden.roundsRequired} rounds) — no-op`
-    );
+    return { ok: true };
+  } finally {
+    _baphCommitInFlight.delete(reservationKey);
   }
 }
+
+/* ── _baphTaskRepairForgedProgress ───────────────────────────────────
+   v2.49.1 FIX-4 (TD-101 (d); T-1, T-2, T-6): the receiving-side guard for
+   a hand-edited task flag. Runs on the active GM only, from a second
+   `updateActor` listener (the cache listener above is untouched), when a
+   NON-GM user's write carries roundsCommitted or readyToResolve for a
+   task that has a GM record. It rewrites ONLY the fields that disagree
+   with the record - roundsCommitted to commits.length, a forged
+   readyToResolve: true to false (a forged `false` only hurts its writer
+   and is left) - in one flag write, and posts ONE GM whisper per repaired
+   task. A stale honest write carrying equal values repairs and whispers
+   nothing; the GM's own repair is a GM write, so this listener ignores it.
+──────────────────────────────────────────────────────────────────────── */
+async function _baphTaskRepairForgedProgress(actor, changes, userId) {
+  try {
+    if (!_baphTaskIsActiveGMClient()) return;
+    const writer = game.users?.get(userId) ?? null;
+    if (!writer || writer.isGM) return;
+
+    const diff = changes?.flags?.[BAPH_TASK_MODULE_ID]?.[BAPH_TASK_FLAG_PUBLIC];
+    if (!diff || typeof diff !== 'object') return;
+
+    const has = (obj, k) => !!obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, k);
+    const fixes = []; // { taskId, taskName, expected, required }
+    const current = actor.getFlag(BAPH_TASK_MODULE_ID, BAPH_TASK_FLAG_PUBLIC) ?? {};
+    for (const [taskId, taskDiff] of Object.entries(diff)) {
+      if (!has(taskDiff, 'roundsCommitted') && !has(taskDiff, 'readyToResolve')) continue;
+      const task = current[taskId];
+      if (!task || typeof task !== 'object') continue;
+      const commits = _baphTaskCommitsOf(taskId, task);
+      if (!Array.isArray(commits)) continue; // no record on this GM client: nothing to compare with
+      const expected = commits.length;
+      const countWrong = has(taskDiff, 'roundsCommitted') && task.roundsCommitted !== expected;
+      const readyWrong = has(taskDiff, 'readyToResolve') && task.readyToResolve === true && !_baphTaskIsReady(taskId, task);
+      if (!countWrong && !readyWrong) continue; // T-6: nothing disagrees
+      fixes.push({
+        taskId,
+        taskName: task.taskName,
+        expected,
+        required: _baphHiddenTaskMap.get(taskId)?.roundsRequired,
+        countWrong,
+        readyWrong,
+      });
+    }
+    if (!fixes.length) return;
+
+    const tasks = _baphTaskReadActorTasks(actor);
+    for (const fix of fixes) {
+      const t = tasks[fix.taskId];
+      if (!t) continue;
+      if (fix.countWrong) t.roundsCommitted = fix.expected;
+      if (fix.readyWrong) t.readyToResolve = false;
+    }
+    await _baphTaskWriteActorTasks(actor, tasks);
+
+    const esc = foundry.utils.escapeHTML;
+    for (const fix of fixes) {
+      await _baphTaskCreateChatMessage({
+        content:
+          `<p><strong>⚠ Task progress</strong></p>` +
+          `<p>${esc(String(writer.name))} changed ${esc(String(fix.taskName ?? fix.taskId))}'s progress by hand — ` +
+          `put back to ${fix.expected} / ${fix.required ?? '?'}.</p>`,
+        speaker: ChatMessage.getSpeaker({ actor }),
+        whisper: ChatMessage.getWhisperRecipients('GM').map(u => u.id),
+        flags: { [BAPH_TASK_MODULE_ID]: { taskProgressRepair: true } },
+      });
+    }
+  } catch (err) {
+    console.error(`${BAPH_TASK_MODULE_ID} | task-tracker: forged-progress repair failed`, err);
+  }
+}
+
+Hooks.on('updateActor', (actor, changes, options, userId) => {
+  _baphTaskRepairForgedProgress(actor, changes, userId);
+});
 
 /* ============================================================
    HOOK: pf1PostReady

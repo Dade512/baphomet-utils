@@ -1,7 +1,18 @@
 /* ============================================================
-   ECHOES OF BAPHOMET — WEATHER ENGINE v1.4
+   ECHOES OF BAPHOMET — WEATHER ENGINE v1.5
    Season-aware, climate-zone-based weather generation
    integrated with Simple Calendar.
+
+   v1.5 Changes (v2.49.1, TD-101 (f), F-D-08):
+   - [BUG FIX] Two date-change fires in one tick posted the weather
+     twice: both awaited the state read before either wrote the day
+     marker, so both passed the lastProcessedDate test. The hook now
+     runs on the ACTIVE GM client only, takes a synchronous in-flight
+     key (`_weInFlight`, the day's key) before its first `await`
+     (released in `finally`), and re-checks the marker after the
+     generation and the state re-read, before posting. A fire on a
+     marked day posts nothing; a non-active GM client posts nothing.
+     `postToChat` off still marks the day (v1.4).
 
    v1.4 Changes:
    - [BUG FIX] State field `lastPostedDate` renamed to
@@ -449,34 +460,52 @@ Hooks.once('ready', async () => {
 //   2. Tracking the last-posted date in module state and only posting
 //      to chat when that key actually changes. Even if generation
 //      somehow re-runs, the post is gated separately.
+//
+// v1.5 (TD-101 (f), F-D-08; R-6, T-7): in-flight day keys. Two date-change fires in ONE tick both awaited
+// the state read before either wrote the marker, so both passed the lastProcessedDate test and the weather
+// posted twice. The key is taken SYNCHRONOUSLY (no await before it) and released in `finally`.
+const _weInFlight = new Set();
+
 Hooks.on('simple-calendar-date-time-change', async (data) => {
+  // v1.5: the ACTIVE GM only - a second GM client (or any non-GM) posts nothing.
   if (!game.user.isGM) return;
+  if (game.user !== game.users?.activeGM) return;
 
   const date = _getCurrentDateFromSC();
   if (!date) return;
 
   const dateKey = `${date.year}-${date.monthIndex}-${date.day}`;
-  const state = await _getWeatherState();
+  if (_weInFlight.has(dateKey)) return;
+  _weInFlight.add(dateKey);
 
-  // If the calendar day hasn't changed since we last processed it,
-  // do nothing. This catches every intra-day time bump (combat
-  // turns, manual minute/hour advances, etc.) regardless of whether
-  // the chat-posting toggle is on or off.
-  if (state.lastProcessedDate === dateKey) return;
+  try {
+    const state = await _getWeatherState();
 
-  const weather = await generateTodayWeather();
-  if (!weather) return;
+    // If the calendar day hasn't changed since we last processed it,
+    // do nothing. This catches every intra-day time bump (combat
+    // turns, manual minute/hour advances, etc.) regardless of whether
+    // the chat-posting toggle is on or off.
+    if (state.lastProcessedDate === dateKey) return;
 
-  // Refresh state since generateTodayWeather may have updated it.
-  const updatedState = await _getWeatherState();
+    const weather = await generateTodayWeather();
+    if (!weather) return;
 
-  // Mark this date processed BEFORE the (optional) chat post so
-  // even a postToChat=false day still short-circuits the next tick.
-  updatedState.lastProcessedDate = dateKey;
+    // Refresh state since generateTodayWeather may have updated it.
+    const updatedState = await _getWeatherState();
 
-  if (updatedState.postToChat) {
-    _postWeatherToChat(weather);
+    // v1.5: re-check the marker after the awaits - another pass may have marked this day meanwhile.
+    if (updatedState.lastProcessedDate === dateKey) return;
+
+    // Mark this date processed BEFORE the (optional) chat post so
+    // even a postToChat=false day still short-circuits the next tick.
+    updatedState.lastProcessedDate = dateKey;
+
+    if (updatedState.postToChat) {
+      _postWeatherToChat(weather);
+    }
+
+    await _setWeatherState(updatedState);
+  } finally {
+    _weInFlight.delete(dateKey);
   }
-
-  await _setWeatherState(updatedState);
 });

@@ -3,19 +3,21 @@
 Campaign utilities and Gaslamp Gothic theme for **Echoes of Baphomet's Fall** — a PF1.5 homebrew Adventure Path.
 
 **Foundry Version:** V13  
-**Current Version:** 2.49.0 — *What the Roll Carries*
+**Current Version:** 2.49.1 — *Whose Hand Writes*
 
 <!-- VERSION BLURB — rewrite at every promotion, together with **Current Version:** above.
      Two or three sentences, table-facing: what changed for someone using the module,
      not what changed in the code. Details belong in the changelog. -->
 
-**What the roll carries.** The Perception class-skill setting now puts its +3 on the roll itself — pf1's own
-"Class Skill" bonus, for every creature with at least one rank, characters and monsters alike — instead of only on the
-sheet's number; its hint and the audit say what it does. A Fatigued applied to a creature that is already Fatigued asks
-the GM, Exhausted by default, and never escalates by itself. A Blinded creature's Dazzled no longer costs it −1 on attacks
-for as long as the blindness lasts (the status and its icon stay). A Pounce that goes through a Boss Action, a Nauseated
-or a no-action refusal now leaves the creature's routine paid, as its card says. **No macro to re-paste.** See the
-[changelog](#changelog).
+**Whose hand writes.** The GM's record is the one that counts, and the module now notices when someone else writes it. A
+player who edits their own creature's action pips, off-hand budget or task progress by hand sees it put back within a
+second, and the GM gets a quiet whisper saying who and what. Continue on a long task is now done by the GM's client — the
+action is spent and the round recorded there, so progress can no longer run ahead of the rounds actually spent. A player who
+spends a pip the instant their turn starts keeps it, and the GM no longer undoes its own fast double-click. The weather posts
+once per day. The GM hears when a player jumps or rewinds the turn, or ends someone else's turn (a player ending their own
+turn is silent). On the sheet, a Dazzled creature that is Blinded shows Dazzled checked and marked "suppressed" — clicking it
+removes Dazzled, as it says. A Fatigued still carried by a buff after the creature becomes Exhausted is named so the GM can
+remove it. **No macro to re-paste.** See the [changelog](#changelog).
 
 ---
 
@@ -135,7 +137,7 @@ Default zone: **Temperate** (Canorate, Molthune — campaign starting region).
 
 ## Task Tracker
 
-An interactive multi-round skill-task subsystem driven from the combat tracker. The GM initiates a task on the active combatant with a hidden DC and a hidden number of rounds required; on the combatant's turns the controlling player commits actions ("Continue Task"), allies may "Aid" a ready task for a bonus, and the task resolves with a real skill roll once the hidden duration is met. Resolution is classified (success / minor failure / catastrophic failure) and posted to chat by the GM client. Tasks can also be paused, resumed, or abandoned, and the combat HUD lets players *request* initiation for GM modal approval (v2.20.0).
+An interactive multi-round skill-task subsystem driven from the combat tracker. The GM initiates a task on the active combatant with a hidden DC and a hidden number of rounds required; on the combatant's turns the controlling player asks to commit actions ("Continue Task") and the GM's client does it — spending the action, recording the round and writing the progress — allies may "Aid" a ready task for a bonus, and the task resolves with a real skill roll once the hidden duration is met. Resolution is classified (success / minor failure / catastrophic failure) and posted to chat by the GM client. Tasks can also be paused, resumed, or abandoned, and the combat HUD lets players *request* initiation for GM modal approval (v2.20.0).
 
 The HUD wires these operations to buttons; the same operations are exposed on `game.baphometTasks` for macros and testing. **Signatures shown match the live API** (`scripts/task-tracker.js`):
 
@@ -178,17 +180,46 @@ const task = game.baphometTasks.getTask(combatant, taskId);
 const all  = game.baphometTasks.getTasks(combatant);
 ```
 
-Player-visible task state is stored on actor flags. Hidden duration (`roundsRequired`), the DC, and GM notes are stored in the active GM client's hidden task store and never exposed to players. The hidden store is per machine/browser profile and per world: clearing browser storage, switching browser profiles, or adjudicating from a different GM machine can make active hidden task data unavailable. In that case hidden-DC task adjudication fails closed instead of guessing.
+Player-visible task state is stored on actor flags. Hidden duration (`roundsRequired`), the DC, GM notes and — since v2.49.1 — the **commit record** (the rounds in which the GM accepted a committed action) are stored in the active GM client's hidden task store and never exposed to players. The public `roundsCommitted` and `readyToResolve` on the actor flag are the GM's display of that record: readiness comes from the record, not the flag, and a hand-edited flag is put back and the GM told. A player's Continue needs a GM connected. The hidden store is per machine/browser profile and per world: clearing browser storage, switching browser profiles, or adjudicating from a different GM machine can make active hidden task data unavailable. In that case hidden-DC task adjudication fails closed instead of guessing.
 
 ### Trust model / known limitation
 
 Foundry has no server-side dice: when a player rolls their skill check, the resulting **total is reported by the player's own client** over the socket. A player who tampers with their client could therefore inflate the total on a check **for a creature they control and that is not a GM-secret roll** — the same property that lets any Foundry player fudge an ordinary attack or save. This is inherent to Foundry, not specific to this module.
 
-What that exposure does *not* grant: a player cannot read the hidden DC or hidden `roundsRequired`, cannot adjudicate or commit actions for an actor they do not control, and cannot force an outcome onto another player's task by naming that player's combatant/task IDs. The GM's resolve/aid/readiness handlers verify the caller through socketlib's verified-sender identity (never a value the requesting client's payload claims), then independently re-run ownership, active-combatant, same-round, and action-cost gates on the GM's own authority before any authoritative write — not merely trusting that the requesting client already checked them. Hidden task data is never transmitted through the socket payloads (which carry only identity and public progress). GM-secret rolls stay GM-side. The trade-off is deliberate: players drive their own turns from their own clients while the GM stays the authority for everything hidden.
+Everything else that is authoritative is the GM's write. Players report their own roll totals; the GM's client spends the actions, records a task's committed rounds, decides readiness from that record, and re-runs ownership, active-combatant, same-round and action-cost gates on its own authority (socketlib's verified-sender identity, never a value the requesting client's payload claims). A player cannot read the hidden DC or hidden `roundsRequired`, cannot adjudicate or commit for an actor they do not control, and cannot force an outcome onto another player's task. Foundry itself lets a player write their own creature's flags, so the module does not pretend to block that — it **repairs** it: a player's direct write of their creature's action pips or off-hand budget is adopted by no client; a hand-edited task progress can show on the clients' task widgets until the active GM puts its own record back, within a second, and task readiness is always decided from the GM's own record, so the edit buys nothing; in every case the GM is whispered who wrote what. A player who moves the turn out of order (a jump, a rewind, or ending someone else's creature's turn) is reported to the GM once; their own End Turn is silent. Nothing is repaired while no GM is connected. GM-secret rolls stay GM-side, and hidden task data is never transmitted through socket payloads. The trade-off is deliberate: players drive their own turns from their own clients while the GM stays the authority for everything hidden.
 
 ---
 
 ## Changelog
+
+### v2.49.1 — Whose Hand Writes
+
+TD-101 (a) to (g) with riders TD-111 (2) and (5) (and (6), (7) folded in) (QA fix series 10 of 10, trust and races). No canon
+change: this release defends the module's authority model, not a PF1.5 rule. **No macro to re-paste.**
+
+- **A forged pip or off-hand write is put back (TD-101 (a), F-A-11).** A player's direct write of their own creature's action
+  pips or off-hand budget is adopted by no client; the active GM rewrites its own record and whispers who wrote what (once per
+  write). With no GM connected nothing repairs it. The stun-lock flag has no hydrator and is overwritten at the next sync (noted).
+- **The GM keeps its own spends (TD-101 (b), F-A-09).** The GM no longer hydrates the echo of its own write, so two quick spends
+  and a third at the first echo all stay spent.
+- **A spend that raced the turn start lands after it (TD-101 (c), F-A-10).** A player's spend relayed for the creature whose turn
+  start is still pending waits for it on the combat's queue instead of being overwritten by the reset.
+- **The GM keeps the task record (TD-101 (d), F-D-22).** A player's Continue is done by the GM's client (it spends the action,
+  records the round and writes the progress); readiness comes from that record; a hand-edited `roundsCommitted` or
+  `readyToResolve` is put back within a second and the GM told once; a Resolve on forged progress is refused. A task from before
+  this release adopts its rounds once. A player's Continue with no GM connected is refused with a notice. The old readiness
+  check (`baphTaskReadinessCheck`) is retired; `getTask` gives a GM the `commits` record.
+- **`createTask` checks its public metadata (TD-101 (e), F-D-07).** `metadataPublic` naming `dc`, `roundsRequired`, `trapName` or
+  `metadataHidden` is refused with a notice naming the field, and nothing is written.
+- **One weather post per day (TD-101 (f), F-D-08).** Two date-change fires in one tick post once; only the active GM posts.
+- **The GM hears a turn move (TD-101 (g), F-3).** A player's jump, rewind or advance of a creature they do not own whispers the
+  GM once, naming both ends; their own End Turn and every GM move are silent. Nothing is blocked or reverted.
+- **The sheet's Dazzled box says what a click does (TD-111 (2)).** While Blinded holds Dazzled's −1, the box reads checked, dimmed
+  and titled "suppressed"; a click removes Dazzled, as the title says. The old table rule "toggle Dazzled from the HUD, not the
+  sheet, while Blinded" is lifted.
+- **Fatigue on fatigue (TD-111 (5), (6), (7)).** A Fatigued still carried by a buff or an item after the Exhausted escalation is
+  named on the chat line and in one GM whisper (nothing is deleted); two quick applies open one dialog; a creature deleted while
+  its dialog is open is refused with a notice.
 
 ### v2.49.0 — What the Roll Carries
 

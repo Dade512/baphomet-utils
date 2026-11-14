@@ -1245,6 +1245,31 @@ function _writeOffBudget(combatantId, combatArg, atRound) {
   }).catch(err => console.error(`baphomet-utils | _writeOffBudget error: ${err}`));
 }
 
+/**
+ * v2.49.1 FIX-1 (TD-101 (a), F-A-11): one GM whisper for one forged write - a non-GM user wrote a creature's
+ * pipState or offHandBudget flag directly. No honest path writes either flag from a player (D-1), so the
+ * hydrators refuse the write and the active GM puts its own record back; this tells the GM who wrote what.
+ * Fire-and-forget; never throws. `key` is 'pipState' or 'offHandBudget' (the whisper's `forgedWrite` flag).
+ */
+function _baphForgedWriteWhisper(writer, combatant, key) {
+  try {
+    const esc = foundry.utils.escapeHTML;
+    const user = esc(String(writer?.name ?? 'A player'));
+    const name = esc(String(combatant?.actor?.name ?? combatant?.name ?? 'Unknown'));
+    const what = key === 'offHandBudget' ? 'off-hand budget' : 'action pips';
+    ChatMessage.create({
+      content: `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;">`
+        + `<p><strong>⚠ Forged write</strong></p>`
+        + `<p>${user} wrote ${name}'s ${what} directly — the GM's record was put back.</p></div>`,
+      whisper: ChatMessage.getWhisperRecipients('GM'),
+      speaker: ChatMessage.getSpeaker({ actor: combatant?.actor ?? null }),
+      flags: { [AT_MODULE_ID]: { forgedWrite: key } },
+    }).catch(err => console.warn(`${AT_MODULE_ID} | forged-write whisper failed`, err));
+  } catch (err) {
+    console.warn(`${AT_MODULE_ID} | forged-write whisper failed`, err);
+  }
+}
+
 /* ----------------------------------------------------------
    CONDITION READING — v2.34.0 REWRITE (max-not-sum canon)
    [GOAL_v2.34.0_CONDITION_CANON — MECH-1, MECH-2, MECH-3]
@@ -2164,7 +2189,43 @@ const _baphEngineRemembered = new Map();
 const _baphEngineSeenCurrent = new WeakSet();
 const _baphEngineRepairing = new Map(); // combatId -> the in-flight repair's settled promise
 
-Hooks.on('updateCombat', (combat, changed) => {
+/**
+ * v2.49.1 FIX-7 (TD-101 (g), F-3; R-7, Q6; T-8): the active GM hears when a NON-GM user moves the turn in a way
+ * a player's own End Turn never would - a jump, a rewind, or an advance of a creature the mover does not own.
+ * Honest = one step forward (same round, turn + 1; or the round wrap: round + 1, turn 0, from the last turn)
+ * from a creature the mover owns. Anything else posts ONE GM whisper naming both ends. It never blocks,
+ * reverts or queues anything (the engine's forward and rewind semantics stand) and never throws.
+ * `remembered` is what the engine believed before this update ({ round, turn, combatantId }), read by the
+ * caller before it is replaced.
+ */
+function _baphEngineTurnMoveNotice(combat, changed, userId, remembered) {
+  try {
+    if (!_baphEngineIsActiveGM()) return;
+    const user = game.users?.get(userId) ?? null;
+    if (!user || user.isGM) return;
+    if (!remembered?.combatantId) return;
+    const now = _baphEngineStateOf(combat);
+    const turnsLength = Array.from(combat?.turns ?? []).length;
+    const stepForward = (now.round === remembered.round && now.turn === remembered.turn + 1)
+      || (now.round === remembered.round + 1 && now.turn === 0 && remembered.turn === turnsLength - 1);
+    const departing = combat.combatants?.get(remembered.combatantId) ?? null;
+    const owns = !!departing?.actor?.testUserPermission?.(user, 'OWNER');
+    if (stepForward && owns) return;
+    const esc = foundry.utils.escapeHTML;
+    const A = esc(String(departing?.name ?? remembered.combatantId));
+    const B = esc(String(combat.combatants?.get(now.combatantId)?.name ?? now.combatantId ?? 'nobody'));
+    ChatMessage.create({
+      content: `<div style="font-family: var(--baph-font-body, 'Alegreya', serif); font-size: 12px;">`
+        + `<p>⟲ ${esc(String(user.name))} moved the turn: ${A} (r ${remembered.round}, t ${remembered.turn}) → ${B} (r ${now.round}, t ${now.turn})</p></div>`,
+      whisper: ChatMessage.getWhisperRecipients('GM'),
+      flags: { [AT_MODULE_ID]: { turnMoveWhisper: true } },
+    }).catch(err => console.warn(`${AT_MODULE_ID} | turn-move whisper failed`, err));
+  } catch (err) {
+    console.warn(`${AT_MODULE_ID} | turn-move notice failed`, err);
+  }
+}
+
+Hooks.on('updateCombat', (combat, changed, options, userId) => {
   if (!_baphEngineIsActiveGM()) return;
   const current = combat?.current;
   if (current && typeof current === 'object') _baphEngineSeenCurrent.add(current);
@@ -2172,6 +2233,8 @@ Hooks.on('updateCombat', (combat, changed) => {
   // Only an update that carried round, turn or combatants records the turn: every ledger write and Delay
   // mark is a flag-only Combat update, and recording on one that arrived between a revert and its repair
   // would re-record the reverted state and cancel the repair.
+  // v2.49.1 FIX-7: a turn or round change by a non-GM is reported (never blocked) before the memory is replaced.
+  if (has('turn') || has('round')) _baphEngineTurnMoveNotice(combat, changed, userId, _baphEngineRemembered.get(combat.id) ?? null);
   if (has('round') || has('turn') || has('combatants') || !_baphEngineRemembered.has(combat.id)) {
     _baphEngineRemembered.set(combat.id, _baphEngineStateOf(combat));
   }
@@ -3510,6 +3573,10 @@ async function _baphSocketPipSpendRelay(payload = {}) {
 
   if (!_getState(combatantId)) _initState(combatantId, combat);
 
+  // v2.49.1 FIX-3 (TD-101 (c), F-A-10; T-3): the MAP merge and the kind's work below run as one closure, `work`
+  // (the lines are the ones that stood here; their `return`s now return from `work`). `work` runs at once, except
+  // for a relay that raced the turn start - see `pending` after the closure.
+  const work = async () => {
   // v2.48.2 FIX-4 (R-4, T-4): a player's MAP and routine records ride this relay (the 'action' payload's `map`, or a
   // record-only 'mapRecord') - the GM merges them into its own state BEFORE the kind's work, after the sender and
   // ownership checks above (Trap 1, unchanged), so the GM's write that follows carries them. The player never
@@ -3640,6 +3707,20 @@ async function _baphSocketPipSpendRelay(payload = {}) {
   }
   _debugLog(`pipSpendRelay: ${kind} for "${combatant.name}" (from ${requestingUser.name}, verified id ${requestingUserId}) -> ${ok}`);
   return ok ? { ok: true } : { ok: false, reason: 'spend-failed' };
+  };
+
+  // v2.49.1 FIX-3 (R-3, Q4 (A); T-3): a relay for the engine combat's current creature whose turn start is not yet
+  // in the ledger waits on the combat's chain, behind the turn task the GM queued when the turn changed - so the
+  // turn start's reset can no longer land after, and overwrite, a spend relayed in that window. A 'delay' queues on
+  // this same chain itself (it would wait on itself) and a viewed-combat 'toggle' is not the engine combat's: both,
+  // a creature already started this round, a creature not current and a combat not started run at once.
+  const pending = kind !== 'delay' && !toggleInCombat && combat.started === true && combat.combatant?.id === combatantId
+    && !_baphLedgerRead(combat)?.rounds?.[String(combat.round)]?.started?.[combatantId];
+  if (pending) {
+    _debugLog(`pipSpendRelay: ${kind} for "${combatant.name}" waits for its turn start`);
+    return _baphEngineQueue(combat, () => work());
+  }
+  return work();
 }
 
 /* ============================================================
@@ -7534,7 +7615,7 @@ Hooks.on('deleteCombat', () => {
 
    getFlag is synchronous (reads from in-memory document data).
    ---------------------------------------------------------- */
-Hooks.on('updateCombatant', (combatant, changes) => {
+Hooks.on('updateCombatant', (combatant, changes, options, userId) => {
   // Bail fast if this isn't a pip-state flag update.
   if (!changes?.flags?.['baphomet-utils']?.[PIP_FLAG_KEY]) return;
 
@@ -7544,8 +7625,28 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   // Confirm this combatant belongs to the currently active combat.
   if (combatant.parent?.id !== combat.id) return;
 
+  // v2.49.1 FIX-1 (TD-101 (a), F-A-11; T-1, T-2): a non-GM writer is forged by definition (no honest path writes
+  // the flag from a player, D-1) - every client but the active GM ignores the write; the active GM writes its own
+  // record back and whispers once. The guard runs here, on the receiving side, from the server-stamped userId.
+  const writer = game.users?.get(userId) ?? null;
+  if (writer && !writer.isGM) {
+    if (_baphEngineIsActiveGM()) {
+      if (_getState(combatant.id)) _writePipFlag(combatant.id, combat);
+      _baphForgedWriteWhisper(writer, combatant, 'pipState');
+    }
+    return;
+  }
+
   const existing = _getState(combatant.id);
   if (!existing) return;
+
+  // v2.49.1 FIX-2 (TD-101 (b), F-A-09; T-2): this client wrote the flag from its own state, so there is nothing to
+  // adopt (and its MAP records are already this state's); the seq bump and the row refresh still happen.
+  if (userId === game.user.id) {
+    existing.pipSeq = (Number(existing.pipSeq) || 0) + 1;
+    _refreshPipRow(combatant.id);
+    return;
+  }
 
   // Read authoritative merged state from the document (not from changes
   // which may be a partial update in edge cases).
@@ -7584,6 +7685,14 @@ Hooks.on('updateCombatant', (combatant, changes) => {
   // clobber it (Trap 3) — this is the guard's actual coverage; it is NOT
   // limited to "an incoming cross-client echo" as a prior draft of this
   // comment block overstated.
+  //
+  // v2.49.1 (TD-101 (a), (b)): two writer rules sit above the adoption. A write by a non-GM user is never
+  // adopted - every client but the active GM ignores it, and the active GM rewrites the flag from its own state
+  // and whispers once (the pip flag has no honest player writer). A write by THIS client's own user is not
+  // adopted either (the state it was written from is already local, so hydrating its echo could only refund a
+  // pip spent after the write); it still bumps pipSeq and refreshes the row. A GM still adopts another GM's
+  // write, and a player adopts every GM write. The GM's repair is a GM write: skipped by the GM's own-echo rule,
+  // adopted by everyone else - never a loop.
   existing.pipSeq = (Number(existing.pipSeq) || 0) + 1;
 
   // Refresh the pip row in the combat tracker sidebar for this combatant.
@@ -7604,10 +7713,21 @@ Hooks.on('updateCombatant', (combatant, changes) => {
    falls back to the old (round, turn) comparison so it is not treated as
    stale-therefore-unspent.
    ---------------------------------------------------------- */
-Hooks.on('updateCombatant', (combatant, changes) => {
+Hooks.on('updateCombatant', (combatant, changes, options, userId) => {
   if (!changes?.flags?.['baphomet-utils']?.[OFF_BUDGET_FLAG_KEY]) return;
   const combat = combatant.parent;
   if (!combat || combatant.parent?.id !== combat.id) return;
+  // v2.49.1 FIX-1 (TD-101 (a), F-A-11; T-1): the same writer rule as the pip hydrator, before the seq test so a
+  // forged seq never raises the local offSeq. The budget has no honest player writer; the active GM writes its own
+  // record back and whispers once, every other client ignores the write.
+  const writer = game.users?.get(userId) ?? null;
+  if (writer && !writer.isGM) {
+    if (_baphEngineIsActiveGM()) {
+      if (_getState(combatant.id)) _writeOffBudget(combatant.id, combat);
+      _baphForgedWriteWhisper(writer, combatant, 'offHandBudget');
+    }
+    return;
+  }
   const existing = _getState(combatant.id);
   if (!existing) return;
   const ob = combatant.getFlag(AT_MODULE_ID, OFF_BUDGET_FLAG_KEY);
