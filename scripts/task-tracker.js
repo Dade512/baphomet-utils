@@ -1050,6 +1050,17 @@ async function _baphTaskCommit(combatantOrId, taskId) {
     return true;
   }
 
+  // Gate 8 (GM, v2.49.1 FIX-4): the record is the same-round guard too - a second GM-direct Continue that starts
+  // while the first awaits its persist sees the round already pushed and is refused before any spend.
+  const recordedRounds = _baphTaskCommitsOf(taskId, task);
+  if (Array.isArray(recordedRounds) && recordedRounds.includes(currentRound)) {
+    _baphTaskDebugLog(
+      `commitAction rejected: already committed to "${task.taskName}" ` +
+      `this round (round ${currentRound}) — no double-spend`
+    );
+    return false;
+  }
+
   // Gate 9: spend 1 action
   // _spendActionForCombatant is a global from action-tracker.js (loads before this file).
   // It is all-or-nothing, updates the pip row, and returns boolean.
@@ -3070,7 +3081,7 @@ async function _baphTaskRepairForgedProgress(actor, changes, userId) {
           `<p>${esc(String(writer.name))} changed ${esc(String(fix.taskName ?? fix.taskId))}'s progress by hand — ` +
           `put back to ${fix.expected} / ${fix.required ?? '?'}.</p>`,
         speaker: ChatMessage.getSpeaker({ actor }),
-        whisper: ChatMessage.getWhisperRecipients('GM'),
+        whisper: ChatMessage.getWhisperRecipients('GM').map(u => u.id),
         flags: { [BAPH_TASK_MODULE_ID]: { taskProgressRepair: true } },
       });
     }
